@@ -1,0 +1,68 @@
+name: Dependency overrides
+
+on:
+  schedule:
+    - cron: "17 6 * * *"            # daily
+  push:
+    branches: [main]
+    paths: [uv.lock]                # right after a parent bump lands
+  pull_request:
+    paths: [pyproject.toml, .github/dependency-overrides.yml]
+  workflow_dispatch:
+
+env:
+  OSV_SCANNER_VERSION: v2.6.0      # newest release at least 14 days old when pinned
+
+jobs:
+  # On PRs: every override has a complete ledger entry, and every ledger entry has an override.
+  ledger:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Overrides and ledger match
+        run: |
+          diff -u \
+            <(yq -r '.overrides[] | select(.ecosystem == "uv") | .package' .github/dependency-overrides.yml | sort) \
+            <(python3 - <<'PY'
+          import re, tomllib
+          overrides = tomllib.load(open("pyproject.toml", "rb")).get("tool", {}).get("uv", {}).get("override-dependencies", [])
+          for req in sorted(overrides):
+              print(re.match(r"[A-Za-z0-9._-]+", req).group(0))
+          PY
+            )
+      - name: Ledger entries are complete
+        run: |
+          if yq -e '.overrides[] | select(.fixed_in == null or .advisory == null or .reason == null or .owner == null or .added == null)' .github/dependency-overrides.yml; then
+            echo "::error::Every ledger entry needs fixed_in, advisory, reason, owner and added"
+            exit 1
+          fi
+
+  # Everywhere else: try removing each override and open PRs for the ones that can go.
+  remove:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read                # writes go through DEPS_BOT_TOKEN
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ secrets.DEPS_BOT_TOKEN }}
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.23"
+      - name: Install osv-scanner
+        run: |
+          base="https://github.com/google/osv-scanner/releases/download/$OSV_SCANNER_VERSION"
+          curl -fsSLo osv-scanner_linux_amd64 "$base/osv-scanner_linux_amd64"
+          curl -fsSL "$base/osv-scanner_SHA256SUMS" | grep ' osv-scanner_linux_amd64$' | sha256sum -c -
+          sudo install osv-scanner_linux_amd64 /usr/local/bin/osv-scanner
+          rm osv-scanner_linux_amd64
+      - run: |
+          git config user.name "deps-bot"
+          git config user.email "deps-bot@users.noreply.github.com"
+      - run: scripts/check-uv-overrides.sh --open-prs
+        env:
+          GH_TOKEN: ${{ secrets.DEPS_BOT_TOKEN }}

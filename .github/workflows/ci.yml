@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "release/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.23"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Compile
+        run: uv run --frozen python -m compileall -q src scripts
+
+      - name: Test
+        run: uv run --frozen pytest -q
+
+      - name: CLI starts
+        run: |
+          uv run --frozen speechify --version
+          uv run --frozen speechify models
