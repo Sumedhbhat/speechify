@@ -82,6 +82,13 @@ def models_command(cfg: Config, action: str, model: str | None) -> None:
 
     if action == "list":
         current = cfg.model
+        try:
+            "★½".encode(sys.stdout.encoding or "utf-8")
+        except UnicodeEncodeError:  # e.g. a cp1252 pipe on Windows
+
+            def stars(rating: float) -> str:
+                return f"{rating:g}/5" if rating > 0 else "yours"
+
         print(f"{'':2}{'id':<36}{'accuracy':<10}{'speed':<8}{'VRAM':<7}{'status':<16}languages")
         for spec in all_models(data_dir()):
             mark = "*" if current in (spec.id, spec.repo) else " "
