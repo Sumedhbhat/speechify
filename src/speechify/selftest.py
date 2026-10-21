@@ -442,12 +442,17 @@ def run_desktop(model: str, report: Report) -> None:
                 assert now == corrected, f"Notepad has {now!r}"
 
             with report.step("the learned fix is applied to the next dictation") as s:
+                # Wait for a new dictation, not just any paste: replacing the
+                # text in Notepad above was a paste too, and contains the fix.
+                before = app.last
                 dictate(1.0)
-                wait_for(lambda: len(pasted) >= 2, 600, "the second paste")
+                wait_for(lambda: app.last is not before, 600, "the second dictation")
+                second = app.last.pasted
+                s["detail"] = second
+                assert FIX_WORD in second, f"second dictation was {second!r}"
+                assert FIX_WORD in app.learner.prompt(), "fix missing from the vocabulary hint"
+                wait_for(lambda: app.learner.stats()["samples"] >= 2, 10, "the second recording to be saved")
                 time.sleep(1.0)
-                s["detail"] = pasted[1]
-                assert FIX_WORD in pasted[1], f"second dictation was {pasted[1]!r}"
-                assert app.learner.prompt().find(FIX_WORD) >= 0, "fix missing from the vocabulary hint"
                 report.screenshot(s, "second-dictation")
 
             with report.step("Ctrl+Alt+H lists both recordings, the first marked edited") as s:
