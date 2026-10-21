@@ -155,7 +155,33 @@ def _win32():
         user32.SetForegroundWindow(hwnd)
         user32.keybd_event(0x12, 0, 2, 0)
 
-    return windows, title, focus, user32.GetForegroundWindow
+    def read_text(hwnd: int) -> str:
+        """Text of the window's edit control, read with WM_GETTEXT.
+
+        Reading it this way rather than with Ctrl+A / Ctrl+C keeps the check
+        independent of the keyboard path being tested.
+        """
+        edit = None
+
+        def callback(child, _):
+            nonlocal edit
+            cls = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(child, cls, 256)
+            if "edit" in cls.value.lower():  # "Edit" (classic) or "RichEditD2DPT" (new Notepad)
+                edit = child
+                return False
+            return True
+
+        user32.EnumChildWindows(hwnd, proc(callback), 0)
+        if edit is None:
+            raise LookupError("no edit control in the window")
+        user32.SendMessageW.restype = ctypes.c_ssize_t
+        n = user32.SendMessageW(edit, 0x000E, 0, 0)  # WM_GETTEXTLENGTH
+        buf = ctypes.create_unicode_buffer(n + 1)
+        user32.SendMessageW(edit, 0x000D, n + 1, buf)  # WM_GETTEXT
+        return buf.value
+
+    return windows, title, focus, user32.GetForegroundWindow, read_text
 
 
 # --- tests --------------------------------------------------------------------------
@@ -181,10 +207,14 @@ def run_engine_only(model: str, device: str, report: Report) -> None:
         t0 = time.perf_counter()
         host.install(spec, cfg.engine_opts())
         s["detail"] = f"{time.perf_counter() - t0:.0f}s (0s if already installed)"
+    if not host.is_ready(spec):
+        return
     with report.step("load model") as s:
         info = engine.start(spec, cfg.engine_opts())
         report.facts.update(device=info.get("device"), load_seconds=info.get("load_s"))
         s["detail"] = f"device {info.get('device')}, {info.get('load_s')}s"
+    if not engine.ready.is_set():
+        return  # the failed step above says why; transcribing would only time out
     try:
         for attempt in ("first", "warm"):
             with report.step(f"transcribe ({attempt})") as s:
@@ -202,7 +232,7 @@ def run_desktop(model: str, report: Report) -> None:
     if sys.platform != "win32":
         raise SystemExit("The desktop self-test drives Windows apps; use --engine-only elsewhere.")
     import pyperclip
-    from pynput.keyboard import Controller, Key
+    from pynput.keyboard import Controller, Key, KeyCode
 
     from . import config, output
     from .app import App
@@ -211,7 +241,7 @@ def run_desktop(model: str, report: Report) -> None:
     from .engines.catalog import resolve
     from .metrics import wer
 
-    windows, title, focus, foreground = _win32()
+    windows, title, focus, foreground, read_text = _win32()
     kb = Controller()
 
     config.set_value("autocorrect_after", 1)  # one fix is enough for the rule to apply
@@ -252,6 +282,8 @@ def run_desktop(model: str, report: Report) -> None:
         return box[0]
 
     def hotkey(*keys) -> None:
+        # Letters as virtual keys: see the note on _V in output.py.
+        keys = [KeyCode.from_vk(ord(k.upper())) if isinstance(k, str) else k for k in keys]
         for k in keys:
             kb.press(k)
         time.sleep(0.05)
@@ -267,14 +299,7 @@ def run_desktop(model: str, report: Report) -> None:
         kb.release(Key.ctrl_r)
 
     def read_notepad(hwnd: int) -> str:
-        focus(hwnd)
-        time.sleep(0.3)
-        hotkey(Key.ctrl, "a")
-        hotkey(Key.ctrl, "c")
-        time.sleep(0.4)
-        text = pyperclip.paste()
-        hotkey(Key.ctrl, Key.end)  # drop the selection, caret back at the end
-        return text.replace("\r\n", "\n").strip()
+        return read_text(hwnd).replace("\r\n", "\n").strip()
 
     def drive() -> None:
         try:
@@ -306,11 +331,13 @@ def run_desktop(model: str, report: Report) -> None:
                 dictate(1.2, mid_hold)
                 wait_for(lambda: len(pasted) >= 1, 600, "the first paste")
                 latency = time.perf_counter() - t0 - 1.2
-                time.sleep(1.0)  # the app restores the clipboard 0.4s after pasting
+                time.sleep(1.0)  # let Notepad process the paste
                 text = read_notepad(hwnd)
+                if not text:
+                    s["detail"] = f"foreground: {title(foreground())!r}; "
                 score = wer([REFERENCE], [text])
                 report.facts.update(release_to_paste_seconds=round(latency, 2), wer=f"{score:.1%}")
-                s["detail"] = f"{latency:.2f}s after release, WER {score:.1%}: {text}"
+                s["detail"] += f"{latency:.2f}s after release, WER {score:.1%}: {text}"
                 report.screenshot(s, "pasted")
                 assert text == pasted[0].strip(), f"Notepad has {text!r}, app pasted {pasted[0]!r}"
                 assert score <= MAX_WER, f"WER {score:.1%} is above {MAX_WER:.0%}"

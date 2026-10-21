@@ -62,13 +62,17 @@ BACKENDS: dict[str, Backend] = {
             (
                 "numpy",
                 "torch",
+                "torchaudio",  # Granite Speech's feature extractor
                 "transformers>=5.4",
                 "accelerate",
                 "soundfile",
                 "librosa",
                 "sentencepiece",
                 "protobuf",
-                "mistral-common[audio]",
+                # Voxtral's tokenizer. transformers ignores mistral-common below
+                # 1.11.5 and also needs Pillow before it will use it.
+                "mistral-common[audio]>=1.11.5",
+                "pillow",
             ),
             needs_torch=True,
         ),

@@ -142,7 +142,8 @@ def _worker_env(spec: ModelSpec, opts: dict, download_only: bool, offline: bool)
     env["PYTHONPATH"] = str(_shim())
     env["PYTHONUNBUFFERED"] = "1"
     env["SPEECHIFY_WORKER"] = json.dumps({
-        "backend": spec.backend, "repo": spec.repo, "opts": opts, "download_only": download_only,
+        "backend": spec.backend, "repo": spec.repo, "download_only": download_only,
+        "opts": {**opts, "models_dir": str(_root() / "models")},
     })
     if offline:
         # Skips Hugging Face's "is there a newer revision" requests: faster startup, works offline.

@@ -99,13 +99,26 @@ class OnnxEngine(Engine):
         import onnx_asr
 
         available = ort.get_available_providers()
-        providers = ["CPUExecutionProvider"]
+        accelerated = []
         if device == "cuda" and "CUDAExecutionProvider" in available:
-            providers.insert(0, "CUDAExecutionProvider")
+            accelerated = ["CUDAExecutionProvider"]
         elif "DmlExecutionProvider" in available:
-            providers.insert(0, "DmlExecutionProvider")
-        self.device = providers[0]
-        self.model = onnx_asr.load_model(repo, providers=providers)
+            accelerated = ["DmlExecutionProvider"]
+        # A plain folder of real files: Hugging Face's cache stores weights as
+        # links into a shared blob folder, and ONNX Runtime refuses external
+        # weight files that resolve outside the model's own directory.
+        path = Path(opts["models_dir"]) / repo if opts.get("models_dir") else None
+        try:
+            self.model = onnx_asr.load_model(repo, path, providers=accelerated + ["CPUExecutionProvider"])
+            self.device = (accelerated or ["CPUExecutionProvider"])[0]
+        except Exception as exc:
+            if not accelerated:
+                raise
+            # ONNX Runtime lists CUDA whenever onnxruntime-gpu is installed, then
+            # fails to create the session if the GPU or driver can't be used.
+            print(f"{accelerated[0]} unavailable ({str(exc)[:200]}); using the CPU.", file=sys.stderr)
+            self.model = onnx_asr.load_model(repo, path, providers=["CPUExecutionProvider"])
+            self.device = "CPUExecutionProvider"
         self.language = opts["language"] or None
         self.multilingual = "canary" in repo
 
@@ -228,7 +241,9 @@ class TransformersEngine(Engine):
         return self.processor.batch_decode(out[:, inputs.input_ids.shape[1]:], skip_special_tokens=True)[0]
 
     def _run_kyutai(self, audio):
-        inputs = self.processor(resample(audio, 24_000)).to(self.device)
+        # By keyword: in transformers 5 the processor's first positional argument is `images`.
+        inputs = self.processor(audio=resample(audio, 24_000), sampling_rate=24_000,
+                                return_tensors="pt").to(self.device)
         out = self.model.generate(**inputs)
         return self.processor.batch_decode(out, skip_special_tokens=True)[0]
 

@@ -7,10 +7,14 @@ import threading
 import time
 
 import pyperclip
-from pynput.keyboard import Controller, Key
+from pynput.keyboard import Controller, Key, KeyCode
 
 _keyboard = Controller()
 _PASTE_MOD = Key.cmd if sys.platform == "darwin" else Key.ctrl
+# On Windows, pynput sends a plain "v" as a Unicode character event, which
+# ignores the held Ctrl, so the paste never happens. The virtual-key code
+# for V combines with Ctrl like a real key press does.
+_V = KeyCode.from_vk(0x56) if sys.platform == "win32" else KeyCode.from_char("v")
 
 
 def paste(text: str) -> None:
@@ -26,7 +30,7 @@ def paste(text: str) -> None:
     pyperclip.copy(text)
     time.sleep(0.02)  # let the clipboard owner settle before the target reads it
     with _keyboard.pressed(_PASTE_MOD):
-        _keyboard.tap("v")
+        _keyboard.tap(_V)
     if previous is not None:
         # The target app reads the clipboard asynchronously after Ctrl+V.
         threading.Timer(0.4, _restore, args=(text, previous)).start()
