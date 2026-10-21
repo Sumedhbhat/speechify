@@ -16,7 +16,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8",
-    "pillow>=11",  # screenshots in `speechify selftest`
+    "pillow>=13.0.0",  # screenshots in `speechify selftest`
 ]
 
 [project.scripts]
