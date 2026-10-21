@@ -155,12 +155,7 @@ def _win32():
         user32.SetForegroundWindow(hwnd)
         user32.keybd_event(0x12, 0, 2, 0)
 
-    def read_text(hwnd: int) -> str:
-        """Text of the window's edit control, read with WM_GETTEXT.
-
-        Reading it this way rather than with Ctrl+A / Ctrl+C keeps the check
-        independent of the keyboard path being tested.
-        """
+    def edit_control(hwnd: int) -> int:
         edit = None
 
         def callback(child, _):
@@ -175,13 +170,31 @@ def _win32():
         user32.EnumChildWindows(hwnd, proc(callback), 0)
         if edit is None:
             raise LookupError("no edit control in the window")
-        user32.SendMessageW.restype = ctypes.c_ssize_t
-        n = user32.SendMessageW(edit, 0x000E, 0, 0)  # WM_GETTEXTLENGTH
+        return edit
+
+    user32.SendMessageW.restype = ctypes.c_ssize_t
+    user32.SendMessageW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, ctypes.c_void_p)
+
+    def read_text(hwnd: int) -> str:
+        """Text of the window's edit control, read with WM_GETTEXT.
+
+        Reading it this way rather than with Ctrl+A / Ctrl+C keeps the check
+        independent of the keyboard path being tested.
+        """
+        edit = edit_control(hwnd)
+        n = user32.SendMessageW(edit, 0x000E, 0, None)  # WM_GETTEXTLENGTH
         buf = ctypes.create_unicode_buffer(n + 1)
-        user32.SendMessageW(edit, 0x000D, n + 1, buf)  # WM_GETTEXT
+        user32.SendMessageW(edit, 0x000D, n + 1, ctypes.addressof(buf))  # WM_GETTEXT
         return buf.value
 
-    return windows, title, focus, user32.GetForegroundWindow, read_text
+    def clear_text(hwnd: int) -> None:
+        empty = ctypes.create_unicode_buffer("")
+        user32.SendMessageW(edit_control(hwnd), 0x000C, 0, ctypes.addressof(empty))  # WM_SETTEXT
+
+    def wm_paste(hwnd: int) -> None:
+        user32.SendMessageW(edit_control(hwnd), 0x0302, 0, None)  # WM_PASTE
+
+    return windows, title, focus, user32.GetForegroundWindow, read_text, clear_text, wm_paste
 
 
 # --- tests --------------------------------------------------------------------------
@@ -241,7 +254,7 @@ def run_desktop(model: str, report: Report) -> None:
     from .engines.catalog import resolve
     from .metrics import wer
 
-    windows, title, focus, foreground, read_text = _win32()
+    windows, title, focus, foreground, read_text, clear_text, wm_paste = _win32()
     kb = Controller()
 
     config.set_value("autocorrect_after", 1)  # one fix is enough for the rule to apply
@@ -318,6 +331,42 @@ def run_desktop(model: str, report: Report) -> None:
                 wait_for(lambda: foreground() == hwnd, 10, "Notepad to be in front")
                 s["detail"] = title(hwnd)
                 report.screenshot(s, "notepad")
+
+            with report.step("input probe: which ways of entering text reach Notepad") as s:
+                # Diagnostic only: it records what works so a paste failure is
+                # explained by the report rather than guessed at.
+                from . import winkeys
+
+                def attempt(name: str, action: Callable[[], None], expect: str) -> str:
+                    try:
+                        clear_text(hwnd)
+                        focus(hwnd)
+                        time.sleep(0.2)
+                        action()
+                        time.sleep(0.6)
+                        got = read_text(hwnd)
+                        return f"{name}={'ok' if got == expect else repr(got)}"
+                    except Exception as exc:
+                        return f"{name}=error({exc})"
+
+                def with_clipboard(fn):
+                    def run():
+                        pyperclip.copy("probe")
+                        fn()
+                    return run
+
+                results = [
+                    attempt("type", lambda: kb.type("probe"), "probe"),
+                    attempt("pynput-ctrl-v", with_clipboard(lambda: hotkey(Key.ctrl, "v")), "probe"),
+                    attempt("sendinput-ctrl-v", with_clipboard(winkeys.ctrl_v), "probe"),
+                    attempt("wm-paste", with_clipboard(lambda: wm_paste(hwnd)), "probe"),
+                ]
+                pyperclip.copy("clipboard-check")
+                results.append(f"clipboard={'ok' if pyperclip.paste() == 'clipboard-check' else 'broken'}")
+                clear_text(hwnd)
+                focus(hwnd)
+                s["detail"] = ", ".join(results)
+                report.facts["input_probe"] = s["detail"]
 
             with report.step("hold-to-talk pastes the transcription into Notepad") as s:
                 focus_kept: list[bool] = []

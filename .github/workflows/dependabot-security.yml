@@ -13,8 +13,15 @@ jobs:
     env:
       PR_URL: ${{ github.event.pull_request.html_url }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HAS_ALERTS_TOKEN: ${{ secrets.DEPENDABOT_ALERTS_TOKEN != '' }}
     steps:
+      # GITHUB_TOKEN can't read Dependabot alerts, so without this secret no PR
+      # can be recognised as a security fix and nothing is auto-merged.
+      - if: env.HAS_ALERTS_TOKEN != 'true'
+        run: echo "::warning::DEPENDABOT_ALERTS_TOKEN is not set, so security fixes won't auto-merge. See docs/releases.md."
+
       - id: meta
+        if: env.HAS_ALERTS_TOKEN == 'true'
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
         with:
           alert-lookup: true

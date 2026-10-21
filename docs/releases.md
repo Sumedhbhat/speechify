@@ -110,3 +110,38 @@ Dependency updates follow the repo policy:
 - Overrides of transitive dependencies are a last resort. Each one is logged
   in [`.github/dependency-overrides.yml`](../.github/dependency-overrides.yml),
   and a daily job opens a PR to remove it once upstream has caught up.
+
+## Repository secrets
+
+| Secret | Kind | Token permissions | Used for |
+| --- | --- | --- | --- |
+| `DEPENDABOT_ALERTS_TOKEN` | Dependabot secret | Dependabot alerts: read-only | Telling security PRs apart so they can auto-merge. Without it, nothing auto-merges and the workflow says so in a warning. |
+| `DEPS_BOT_TOKEN` | Actions secret | Contents, Pull requests, Issues: read/write | Opening PRs that remove overrides upstream no longer needs. |
+| `HF_TOKEN` | Actions secret | Hugging Face read token from an account that accepted Cohere Transcribe's terms | Testing the gated Cohere model in the Models workflow. Without it, that one model is skipped. |
+
+Use fine-grained tokens limited to this repository:
+
+```bash
+gh secret set DEPENDABOT_ALERTS_TOKEN --app dependabot --repo Sumedhbhat/speechify
+gh secret set DEPS_BOT_TOKEN --repo Sumedhbhat/speechify
+gh secret set HF_TOKEN --repo Sumedhbhat/speechify
+```
+
+## Verification
+
+Nothing is published unless `speechify selftest` passes on a Windows runner
+(the `selftest` job in `release.yml`). It runs the real app with a recorded
+clip standing in for the microphone and checks, with a screenshot per step:
+
+- holding Right Ctrl transcribes the clip and pastes it into Notepad
+- the overlay never takes focus from the app you're dictating into
+- Ctrl+Alt+F opens the fix window, a pasted fix replaces the text, and
+  Ctrl+Enter learns it and swaps it in Notepad
+- the next dictation applies the learned fix
+- Ctrl+Alt+H lists both recordings, and Ctrl+Alt+M lists every model
+
+The report and screenshots are attached to each run as the `selftest-report`
+artifact. The [Models workflow](../.github/workflows/models.yml) separately
+installs and runs every model on Windows, weekly and whenever engine code
+changes. Runners have no GPU, so GPU speed is the one thing CI can't measure;
+run `speechify selftest` on your own machine for that.
