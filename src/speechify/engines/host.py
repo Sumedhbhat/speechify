@@ -36,7 +36,8 @@ class EngineError(RuntimeError):
 
 
 def _root() -> Path:
-    path = data_dir() / "engines"
+    # The self-test keeps its data separate but reuses installed engines.
+    path = Path(os.environ["SPEECHIFY_ENGINES"]) if os.environ.get("SPEECHIFY_ENGINES") else data_dir() / "engines"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

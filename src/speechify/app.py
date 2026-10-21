@@ -19,11 +19,12 @@ from .ui import UI
 
 
 class App:
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, recorder=None):
+        """`recorder` replaces the microphone (the self-test feeds a WAV file)."""
         self.cfg = cfg
         self.ui = UI()
         self.learner = Learner(data_dir(), cfg.autocorrect_after)
-        self.recorder = Recorder(cfg.input_device or None)
+        self.recorder = recorder or Recorder(cfg.input_device or None)
         self.engine = host.EngineHost()
         self._switch_lock = threading.Lock()
         self.last: Dictation | None = None

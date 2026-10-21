@@ -141,9 +141,57 @@ jobs:
           uv sync --frozen --no-dev
           test "$(uv run --frozen --no-dev speechify --version | tr -d '\r')" = "speechify $VERSION"
 
+  selftest:
+    name: Self-test on the Windows desktop
+    needs: version
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      # Outside the workspace so actions/cache can keep model environments,
+      # the Python they point at, and the downloaded weights between runs.
+      SPEECHIFY_ENGINES: C:\speechify\engines
+      UV_PYTHON_INSTALL_DIR: C:\speechify\python
+      HF_HOME: C:\speechify\hf
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.23"
+
+      - name: Restore model cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\speechify
+          key: selftest-${{ runner.os }}-${{ hashFiles('src/speechify/engines/catalog.py') }}
+
+      - name: Install
+        run: uv sync --frozen
+
+      # Drives the real app: global hotkeys, the model worker, pasting into
+      # Notepad, and the fix / history / model windows, with screenshots.
+      - name: Run the self-test
+        run: uv run --frozen speechify selftest --out selftest-report
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: cat selftest-report/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload report and screenshots
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: selftest-report
+          path: selftest-report
+          retention-days: 14
+
   publish:
     name: Publish ${{ needs.version.outputs.channel }} release
-    needs: [version, verify]
+    needs: [version, verify, selftest]
     if: github.event_name == 'push' && needs.version.outputs.channel != 'none'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

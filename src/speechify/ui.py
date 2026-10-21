@@ -46,6 +46,17 @@ if sys.platform == "win32":
         if hwnd:
             _user32.SetForegroundWindow(hwnd)
 
+    def bring_to_front(win: tk.Misc) -> None:
+        """Make a window ours the foreground window, even though a hotkey (not a
+        click on us) opened it. Windows refuses SetForegroundWindow from a
+        background app unless a key event is in flight, so send a bare Alt."""
+        win.update_idletasks()
+        hwnd = _user32.GetParent(win.winfo_id()) or win.winfo_id()
+        _user32.keybd_event(0x12, 0, 0, 0)  # VK_MENU down
+        _user32.SetForegroundWindow(hwnd)
+        _user32.keybd_event(0x12, 0, 2, 0)  # VK_MENU up
+        win.focus_force()
+
 else:
 
     def _make_passive(widget: tk.Misc) -> None:
@@ -56,6 +67,10 @@ else:
 
     def focus_window(hwnd: int) -> None:
         pass
+
+    def bring_to_front(win: tk.Misc) -> None:
+        win.lift()
+        win.focus_force()
 
 
 class UI:
@@ -139,14 +154,14 @@ class UI:
 
         if self._models is not None:
             self._models.refresh()
-            self._models.win.lift()
-            self._models.win.focus_force()
+            bring_to_front(self._models.win)
             return
 
         def closed() -> None:
             self._models = None
 
         self._models = ModelsWindow(self.root, active, use, install, on_close=closed)
+        bring_to_front(self._models.win)
 
     def refresh_models(self) -> None:
         if self._models is not None:
@@ -161,14 +176,14 @@ class UI:
 
         if self._history is not None:
             self._history.refresh()
-            self._history.win.lift()
-            self._history.win.focus_force()
+            bring_to_front(self._history.win)
             return
 
         def closed() -> None:
             self._history = None
 
         self._history = HistoryWindow(self.root, learner, on_close=closed)
+        bring_to_front(self._history.win)
 
     def ask_correction(
         self,
@@ -228,7 +243,5 @@ class UI:
 
         text.tag_add("sel", "1.0", "end-1c")
         win.lift()
-        win.focus_force()
+        bring_to_front(win)
         text.focus_set()
-        # Windows sometimes refuses the first focus request from a background app.
-        win.after(80, lambda: (win.focus_force(), text.focus_set()))

@@ -28,6 +28,12 @@ def main() -> None:
     models = sub.add_parser("models", help="list speech models, or install / switch to one")
     models.add_argument("action", nargs="?", choices=["list", "install", "use"], default="list")
     models.add_argument("model", nargs="?", help="model id from `speechify models`")
+    selftest = sub.add_parser("selftest", help="drive the real app end to end and report what works")
+    selftest.add_argument("--model", help="model id to test (default: the configured one)")
+    selftest.add_argument("--engine-only", action="store_true",
+                          help="only install, load and transcribe; no desktop needed")
+    selftest.add_argument("--device", choices=["cuda", "cpu"], help="override the configured device")
+    selftest.add_argument("--out", help="folder for report.json, summary.md and screenshots")
     sub.add_parser("devices", help="list microphones")
     sub.add_parser("where", help="print the config and data directory")
     args = parser.parse_args()
@@ -40,6 +46,11 @@ def main() -> None:
     if args.cmd == "where":
         print(data_dir())
         return
+
+    if args.cmd == "selftest":
+        from .selftest import main as selftest
+
+        raise SystemExit(selftest(args.model, args.engine_only, args.device, args.out))
 
     cfg = Config.load()
     if args.cmd == "models":

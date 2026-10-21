@@ -1,0 +1,87 @@
+name: Models
+
+# Installs every speech model in its own environment on Windows and checks it
+# transcribes the self-test clip accurately. Runners have no GPU, so this
+# proves each recipe and its dependencies work, not GPU speed.
+
+on:
+  push:
+    branches: ["release/**"]
+    paths: [src/speechify/engines/**, .github/workflows/models.yml]
+  pull_request:
+    paths: [src/speechify/engines/**, .github/workflows/models.yml]
+  schedule:
+    - cron: "41 3 * * 1"            # weekly: catches upstream breakage
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: models-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine:
+    name: ${{ matrix.model }}
+    runs-on: windows-2025
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - whisper-large-v3-turbo
+          - whisper-large-v3
+          - distil-whisper-large-v3
+          - parakeet-tdt-0.6b-v3
+          - parakeet-tdt-0.6b-v2
+          - canary-1b-v2
+          - granite-speech-4.1-2b
+          - cohere-transcribe
+          - qwen3-asr-1.7b
+          - qwen3-asr-0.6b
+          - voxtral-mini-3b
+          - kyutai-stt-2.6b
+          - kyutai-stt-1b
+          - moonshine-base
+    env:
+      SPEECHIFY_ENGINES: D:\speechify\engines
+      UV_PYTHON_INSTALL_DIR: D:\speechify\python
+      HF_HOME: D:\speechify\hf
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}  # only needed for the gated Cohere model
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.23"
+
+      - name: Install
+        run: uv sync --frozen --no-dev
+
+      - name: Self-test ${{ matrix.model }}
+        if: matrix.model != 'cohere-transcribe' || env.HF_TOKEN != ''
+        run: uv run --frozen --no-dev speechify selftest --engine-only --model ${{ matrix.model }} --out report
+
+      - name: Gated model skipped
+        if: matrix.model == 'cohere-transcribe' && env.HF_TOKEN == ''
+        shell: bash
+        run: |
+          echo "::warning::Skipped ${{ matrix.model }}, which is gated. Add an HF_TOKEN secret from an account that accepted its terms."
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: cat report/summary.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: model-${{ matrix.model }}
+          path: report
+          if-no-files-found: ignore
+          retention-days: 14
