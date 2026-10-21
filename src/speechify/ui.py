@@ -27,6 +27,7 @@ if sys.platform == "win32":
     import ctypes
 
     _user32 = ctypes.windll.user32
+    _kernel32 = ctypes.windll.kernel32
     _GWL_EXSTYLE = -20
     _WS_EX_LAYERED = 0x00080000
     _WS_EX_TRANSPARENT = 0x00000020
@@ -47,14 +48,26 @@ if sys.platform == "win32":
             _user32.SetForegroundWindow(hwnd)
 
     def bring_to_front(win: tk.Misc) -> None:
-        """Make a window ours the foreground window, even though a hotkey (not a
-        click on us) opened it. Windows refuses SetForegroundWindow from a
-        background app unless a key event is in flight, so send a bare Alt."""
+        """Make one of our windows the foreground window, although a hotkey
+        rather than a click on us opened it.
+
+        Windows refuses SetForegroundWindow from a background app. Attaching
+        our input queue to the foreground app's thread for a moment lifts that
+        restriction without sending any keys (a synthetic Alt press would
+        toggle the target app's menu bar and swallow the next shortcut).
+        """
         win.update_idletasks()
         hwnd = _user32.GetParent(win.winfo_id()) or win.winfo_id()
-        _user32.keybd_event(0x12, 0, 0, 0)  # VK_MENU down
-        _user32.SetForegroundWindow(hwnd)
-        _user32.keybd_event(0x12, 0, 2, 0)  # VK_MENU up
+        fg_thread = _user32.GetWindowThreadProcessId(_user32.GetForegroundWindow(), None)
+        our_thread = _kernel32.GetCurrentThreadId()
+        attached = fg_thread and fg_thread != our_thread and _user32.AttachThreadInput(our_thread, fg_thread, True)
+        try:
+            _user32.ShowWindow(hwnd, 5)  # SW_SHOW
+            _user32.BringWindowToTop(hwnd)
+            _user32.SetForegroundWindow(hwnd)
+        finally:
+            if attached:
+                _user32.AttachThreadInput(our_thread, fg_thread, False)
         win.focus_force()
 
 else:

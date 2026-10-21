@@ -147,13 +147,22 @@ def _win32():
         user32.GetWindowTextW(hwnd, buf, n + 1)
         return buf.value
 
+    kernel32 = ctypes.windll.kernel32
+
     def focus(hwnd: int) -> None:
-        # Windows only lets the foreground app hand out focus; a synthetic Alt
-        # press is the documented way for a background app to be allowed to.
-        user32.keybd_event(0x12, 0, 0, 0)
-        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-        user32.SetForegroundWindow(hwnd)
-        user32.keybd_event(0x12, 0, 2, 0)
+        """Bring a window to the front the way the app does (see ui.bring_to_front)."""
+        if user32.GetForegroundWindow() == hwnd:
+            return
+        fg_thread = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
+        our_thread = kernel32.GetCurrentThreadId()
+        attached = fg_thread and fg_thread != our_thread and user32.AttachThreadInput(our_thread, fg_thread, True)
+        try:
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+        finally:
+            if attached:
+                user32.AttachThreadInput(our_thread, fg_thread, False)
 
     def edit_control(hwnd: int) -> int:
         edit = None
@@ -294,8 +303,15 @@ def run_desktop(model: str, report: Report) -> None:
             raise box[0]
         return box[0]
 
+    from . import winkeys
+
+    vks = {Key.ctrl: 0x11, Key.alt: 0x12, Key.shift: 0x10, Key.enter: 0x0D}
+
     def hotkey(*keys) -> None:
-        # Letters as virtual keys: see the note on _V in output.py.
+        """Press a shortcut like a physical keyboard: virtual keys plus scan codes."""
+        winkeys.chord(*(vks[k] if k in vks else ord(k.upper()) for k in keys))
+
+    def pynput_hotkey(*keys) -> None:
         keys = [KeyCode.from_vk(ord(k.upper())) if isinstance(k, str) else k for k in keys]
         for k in keys:
             kb.press(k)
@@ -335,8 +351,6 @@ def run_desktop(model: str, report: Report) -> None:
             with report.step("input probe: which ways of entering text reach Notepad") as s:
                 # Diagnostic only: it records what works so a paste failure is
                 # explained by the report rather than guessed at.
-                from . import winkeys
-
                 def attempt(name: str, action: Callable[[], None], expect: str) -> str:
                     try:
                         clear_text(hwnd)
@@ -357,7 +371,7 @@ def run_desktop(model: str, report: Report) -> None:
 
                 results = [
                     attempt("type", lambda: kb.type("probe"), "probe"),
-                    attempt("pynput-ctrl-v", with_clipboard(lambda: hotkey(Key.ctrl, "v")), "probe"),
+                    attempt("pynput-ctrl-v", with_clipboard(lambda: pynput_hotkey(Key.ctrl, "v")), "probe"),
                     attempt("sendinput-ctrl-v", with_clipboard(winkeys.ctrl_v), "probe"),
                     attempt("wm-paste", with_clipboard(lambda: wm_paste(hwnd)), "probe"),
                 ]

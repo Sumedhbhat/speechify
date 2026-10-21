@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Callable
 
 from pynput import keyboard
+
+from .combos import Matcher
 
 
 def parse_key(name: str) -> keyboard.Key | keyboard.KeyCode:
@@ -74,5 +77,38 @@ class PushToTalk:
             self.on_stop()
 
 
-def global_hotkeys(bindings: dict[str, Callable[[], None]]) -> keyboard.GlobalHotKeys:
-    return keyboard.GlobalHotKeys(bindings)
+def _describe(key) -> tuple[str | None, int | None, str | None]:
+    if isinstance(key, keyboard.Key):
+        return key.name, getattr(key.value, "vk", None), None
+    return None, getattr(key, "vk", None), getattr(key, "char", None)
+
+
+class GlobalHotkeys:
+    """System-wide shortcuts like "<ctrl>+<alt>+f".
+
+    Replaces pynput's GlobalHotKeys, which never fires Ctrl+Alt+letter on
+    Windows (see combos.py). Callbacks run on their own thread so a slow one
+    can't stall the system keyboard hook.
+    """
+
+    def __init__(self, bindings: dict[str, Callable[[], None]]):
+        self.bindings = bindings
+        self.matcher = Matcher(list(bindings))
+        self._listener = keyboard.Listener(on_press=self._press, on_release=self._release)
+
+    def start(self) -> None:
+        self._listener.start()
+
+    def stop(self) -> None:
+        self._listener.stop()
+
+    def _press(self, key) -> None:
+        for combo in self.matcher.press(*_describe(key)):
+            threading.Thread(target=self.bindings[combo], daemon=True).start()
+
+    def _release(self, key) -> None:
+        self.matcher.release(*_describe(key))
+
+
+def global_hotkeys(bindings: dict[str, Callable[[], None]]) -> GlobalHotkeys:
+    return GlobalHotkeys(bindings)
