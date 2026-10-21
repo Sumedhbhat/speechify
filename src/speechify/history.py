@@ -41,7 +41,8 @@ class HistoryWindow:
 
         win = self.win = tk.Toplevel(master)
         win.title("Speechify: recordings")
-        win.geometry("980x600")
+        # Fit small screens (e.g. 1024x768) instead of running off the edge.
+        win.geometry(f"{min(980, win.winfo_screenwidth() - 40)}x{min(600, win.winfo_screenheight() - 80)}+20+20")
         win.protocol("WM_DELETE_WINDOW", self.close)
 
         top = ttk.Frame(win, padding=(10, 10, 10, 0))

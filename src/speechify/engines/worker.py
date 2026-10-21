@@ -68,7 +68,7 @@ def main() -> None:
     except Exception as exc:
         traceback.print_exc()
         send({"event": "error", "error": f"{type(exc).__name__}: {exc}"})
-        return
+        sys.exit(1)  # so an install's download step fails instead of marking the model ready
     if cfg.get("download_only"):
         return
 

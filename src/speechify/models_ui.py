@@ -30,7 +30,8 @@ class ModelsWindow:
         self.specs: dict[str, ModelSpec] = {}
         win = self.win = tk.Toplevel(master)
         win.title("Speechify: models")
-        win.geometry("1060x560")
+        # Fit small screens (e.g. 1024x768) instead of running off the edge.
+        win.geometry(f"{min(1060, win.winfo_screenwidth() - 40)}x{min(560, win.winfo_screenheight() - 80)}+20+20")
         win.protocol("WM_DELETE_WINDOW", self.close)
 
         top = ttk.Frame(win, padding=(10, 10, 10, 0))
@@ -62,9 +63,9 @@ class ModelsWindow:
         ttk.Button(actions, text="Use this model", command=self._use).pack(side="right")
         ttk.Button(actions, text="Download only", command=self._install).pack(side="right", padx=6)
         ttk.Label(
-            actions, foreground="#888",
+            actions, foreground="#888", wraplength=560, justify="left",
             text="Not on Windows: " + "; ".join(f"{k} ({v})" for k, v in UNSUPPORTED.items()),
-        ).pack(side="left")
+        ).pack(side="left", fill="x", expand=True)
 
         self.log = tk.Text(win, height=5, font=("Consolas", 9), state="disabled", background="#f6f6f6")
         self.log.pack(fill="x", padx=10, pady=(0, 10))

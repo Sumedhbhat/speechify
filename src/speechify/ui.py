@@ -27,6 +27,7 @@ if sys.platform == "win32":
     import ctypes
 
     _user32 = ctypes.windll.user32
+    _kernel32 = ctypes.windll.kernel32
     _GWL_EXSTYLE = -20
     _WS_EX_LAYERED = 0x00080000
     _WS_EX_TRANSPARENT = 0x00000020
@@ -46,6 +47,29 @@ if sys.platform == "win32":
         if hwnd:
             _user32.SetForegroundWindow(hwnd)
 
+    def bring_to_front(win: tk.Misc) -> None:
+        """Make one of our windows the foreground window, although a hotkey
+        rather than a click on us opened it.
+
+        Windows refuses SetForegroundWindow from a background app. Attaching
+        our input queue to the foreground app's thread for a moment lifts that
+        restriction without sending any keys (a synthetic Alt press would
+        toggle the target app's menu bar and swallow the next shortcut).
+        """
+        win.update_idletasks()
+        hwnd = _user32.GetParent(win.winfo_id()) or win.winfo_id()
+        fg_thread = _user32.GetWindowThreadProcessId(_user32.GetForegroundWindow(), None)
+        our_thread = _kernel32.GetCurrentThreadId()
+        attached = fg_thread and fg_thread != our_thread and _user32.AttachThreadInput(our_thread, fg_thread, True)
+        try:
+            _user32.ShowWindow(hwnd, 5)  # SW_SHOW
+            _user32.BringWindowToTop(hwnd)
+            _user32.SetForegroundWindow(hwnd)
+        finally:
+            if attached:
+                _user32.AttachThreadInput(our_thread, fg_thread, False)
+        win.focus_force()
+
 else:
 
     def _make_passive(widget: tk.Misc) -> None:
@@ -56,6 +80,10 @@ else:
 
     def focus_window(hwnd: int) -> None:
         pass
+
+    def bring_to_front(win: tk.Misc) -> None:
+        win.lift()
+        win.focus_force()
 
 
 class UI:
@@ -139,14 +167,14 @@ class UI:
 
         if self._models is not None:
             self._models.refresh()
-            self._models.win.lift()
-            self._models.win.focus_force()
+            bring_to_front(self._models.win)
             return
 
         def closed() -> None:
             self._models = None
 
         self._models = ModelsWindow(self.root, active, use, install, on_close=closed)
+        bring_to_front(self._models.win)
 
     def refresh_models(self) -> None:
         if self._models is not None:
@@ -161,14 +189,14 @@ class UI:
 
         if self._history is not None:
             self._history.refresh()
-            self._history.win.lift()
-            self._history.win.focus_force()
+            bring_to_front(self._history.win)
             return
 
         def closed() -> None:
             self._history = None
 
         self._history = HistoryWindow(self.root, learner, on_close=closed)
+        bring_to_front(self._history.win)
 
     def ask_correction(
         self,
@@ -228,7 +256,5 @@ class UI:
 
         text.tag_add("sel", "1.0", "end-1c")
         win.lift()
-        win.focus_force()
+        bring_to_front(win)
         text.focus_set()
-        # Windows sometimes refuses the first focus request from a background app.
-        win.after(80, lambda: (win.focus_force(), text.focus_set()))

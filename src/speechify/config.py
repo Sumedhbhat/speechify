@@ -58,6 +58,10 @@ llm_model = ""             # e.g. "qwen2.5:3b-instruct"
 
 
 def data_dir() -> Path:
+    if os.environ.get("SPEECHIFY_HOME"):  # isolates test runs from real data
+        path = Path(os.environ["SPEECHIFY_HOME"])
+        path.mkdir(parents=True, exist_ok=True)
+        return path
     if sys.platform == "win32":
         base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
     else:

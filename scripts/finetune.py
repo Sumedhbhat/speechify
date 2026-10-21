@@ -43,7 +43,6 @@ from __future__ import annotations
 import argparse
 import random
 import sqlite3
-import string
 import sys
 import time
 from pathlib import Path
@@ -52,6 +51,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from speechify.audio import SAMPLE_RATE, load_wav  # noqa: E402
 from speechify.config import Config, data_dir, set_value  # noqa: E402
+from speechify.metrics import wer  # noqa: E402
 
 BASE_MODELS = {
     "whisper-large-v3-turbo": "openai/whisper-large-v3-turbo",
@@ -74,24 +74,6 @@ def load_samples(root: Path, include_accepted: bool) -> list[tuple[Path, str]]:
         if (corrected or include_accepted) and text.strip() and path.exists():
             samples.append((path, text.strip()))
     return samples
-
-
-def _words(text: str) -> list[str]:
-    return text.lower().translate(str.maketrans("", "", string.punctuation)).split()
-
-
-def wer(refs: list[str], hyps: list[str]) -> float:
-    errors = total = 0
-    for ref, hyp in zip(refs, hyps):
-        r, h = _words(ref), _words(hyp)
-        row = list(range(len(h) + 1))
-        for i, rw in enumerate(r, 1):
-            prev, row[0] = row[0], i
-            for j, hw in enumerate(h, 1):
-                prev, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, prev + (rw != hw))
-        errors += row[-1]
-        total += len(r)
-    return errors / max(total, 1)
 
 
 def main() -> None:
