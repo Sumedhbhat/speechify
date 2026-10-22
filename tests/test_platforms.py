@@ -317,10 +317,10 @@ def test_appimage_menu_entry(monkeypatch, tmp_path):
     appdir = tmp_path / "mnt"
     appdir.mkdir()
     (appdir / "speechify.png").write_bytes(b"png")
-    monkeypatch.setenv("APPIMAGE", str(tmp_path / 'my apps/Speechify "1".AppImage'))
+    monkeypatch.setenv("APPIMAGE", '/opt/my apps/Speechify "1".AppImage')
     monkeypatch.setenv("APPDIR", str(appdir))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "share"))
     linuxsetup.register_appimage()
     entry = (tmp_path / "share" / "applications" / "speechify.desktop").read_text()
-    assert f'Exec="{tmp_path}/my apps/Speechify \\\\"1\\\\".AppImage"\n' in entry
+    assert 'Exec="/opt/my apps/Speechify \\\\"1\\\\".AppImage"\n' in entry
     assert (tmp_path / "share" / "icons" / "hicolor" / "256x256" / "apps" / "speechify.png").read_bytes() == b"png"
