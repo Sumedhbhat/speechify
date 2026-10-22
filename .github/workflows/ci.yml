@@ -39,7 +39,7 @@ jobs:
 
       # Lets tests/test_platforms.py type through a uinput virtual keyboard
       # and read it back from /dev/input: the path Speechify uses on Wayland.
-      # The install.sh setup, minus logging out and in (sg applies the group).
+      # The setup linuxsetup.py does, minus logging out and in (sg applies the group).
       - name: Give the input group /dev/uinput
         if: runner.os == 'Linux'
         run: |

@@ -59,13 +59,28 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
-  bundle:
-    name: Bundle
+  package:
+    name: Build ${{ matrix.platform }} installer
     needs: version
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            os: windows-2025
+          - platform: macos
+            os: macos-15
+          # The oldest supported runner, so the Linux build runs on any glibc
+          # from 2.35 (Ubuntu 22.04, Debian 12, Fedora 36) up.
+          - platform: linux
+            os: ubuntu-22.04
     env:
       VERSION: ${{ needs.version.outputs.version }}
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Check out repository
@@ -76,34 +91,48 @@ jobs:
         with:
           version: "0.12.23"
 
-      - name: Test
+      - name: Install ALSA headers for PortAudio
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libasound2-dev
+
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
         run: |
-          uv sync --frozen
-          uv run --frozen pytest -q
+          curl -fsSL https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe -o innosetup.exe
+          echo "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732  innosetup.exe" | sha256sum -c -
+          ./innosetup.exe //VERYSILENT //SUPPRESSMSGBOXES //NORESTART //SP- '//DIR=C:\innosetup'
+          echo "ISCC=C:/innosetup/ISCC.exe" >> "$GITHUB_ENV"
 
-      - name: Build bundle
-        run: scripts/build-bundle.sh "$VERSION"
+      - name: Build
+        run: packaging/build.sh "$VERSION"
 
-      - name: Upload bundle
+      - name: Upload installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: speechify-bundle
-          path: |
-            dist/speechify-*.zip
-            scripts/install.ps1
-            scripts/install.sh
+          name: installer-${{ matrix.platform }}
+          path: dist/*
           if-no-files-found: error
           retention-days: 7
 
-  verify:
-    name: Verify bundle (${{ matrix.os }})
-    needs: [version, bundle]
+  # Installs what users download, on a fresh runner, and runs the default
+  # model through it: the app's own Python, the uv it ships with, and the
+  # model environment uv builds. No GPU on these runners, so this is the setup
+  # a Mac or a PC without an NVIDIA card gets.
+  check-package:
+    name: Install and self-test (${{ matrix.platform }})
+    needs: [version, package]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, ubuntu-24.04, macos-15]
+        include:
+          - platform: windows
+            os: windows-2025
+          - platform: macos
+            os: macos-15
+          - platform: linux
+            os: ubuntu-24.04
     env:
       VERSION: ${{ needs.version.outputs.version }}
     defaults:
@@ -111,51 +140,86 @@ jobs:
         shell: bash
 
     steps:
-      - name: Download bundle
+      # Outside the workspace so actions/cache can keep model environments,
+      # the Python they point at, and the downloaded weights between runs.
+      - name: Cache locations
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then cache='C:\speechify-cache'; else cache=$HOME/speechify-cache; fi
+          {
+            echo "CACHE_DIR=$cache"
+            echo "SPEECHIFY_ENGINES=$cache/engines"
+            echo "UV_PYTHON_INSTALL_DIR=$cache/python"
+            echo "HF_HOME=$cache/hf"
+          } >> "$GITHUB_ENV"
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: src/speechify/engines/catalog.py
+
+      - name: Download installer
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: speechify-bundle
-          path: bundle
+          name: installer-${{ matrix.platform }}
+          path: dist
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Restore model cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          version: "0.12.23"
+          path: ${{ env.CACHE_DIR }}
+          key: package-engine-${{ runner.os }}-${{ hashFiles('src/speechify/engines/catalog.py') }}
 
-      - name: Installer parses
+      - name: Install (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/bundle/scripts/install.ps1", [ref]$null, [ref]$errors) | Out-Null
-          if ($errors) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+          $setup = Get-ChildItem dist/Speechify-*-windows-x64-setup.exe
+          Start-Process $setup.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER" -Wait
+          "APP=$env:LOCALAPPDATA\Programs\Speechify\Speechify.exe" >> $env:GITHUB_ENV
+          if (-not (Test-Path "$([Environment]::GetFolderPath('Programs'))\Speechify.lnk")) { throw "No Start menu shortcut" }
 
-      # The real installer, from the bundle instead of a GitHub release:
-      # system packages, uv sync without a compiler, launchers, PATH command.
-      - name: Install with install.sh
-        if: runner.os != 'Windows'
+      - name: Install (macOS)
+        if: runner.os == 'macOS'
         run: |
-          bash bundle/scripts/install.sh --from "bundle/dist/speechify-$VERSION.zip" --yes
-          test "$("$HOME/.local/bin/speechify" --version)" = "speechify $VERSION"
-          if [ "$RUNNER_OS" = macOS ]; then
-            plutil -lint "$HOME/Applications/Speechify.app/Contents/Info.plist"
-            test -x "$HOME/Applications/Speechify.app/Contents/MacOS/Speechify"
-          else
-            sudo apt-get install -y -qq desktop-file-utils
-            desktop-file-validate "$HOME/.local/share/applications/speechify.desktop"
-          fi
+          hdiutil attach -nobrowse -mountpoint /Volumes/Speechify dist/Speechify-*-macos-*.dmg
+          cp -R /Volumes/Speechify/Speechify.app /Applications/
+          hdiutil detach /Volumes/Speechify
+          plutil -lint /Applications/Speechify.app/Contents/Info.plist
+          codesign --verify --deep --strict /Applications/Speechify.app
+          echo "APP=/Applications/Speechify.app/Contents/MacOS/Speechify" >> "$GITHUB_ENV"
 
-      # Installs the bundle the way scripts/install.ps1 does and checks the
-      # version is visible everywhere a user would look.
-      - name: Install and check version
+      - name: Install (Linux)
+        if: runner.os == 'Linux'
         run: |
-          cd bundle
-          uv run --no-project python -m zipfile -e "dist/speechify-$VERSION.zip" .
-          cd "speechify-$VERSION"
-          test "$(cat VERSION)" = "$VERSION"
-          test "$(cat src/speechify/VERSION)" = "$VERSION"
-          uv sync --frozen --no-dev
-          test "$(uv run --frozen --no-dev speechify --version | tr -d '\r')" = "speechify $VERSION"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ./dist/speechify_*_amd64.deb desktop-file-utils
+          desktop-file-validate /usr/share/applications/speechify.desktop
+          echo "APP=speechify" >> "$GITHUB_ENV"
+          # The AppImage is the same app in another wrapper.
+          chmod +x dist/Speechify-*.AppImage
+          test "$(APPIMAGE_EXTRACT_AND_RUN=1 dist/Speechify-*.AppImage --version)" = "speechify $VERSION"
+
+      - name: Check the installed app
+        run: |
+          test "$("$APP" --version | tr -d '\r')" = "speechify $VERSION"
+          "$APP" models
+          # Loads PortAudio (bundled on Linux).
+          "$APP" devices
+
+      - name: Run the self-test
+        run: '"$APP" selftest --engine-only --out selftest-report'
+
+      - name: Summary
+        if: always()
+        run: cat selftest-report/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: selftest-package-${{ matrix.platform }}
+          path: selftest-report
+          retention-days: 14
 
   selftest:
     name: Self-test on the Windows desktop
@@ -205,64 +269,9 @@ jobs:
           path: selftest-report
           retention-days: 14
 
-  # No GPU on these runners, so this is the setup a Mac or a Linux PC without
-  # an NVIDIA card gets: the CPU packages and the default model for it.
-  selftest-engine:
-    name: Self-test the default model (${{ matrix.os }})
-    needs: version
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15]
-
-    steps:
-      # Outside the workspace so actions/cache can keep model environments,
-      # the Python they point at, and the downloaded weights between runs.
-      - name: Cache locations
-        run: |
-          {
-            echo "SPEECHIFY_ENGINES=$HOME/speechify-cache/engines"
-            echo "UV_PYTHON_INSTALL_DIR=$HOME/speechify-cache/python"
-            echo "HF_HOME=$HOME/speechify-cache/hf"
-          } >> "$GITHUB_ENV"
-
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          version: "0.12.23"
-
-      - name: Restore model cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/speechify-cache
-          key: selftest-engine-${{ runner.os }}-${{ hashFiles('src/speechify/engines/catalog.py') }}
-
-      - name: Install
-        run: uv sync --frozen --no-dev
-
-      - name: Run the self-test
-        run: uv run --frozen --no-dev speechify selftest --engine-only --out selftest-report
-
-      - name: Summary
-        if: always()
-        run: cat selftest-report/summary.md >> "$GITHUB_STEP_SUMMARY" || true
-
-      - name: Upload report
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: selftest-engine-${{ runner.os }}
-          path: selftest-report
-          retention-days: 14
-
   publish:
     name: Publish ${{ needs.version.outputs.channel }} release
-    needs: [version, verify, selftest, selftest-engine]
+    needs: [version, package, check-package, selftest]
     if: github.event_name == 'push' && needs.version.outputs.channel != 'none'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -275,18 +284,17 @@ jobs:
       CHANNEL: ${{ needs.version.outputs.channel }}
 
     steps:
-      - name: Download bundle
+      - name: Download installers
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: speechify-bundle
-          path: bundle
+          pattern: installer-*
+          merge-multiple: true
+          path: dist
 
-      - name: Collect assets and checksums
+      - name: Checksums
         run: |
-          mkdir dist
-          cp bundle/dist/speechify-*.zip bundle/scripts/install.ps1 bundle/scripts/install.sh dist/
           cd dist
-          sha256sum speechify-*.zip install.ps1 install.sh > SHA256SUMS
+          sha256sum * > SHA256SUMS
           cat SHA256SUMS
 
       - name: Create release
@@ -297,25 +305,16 @@ jobs:
             exit 0
           fi
           prerelease=""
-          channel_arg=""
-          sh_channel=""
-          if [ "$CHANNEL" = nightly ]; then
-            prerelease="--prerelease"
-            channel_arg='$env:SPEECHIFY_CHANNEL = "nightly"; '
-            sh_channel="SPEECHIFY_CHANNEL=nightly "
-          fi
-          notes="Install or update on Windows (PowerShell):
+          [ "$CHANNEL" = nightly ] && prerelease="--prerelease"
+          url="https://github.com/$GH_REPO/releases/download/$tag"
+          deb_version=${VERSION/-/\~}
+          notes="Download and run the installer for your system:
 
-          \`\`\`powershell
-          ${channel_arg}irm https://github.com/$GH_REPO/releases/download/$tag/install.ps1 | iex
-          \`\`\`
+          - **Windows**: [Speechify-$VERSION-windows-x64-setup.exe]($url/Speechify-$VERSION-windows-x64-setup.exe)
+          - **macOS** (Apple silicon): [Speechify-$VERSION-macos-arm64.dmg]($url/Speechify-$VERSION-macos-arm64.dmg)
+          - **Ubuntu, Debian**: [speechify_${deb_version}_amd64.deb]($url/speechify_${deb_version}_amd64.deb)
+          - **Other Linux**: [Speechify-$VERSION-x86_64.AppImage]($url/Speechify-$VERSION-x86_64.AppImage)
 
-          On Linux or macOS:
-
-          \`\`\`bash
-          curl -fsSL https://github.com/$GH_REPO/releases/download/$tag/install.sh | ${sh_channel}bash
-          \`\`\`
-
-          Your recordings, corrections and settings are kept across updates. See docs/releases.md for channels."
+          To update, install the new version over the old one. Your recordings, corrections and settings are kept. See docs/releases.md for channels."
           gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "Speechify $VERSION" \
             --notes "$notes" --generate-notes $prerelease
