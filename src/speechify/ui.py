@@ -18,10 +18,19 @@ COLORS = {
     "error": "#e5484d",
 }
 
+if sys.platform == "win32":
+    FONT, MONO = "Segoe UI", "Consolas"
+elif sys.platform == "darwin":
+    FONT, MONO = "Helvetica Neue", "Menlo"
+else:
+    FONT, MONO = "DejaVu Sans", "DejaVu Sans Mono"
 
-# --- Win32 focus handling ----------------------------------------------------
+
+# --- focus handling ----------------------------------------------------------
 # The overlay must never take focus, or Ctrl+V would paste into it instead of
-# the app you're dictating into.
+# the app you're dictating into. On Linux, window managers don't focus
+# override-redirect windows and give focus back when ours close, so the
+# defaults at the bottom are enough there.
 
 if sys.platform == "win32":
     import ctypes
@@ -70,15 +79,36 @@ if sys.platform == "win32":
                 _user32.AttachThreadInput(our_thread, fg_thread, False)
         win.focus_force()
 
+elif sys.platform == "darwin":
+    from AppKit import NSApplication, NSWorkspace
+
+    _ACTIVATE_IGNORING_OTHER_APPS = 1 << 1
+
+    def _make_passive(widget: tk.Misc) -> None:
+        pass  # overlay windows that are only made visible don't activate the app
+
+    def foreground_window():
+        return NSWorkspace.sharedWorkspace().frontmostApplication()
+
+    def focus_window(app) -> None:
+        """Closing our window leaves Speechify active on macOS; hand focus back."""
+        if app is not None:
+            app.activateWithOptions_(_ACTIVATE_IGNORING_OTHER_APPS)
+
+    def bring_to_front(win: tk.Misc) -> None:
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        win.lift()
+        win.focus_force()
+
 else:
 
     def _make_passive(widget: tk.Misc) -> None:
         pass
 
-    def foreground_window() -> int:
-        return 0
+    def foreground_window():
+        return None
 
-    def focus_window(hwnd: int) -> None:
+    def focus_window(window) -> None:
         pass
 
     def bring_to_front(win: tk.Misc) -> None:
@@ -126,9 +156,9 @@ class UI:
         pill.configure(bg="#18191b")
         frame = tk.Frame(pill, bg="#18191b", padx=14, pady=8)
         frame.pack()
-        self._dot = tk.Label(frame, text="●", bg="#18191b", font=("Segoe UI", 11))
+        self._dot = tk.Label(frame, text="●", bg="#18191b", font=(FONT, 11))
         self._dot.pack(side="left")
-        self._label = tk.Label(frame, bg="#18191b", fg="#edeef0", font=("Segoe UI", 10))
+        self._label = tk.Label(frame, bg="#18191b", fg="#edeef0", font=(FONT, 10))
         self._label.pack(side="left", padx=(6, 0))
         pill.update_idletasks()
         _make_passive(pill)
@@ -224,7 +254,7 @@ class UI:
             text="Fix the text below. You can type, or hold the talk key to dictate the fix.",
             anchor="w",
         ).pack(fill="x")
-        text = tk.Text(win, width=72, height=6, wrap="word", font=("Segoe UI", 11), undo=True)
+        text = tk.Text(win, width=72, height=6, wrap="word", font=(FONT, 11), undo=True)
         text.insert("1.0", pasted)
         text.pack(fill="both", expand=True, pady=(6, 4))
         if raw != pasted:

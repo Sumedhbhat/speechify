@@ -108,17 +108,39 @@ class OnnxEngine(Engine):
         # links into a shared blob folder, and ONNX Runtime refuses external
         # weight files that resolve outside the model's own directory.
         path = Path(opts["models_dir"]) / repo if opts.get("models_dir") else None
+        # Without a GPU, the int8 weights are a quarter of the download and
+        # nearly twice as fast on the CPU, with the same transcripts. compute_type is "int8" by default
+        # on machines without CUDA (config.platform_defaults).
+        wanted = "int8" if not accelerated and opts.get("compute_type") == "int8" else None
+        quantization = wanted
+        if path is not None and path.exists():
+            # onnx-asr never downloads into a folder that exists, so use the
+            # weights that are there, whichever precision was fetched first.
+            has_int8 = any(path.glob("*.int8.onnx"))
+            has_full = any(".int8." not in f.name for f in path.glob("*.onnx"))
+            if quantization and not has_int8:
+                quantization = None
+            elif not quantization and has_int8 and not has_full:
+                quantization = "int8"
+            if quantization != wanted:
+                kind = "int8" if quantization else "full-precision"
+                print(f"Using the {kind} weights already downloaded; delete {path} "
+                      "to download the other kind.", file=sys.stderr)
         try:
-            self.model = onnx_asr.load_model(repo, path, providers=accelerated + ["CPUExecutionProvider"])
+            self.model = onnx_asr.load_model(repo, path, quantization=quantization,
+                                             providers=accelerated + ["CPUExecutionProvider"])
             self.device = (accelerated or ["CPUExecutionProvider"])[0]
+            if quantization:
+                self.device += " (int8)"
         except Exception as exc:
             if not accelerated:
                 raise
             # ONNX Runtime lists CUDA whenever onnxruntime-gpu is installed, then
             # fails to create the session if the GPU or driver can't be used.
             print(f"{accelerated[0]} unavailable ({str(exc)[:200]}); using the CPU.", file=sys.stderr)
-            self.model = onnx_asr.load_model(repo, path, providers=["CPUExecutionProvider"])
-            self.device = "CPUExecutionProvider"
+            self.model = onnx_asr.load_model(repo, path, quantization=quantization,
+                                             providers=["CPUExecutionProvider"])
+            self.device = "CPUExecutionProvider" + (" (int8)" if quantization else "")
         self.language = opts["language"] or None
         self.multilingual = "canary" in repo
 

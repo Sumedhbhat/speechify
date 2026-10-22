@@ -1,7 +1,7 @@
 [project]
 name = "speechify"
 version = "0.1.0"
-description = "Hold-to-talk local dictation for Windows that learns from your corrections"
+description = "Hold-to-talk local dictation for Windows, Linux and macOS that learns from your corrections"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 # Kept small on purpose so the app starts fast. Each speech model's libraries
@@ -28,6 +28,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/speechify"]
+
+[tool.uv]
+# uv's own Python builds, everywhere: the system Python on Debian, Ubuntu and
+# Homebrew has no tkinter, which the app's windows need.
+python-preference = "only-managed"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

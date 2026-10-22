@@ -2,7 +2,9 @@ name: Models
 
 # Installs every speech model in its own environment on Windows and checks it
 # transcribes the self-test clip accurately. Runners have no GPU, so this
-# proves each recipe and its dependencies work, not GPU speed.
+# proves each recipe and its dependencies work, not GPU speed. Windows installs
+# the CUDA packages (as on an RTX PC); Linux and macOS, where one model per
+# backend is checked, install the CPU ones, as on a machine without NVIDIA.
 
 on:
   push:
@@ -23,12 +25,13 @@ concurrency:
 
 jobs:
   engine:
-    name: ${{ matrix.model }}
-    runs-on: windows-2025
+    name: ${{ matrix.model }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
+        os: [windows-2025]
         model:
           - whisper-large-v3-turbo
           - whisper-large-v3
@@ -44,13 +47,30 @@ jobs:
           - kyutai-stt-2.6b
           - kyutai-stt-1b
           - moonshine-base
+        include:
+          - { os: ubuntu-24.04, model: whisper-large-v3-turbo }
+          - { os: ubuntu-24.04, model: parakeet-tdt-0.6b-v3 }
+          - { os: ubuntu-24.04, model: moonshine-base }
+          - { os: ubuntu-24.04, model: qwen3-asr-0.6b }
+          - { os: macos-15, model: whisper-large-v3-turbo }
+          - { os: macos-15, model: parakeet-tdt-0.6b-v3 }
+          - { os: macos-15, model: moonshine-base }
+          - { os: macos-15, model: qwen3-asr-0.6b }
     env:
-      SPEECHIFY_ENGINES: D:\speechify\engines
-      UV_PYTHON_INSTALL_DIR: D:\speechify\python
-      HF_HOME: D:\speechify\hf
       HF_TOKEN: ${{ secrets.HF_TOKEN }}  # only needed for the gated Cohere model
 
     steps:
+      # D: on Windows has the most room; elsewhere the home folder does.
+      - name: Cache locations
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then root='D:\speechify'; sep='\'; else root=$HOME/speechify; sep=/; fi
+          {
+            echo "SPEECHIFY_ENGINES=$root${sep}engines"
+            echo "UV_PYTHON_INSTALL_DIR=$root${sep}python"
+            echo "HF_HOME=$root${sep}hf"
+          } >> "$GITHUB_ENV"
+
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

@@ -8,7 +8,7 @@ import time
 import traceback
 from typing import Callable
 
-from . import __version__, config, output, postprocess
+from . import __version__, config, keys, output, postprocess
 from .audio import Recorder, is_silent
 from .config import Config, data_dir
 from .engines import host
@@ -42,8 +42,16 @@ class App:
         })
 
     def run(self) -> None:
-        self.ptt.start()
-        self.hotkeys.start()
+        problem = keys.permission_problem()
+        try:
+            self.ptt.start()
+            self.hotkeys.start()
+            output.prepare()
+        except OSError as exc:  # PermissionError, or no usable /dev/uinput
+            self._fail(problem or str(exc))
+        if problem:  # listening works but typing doesn't yet
+            print(problem)
+            self.ui.show("error", "Speechify can't paste yet: see System Settings", 8000)
         stats = self.learner.stats()
         print(
             f"Speechify {__version__}. Hold [{self.cfg.ptt_key}] to talk, "
@@ -56,7 +64,7 @@ class App:
             spec = resolve(self.cfg.model, data_dir())
         except KeyError as exc:
             print(f"{exc}; using the default model")
-            spec = resolve("whisper-large-v3-turbo", data_dir())
+            spec = resolve(config.platform_defaults()["model"], data_dir())
         self.switch_model(spec)
         try:
             self.ui.run()
@@ -67,6 +75,16 @@ class App:
             self.hotkeys.stop()
             self.engine.stop()
             self.recorder.close()
+
+    def _fail(self, message: str) -> None:
+        """Explain a setup problem, in a dialog too: started from the app menu
+        or the Dock there's no console to read."""
+        from tkinter import messagebox
+
+        print(message)
+        messagebox.showerror("Speechify", message)
+        self.recorder.close()
+        raise SystemExit(1)
 
     # --- models ---------------------------------------------------------------
 

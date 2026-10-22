@@ -91,6 +91,7 @@ jobs:
           path: |
             dist/speechify-*.zip
             scripts/install.ps1
+            scripts/install.sh
           if-no-files-found: error
           retention-days: 7
 
@@ -102,7 +103,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, ubuntu-24.04]
+        os: [windows-2025, ubuntu-24.04, macos-15]
     env:
       VERSION: ${{ needs.version.outputs.version }}
     defaults:
@@ -128,6 +129,21 @@ jobs:
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile("$PWD/bundle/scripts/install.ps1", [ref]$null, [ref]$errors) | Out-Null
           if ($errors) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+
+      # The real installer, from the bundle instead of a GitHub release:
+      # system packages, uv sync without a compiler, launchers, PATH command.
+      - name: Install with install.sh
+        if: runner.os != 'Windows'
+        run: |
+          bash bundle/scripts/install.sh --from "bundle/dist/speechify-$VERSION.zip" --yes
+          test "$("$HOME/.local/bin/speechify" --version)" = "speechify $VERSION"
+          if [ "$RUNNER_OS" = macOS ]; then
+            plutil -lint "$HOME/Applications/Speechify.app/Contents/Info.plist"
+            test -x "$HOME/Applications/Speechify.app/Contents/MacOS/Speechify"
+          else
+            sudo apt-get install -y -qq desktop-file-utils
+            desktop-file-validate "$HOME/.local/share/applications/speechify.desktop"
+          fi
 
       # Installs the bundle the way scripts/install.ps1 does and checks the
       # version is visible everywhere a user would look.
@@ -189,9 +205,64 @@ jobs:
           path: selftest-report
           retention-days: 14
 
+  # No GPU on these runners, so this is the setup a Mac or a Linux PC without
+  # an NVIDIA card gets: the CPU packages and the default model for it.
+  selftest-engine:
+    name: Self-test the default model (${{ matrix.os }})
+    needs: version
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+
+    steps:
+      # Outside the workspace so actions/cache can keep model environments,
+      # the Python they point at, and the downloaded weights between runs.
+      - name: Cache locations
+        run: |
+          {
+            echo "SPEECHIFY_ENGINES=$HOME/speechify-cache/engines"
+            echo "UV_PYTHON_INSTALL_DIR=$HOME/speechify-cache/python"
+            echo "HF_HOME=$HOME/speechify-cache/hf"
+          } >> "$GITHUB_ENV"
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.23"
+
+      - name: Restore model cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/speechify-cache
+          key: selftest-engine-${{ runner.os }}-${{ hashFiles('src/speechify/engines/catalog.py') }}
+
+      - name: Install
+        run: uv sync --frozen --no-dev
+
+      - name: Run the self-test
+        run: uv run --frozen --no-dev speechify selftest --engine-only --out selftest-report
+
+      - name: Summary
+        if: always()
+        run: cat selftest-report/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: selftest-engine-${{ runner.os }}
+          path: selftest-report
+          retention-days: 14
+
   publish:
     name: Publish ${{ needs.version.outputs.channel }} release
-    needs: [version, verify, selftest]
+    needs: [version, verify, selftest, selftest-engine]
     if: github.event_name == 'push' && needs.version.outputs.channel != 'none'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -213,9 +284,9 @@ jobs:
       - name: Collect assets and checksums
         run: |
           mkdir dist
-          cp bundle/dist/speechify-*.zip bundle/scripts/install.ps1 dist/
+          cp bundle/dist/speechify-*.zip bundle/scripts/install.ps1 bundle/scripts/install.sh dist/
           cd dist
-          sha256sum speechify-*.zip install.ps1 > SHA256SUMS
+          sha256sum speechify-*.zip install.ps1 install.sh > SHA256SUMS
           cat SHA256SUMS
 
       - name: Create release
@@ -227,9 +298,11 @@ jobs:
           fi
           prerelease=""
           channel_arg=""
+          sh_channel=""
           if [ "$CHANNEL" = nightly ]; then
             prerelease="--prerelease"
             channel_arg='$env:SPEECHIFY_CHANNEL = "nightly"; '
+            sh_channel="SPEECHIFY_CHANNEL=nightly "
           fi
           notes="Install or update on Windows (PowerShell):
 
@@ -237,6 +310,12 @@ jobs:
           ${channel_arg}irm https://github.com/$GH_REPO/releases/download/$tag/install.ps1 | iex
           \`\`\`
 
-          Your recordings, corrections and settings in %APPDATA%\\speechify are kept across updates. See docs/releases.md for channels."
+          On Linux or macOS:
+
+          \`\`\`bash
+          curl -fsSL https://github.com/$GH_REPO/releases/download/$tag/install.sh | ${sh_channel}bash
+          \`\`\`
+
+          Your recordings, corrections and settings are kept across updates. See docs/releases.md for channels."
           gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "Speechify $VERSION" \
             --notes "$notes" --generate-notes $prerelease

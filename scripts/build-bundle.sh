@@ -15,8 +15,8 @@ trap 'rm -rf "$stage"' EXIT
 
 mkdir -p "$stage/$name/scripts"
 cp -R "$root/src" "$stage/$name/src"
-cp "$root/pyproject.toml" "$root/uv.lock" "$root/README.md" "$root/start.bat" "$stage/$name/"
-cp "$root/scripts/finetune.py" "$root/scripts/install.ps1" "$stage/$name/scripts/"
+cp "$root/pyproject.toml" "$root/uv.lock" "$root/README.md" "$root/start.bat" "$root/start.sh" "$stage/$name/"
+cp "$root/scripts/finetune.py" "$root/scripts/install.ps1" "$root/scripts/install.sh" "$stage/$name/scripts/"
 cp -R "$root/docs" "$stage/$name/docs"
 find "$stage" -name __pycache__ -type d -prune -exec rm -rf {} +
 
