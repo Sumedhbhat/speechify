@@ -285,3 +285,12 @@ def test_talk_key_must_exist_on_this_backend(monkeypatch, platform, key, ok):
                 keys.check_key_name(key)
     finally:
         keys.backend.cache_clear()
+
+
+def test_installed_app_uses_its_own_uv(monkeypatch, tmp_path):
+    exe = "uv.exe" if sys.platform == "win32" else "uv"
+    (tmp_path / exe).write_text("")
+    monkeypatch.delenv("UV", raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+    assert host.find_uv() == str(tmp_path / exe)

@@ -37,6 +37,8 @@ def main() -> None:
     sub.add_parser("devices", help="list microphones")
     sub.add_parser("where", help="print the config and data directory")
     args = parser.parse_args()
+    if args.cmd in (None, "run"):
+        _log_to_file_without_terminal()
 
     if args.cmd == "devices":
         import sounddevice as sd
@@ -84,6 +86,30 @@ def main() -> None:
     from .app import App
 
     App(cfg).run()
+
+
+def _log_to_file_without_terminal() -> None:
+    """Started from the app menu, Finder or the Dock, the installed app has no
+    console, so its output goes to a log file instead. (On Windows it keeps
+    its console window.)"""
+    if not getattr(sys, "frozen", False) or sys.platform == "win32":
+        return
+    if sys.stdout is not None and sys.stdout.isatty():
+        return
+    import os
+    from pathlib import Path
+
+    if sys.platform == "darwin":
+        log = Path.home() / "Library" / "Logs" / "Speechify.log"
+    else:
+        state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
+        log = state / "speechify" / "speechify.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    stream = open(log, "a", buffering=1, encoding="utf-8", errors="replace")
+    # At the descriptor level too, so the model worker's output lands there.
+    os.dup2(stream.fileno(), 1)
+    os.dup2(stream.fileno(), 2)
+    sys.stdout = sys.stderr = stream
 
 
 def models_command(cfg: Config, action: str, model: str | None) -> None:
