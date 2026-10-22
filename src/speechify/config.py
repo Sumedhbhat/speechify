@@ -41,6 +41,10 @@ compute_type = "{compute_type}"{compute_pad}# CUDA models: "float16"; CPU: "int8
 language = "en"            # "" for auto-detect (slower, less reliable)
 beam_size = 5              # Whisper only: 1 is ~2x faster, 5 is a bit more accurate
 
+# CPU Parakeet only: encoder/decoder threads share one pool where supported.
+# 4 bounds CPU use; 0 restores ONNX Runtime's automatic thread pools.
+onnx_threads = 4
+
 # Input device name or index; "" uses the system default microphone.
 input_device = ""
 
@@ -222,6 +226,7 @@ class Config:
     compute_type: str = "float16"
     language: str = "en"
     beam_size: int = 5
+    onnx_threads: int = 4
     input_device: str = ""
     keep_mic_open: bool = False
     min_hold_ms: int = 250
@@ -268,6 +273,7 @@ class Config:
             "compute_type": self.compute_type,
             "language": self.language,
             "beam_size": self.beam_size,
+            "onnx_threads": self.onnx_threads,
         }
 
 

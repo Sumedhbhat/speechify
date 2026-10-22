@@ -181,6 +181,11 @@ How it stays fast:
   starts instantly.
 - **No network on startup.** Once a model is downloaded it's loaded in offline
   mode, which skips Hugging Face's version checks.
+- **CPU Parakeet shares its ONNX thread pool** between model sessions where
+  the runtime supports it. `onnx_threads = 4` bounds CPU use; set it to `0`
+  in `config.toml` to restore ONNX Runtime's automatic per-session pools, or
+  try a different count for your CPU. This does not change the model weights
+  or decoding settings. GPU models keep their existing thread settings.
 - Packages for these environments are only installed if they were released at
   least 14 days ago, the same rule as the repo's Dependabot setup.
   transcribe.cpp is pinned to an exact version with its file hashes, and each

@@ -83,6 +83,36 @@ def whisper_prompt(prompt: str | None, language: str | None) -> str | None:
     return f"{WHISPER_STYLE} {prompt}" if prompt else WHISPER_STYLE
 
 
+def _onnx_cpu_options(ort, threads: int):
+    """Share a bounded CPU pool between a model's sequential ONNX sessions.
+
+    Each model lives in its own worker process, so its encoder and decoder
+    can share a pool without changing another model's runtime. Zero keeps
+    ONNX Runtime's original per-session automatic threading as an escape hatch.
+    """
+    options = ort.SessionOptions()
+    if threads == 0:
+        return options
+    try:
+        available = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        available = os.cpu_count() or 1
+    threads = min(threads, max(1, available))
+    if hasattr(ort, "set_global_thread_pool_sizes") and hasattr(options, "use_per_session_threads"):
+        try:
+            ort.set_global_thread_pool_sizes(intra_op_num_threads=threads, inter_op_num_threads=1)
+        except RuntimeError:
+            # An embedding process may already have initialized ORT's global
+            # environment. Bounded per-session pools still work there.
+            pass
+        else:
+            options.use_per_session_threads = False
+            return options
+    options.intra_op_num_threads = threads
+    options.inter_op_num_threads = 1
+    return options
+
+
 class Engine:
     """opts: device ("cuda"/"cpu"), compute_type, language ("" = auto), beam_size."""
 
@@ -161,6 +191,18 @@ class OnnxEngine(Engine):
         accelerated = []
         if device == "cuda" and "CUDAExecutionProvider" in ort.get_available_providers():
             accelerated = ["CUDAExecutionProvider"]
+        # Parakeet uses separate encoder/decoder sessions, called sequentially.
+        # Their automatic thread pools compete on desktop CPUs. Leave other
+        # models and accelerated providers alone until they are benchmarked.
+        threads = opts.get("onnx_threads", 4)
+        if isinstance(threads, bool) or not isinstance(threads, int) or threads < 0:
+            raise ValueError("onnx_threads must be a non-negative integer")
+
+        def cpu_options():
+            if repo.startswith("nemo-parakeet-"):
+                return {"sess_options": _onnx_cpu_options(ort, threads)}
+            return {}
+
         # A plain folder of real files: Hugging Face's cache stores weights as
         # links into a shared blob folder, and ONNX Runtime refuses external
         # weight files that resolve outside the model's own directory.
@@ -185,7 +227,8 @@ class OnnxEngine(Engine):
                       "to download the other kind.", file=sys.stderr)
         try:
             self.model = onnx_asr.load_model(repo, path, quantization=quantization,
-                                             providers=accelerated + ["CPUExecutionProvider"])
+                                             providers=accelerated + ["CPUExecutionProvider"],
+                                             **({} if accelerated else cpu_options()))
             self.device = (accelerated or ["CPUExecutionProvider"])[0]
             if quantization:
                 self.device += " (int8)"
@@ -196,7 +239,7 @@ class OnnxEngine(Engine):
             # fails to create the session if the GPU or driver can't be used.
             print(f"{accelerated[0]} unavailable ({str(exc)[:200]}); using the CPU.", file=sys.stderr)
             self.model = onnx_asr.load_model(repo, path, quantization=quantization,
-                                             providers=["CPUExecutionProvider"])
+                                             providers=["CPUExecutionProvider"], **cpu_options())
             self.device = "CPUExecutionProvider" + (" (int8)" if quantization else "")
         self.language = opts["language"] or None
         self.multilingual = "canary" in repo
