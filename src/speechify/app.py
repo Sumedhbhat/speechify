@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import sys
 import threading
 import time
 import traceback
@@ -48,10 +49,24 @@ class App:
             self.hotkeys.start()
             output.prepare()
         except OSError as exc:  # PermissionError, or no usable /dev/uinput
+            if isinstance(exc, PermissionError) and keys.backend() == "evdev":
+                from . import linuxsetup
+
+                linuxsetup.offer_wayland_access(str(exc))  # restarts Speechify if it worked
             self._fail(problem or str(exc))
         if problem:  # listening works but typing doesn't yet
             print(problem)
             self.ui.show("error", "Speechify can't paste yet: see System Settings", 8000)
+        if sys.platform.startswith("linux"):
+            from . import linuxsetup
+
+            linuxsetup.register_appimage()
+            missing = linuxsetup.clipboard_problem()
+            if missing:
+                from tkinter import messagebox
+
+                print(missing)
+                messagebox.showwarning("Speechify", missing)
         stats = self.learner.stats()
         print(
             f"Speechify {__version__}. Hold [{self.cfg.ptt_key}] to talk, "

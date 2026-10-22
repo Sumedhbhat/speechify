@@ -99,9 +99,12 @@ def status(spec: ModelSpec) -> str:
 
 
 def find_uv() -> str:
-    candidates = [os.environ.get("UV"), shutil.which("uv")]
-    home = Path.home()
     exe = "uv.exe" if sys.platform == "win32" else "uv"
+    candidates = [os.environ.get("UV")]
+    if getattr(sys, "frozen", False):  # the installed app ships its own uv
+        candidates.append(str(Path(sys._MEIPASS) / exe))
+    candidates.append(shutil.which("uv"))
+    home = Path.home()
     candidates += [str(home / ".local" / "bin" / exe), str(home / ".cargo" / "bin" / exe)]
     for c in candidates:
         if c and Path(c).exists():

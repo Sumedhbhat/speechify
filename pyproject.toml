@@ -14,6 +14,9 @@ dependencies = [
 ]
 
 [dependency-groups]
+build = [
+    "pyinstaller>=6",
+]
 dev = [
     "pytest>=8",
     "pillow>=13.0.0",  # screenshots in `speechify selftest`
