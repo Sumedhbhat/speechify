@@ -227,10 +227,12 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 60
     env:
-      # Outside the workspace so actions/cache can keep model environments,
-      # the Python they point at, and the downloaded weights between runs.
+      # Outside the workspace so actions/cache can keep model environments and
+      # the downloaded weights between runs. Python stays out of the cache: a
+      # restored copy lost its Tcl files, which the app's windows need, and
+      # `uv sync` installs it again in seconds.
       SPEECHIFY_ENGINES: C:\speechify\engines
-      UV_PYTHON_INSTALL_DIR: C:\speechify\python
+      UV_PYTHON_INSTALL_DIR: C:\uv-python
       HF_HOME: C:\speechify\hf
 
     steps:
@@ -246,7 +248,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\speechify
-          key: selftest-${{ runner.os }}-${{ hashFiles('src/speechify/engines/catalog.py') }}
+          key: selftest-v2-${{ runner.os }}-${{ hashFiles('src/speechify/engines/catalog.py') }}
 
       - name: Install
         run: uv sync --frozen
