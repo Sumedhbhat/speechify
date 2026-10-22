@@ -4,7 +4,7 @@ Wayland doesn't let one app see another app's keys, or type into it, so
 pynput's X11 backend only works for X11 windows there. Reading /dev/input
 and typing through a /dev/uinput virtual keyboard works under every
 compositor (and X11), because it sits below them. It needs the user in the
-`input` group, which scripts/install.sh sets up.
+`input` group, which linuxsetup.py offers to set up.
 
 Standard library only: python-evdev would need a C compiler to install.
 """
@@ -32,11 +32,11 @@ PERMISSION_HELP = (
     "Speechify can't read the keyboard. On Wayland it reads keys through /dev/input, "
     "which needs your user in the 'input' group:\n"
     "    sudo usermod -aG input $USER\n"
-    "then log out and back in. scripts/install.sh can do this for you."
+    "then log out and back in."
 )
 UINPUT_HELP = (
-    "Speechify can't type into other apps: /dev/uinput isn't writable. Run scripts/install.sh "
-    "again, or allow the input group to use it:\n"
+    "Speechify can't type into other apps: /dev/uinput isn't writable. Allow the input "
+    "group to use it:\n"
     '    echo \'KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"\' '
     "| sudo tee /etc/udev/rules.d/60-speechify-uinput.rules\n"
     "    sudo modprobe uinput && sudo udevadm control --reload && sudo udevadm trigger /dev/uinput"

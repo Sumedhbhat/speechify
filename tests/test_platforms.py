@@ -294,3 +294,33 @@ def test_installed_app_uses_its_own_uv(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
     assert host.find_uv() == str(tmp_path / exe)
+
+
+@pytest.mark.parametrize("wayland,tools,missing", [
+    (True, {"wl-copy", "wl-paste"}, None),
+    (True, {"xclip"}, "wl-clipboard"),
+    (False, {"xsel"}, None),
+    (False, set(), "xclip"),
+])
+def test_clipboard_problem(monkeypatch, wayland, tools, missing):
+    from speechify import linuxsetup
+
+    monkeypatch.setattr(linuxsetup, "_is_wayland", lambda: wayland)
+    monkeypatch.setattr(linuxsetup.shutil, "which", lambda name: f"/usr/bin/{name}" if name in tools else None)
+    problem = linuxsetup.clipboard_problem()
+    assert problem is None if missing is None else missing in problem
+
+
+def test_appimage_menu_entry(monkeypatch, tmp_path):
+    from speechify import linuxsetup
+
+    appdir = tmp_path / "mnt"
+    appdir.mkdir()
+    (appdir / "speechify.png").write_bytes(b"png")
+    monkeypatch.setenv("APPIMAGE", str(tmp_path / 'my apps/Speechify "1".AppImage'))
+    monkeypatch.setenv("APPDIR", str(appdir))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "share"))
+    linuxsetup.register_appimage()
+    entry = (tmp_path / "share" / "applications" / "speechify.desktop").read_text()
+    assert f'Exec="{tmp_path}/my apps/Speechify \\\\"1\\\\".AppImage"\n' in entry
+    assert (tmp_path / "share" / "icons" / "hicolor" / "256x256" / "apps" / "speechify.png").read_bytes() == b"png"
