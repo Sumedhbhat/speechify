@@ -4,63 +4,65 @@ Hold a key, talk, let go, and the text is pasted wherever your cursor is. It
 runs locally on Windows, Linux and macOS, on your NVIDIA GPU if you have one,
 lets you pick from 14 speech models, and gets better as you correct it.
 
-## Install on Windows
+## Install
 
-In PowerShell:
+Download the installer for your system from the
+[latest release](https://github.com/Sumedhbhat/speechify/releases/latest):
 
-```powershell
-irm https://github.com/Sumedhbhat/speechify/releases/latest/download/install.ps1 | iex
-```
+| System | File | |
+| --- | --- | --- |
+| Windows 10 and 11 | `Speechify-<version>-windows-x64-setup.exe` | Run it. No admin rights needed. |
+| macOS 11+, Apple silicon | `Speechify-<version>-macos-arm64.dmg` | Open it and drag Speechify to Applications. Intel Macs can run it from source (below). |
+| Ubuntu, Debian, Mint, Pop!_OS | `speechify_<version>_amd64.deb` | Open it with Software Install, or `sudo apt install ./speechify_*.deb`. |
+| Any other Linux | `Speechify-<version>-x86_64.AppImage` | Make it executable (`chmod +x`) and run it. |
 
-This installs the latest stable release and adds Speechify to the Start menu.
-Run the same command again to update. For nightly builds, run
-`$env:SPEECHIFY_CHANNEL = "nightly"` first. To start Speechify with Windows,
-download `install.ps1` and run it with `-Autostart`. Channels and versions are
-explained in [docs/releases.md](docs/releases.md).
+To update, download and install the new version over the old one. Your
+recordings, corrections, settings and models are kept. Nightly builds are on the
+[releases page](https://github.com/Sumedhbhat/speechify/releases) as
+prereleases; see [docs/releases.md](docs/releases.md).
 
-The first start downloads the selected model and writes a config file to
-`%APPDATA%\speechify\config.toml`. You don't need to install CUDA yourself;
-each model's CUDA libraries come from pip. A recent NVIDIA driver is all you need.
+Each installer carries everything Speechify needs to start, including its own
+Python. The first start downloads the selected speech model and creates a
+config file (`speechify where` prints its folder). You don't need to install
+CUDA; each model's CUDA libraries come from pip. A recent NVIDIA driver is all
+you need.
 
-From a source checkout instead: `uv sync`, then `start.bat`.
+**On Windows**, Speechify is in the Start menu, and the installer can also start
+it when you sign in. It runs in a minimized console window that shows each
+dictation; close that window to quit. New terminals get a `speechify` command.
 
-## Install on Linux or macOS
+**On a Mac**, the app isn't signed with an Apple Developer ID yet, so the
+first time you open it macOS says it can't check it for malware. Open System
+Settings > Privacy & Security, scroll down and click **Open Anyway**. To start
+it when you log in, add it under System Settings > General > Login Items.
 
-In a terminal:
-
-```bash
-curl -fsSL https://github.com/Sumedhbhat/speechify/releases/latest/download/install.sh | bash
-```
-
-Run the same command again to update. For nightly builds, use
-`| SPEECHIFY_CHANNEL=nightly bash`. To start Speechify when you log in, use
-`| bash -s -- --autostart`.
-
-It installs Speechify to `~/.local/share/speechify-app`, adds a `speechify`
-command to `~/.local/bin`, and adds Speechify to your app menu (Linux) or
-`~/Applications` (macOS). On Linux it also offers to install what's missing:
-PortAudio for the microphone, and `wl-clipboard` or `xclip` for pasting. It
-asks before using `sudo`, and you don't need a C compiler.
-
-**On a Mac**, push to talk is **Right Option**, since Mac keyboards have no Right
+Push to talk on a Mac is **Right Option**, since Mac keyboards have no Right
 Ctrl. The first start asks for three permissions: Microphone, Input Monitoring
 (to see the talk key) and Accessibility (to paste). Allow all three, then start
-Speechify again.
+Speechify again. Until the app is signed, macOS treats each update as a new app
+and asks for these again.
 
-**On Linux with Wayland** (the default on Ubuntu and Fedora), apps can't see
+**On Linux**, Speechify is in your app menu (the AppImage adds itself the first
+time you run it). The `.deb` also adds a `speechify` command. Pasting needs
+`wl-clipboard` (Wayland) or `xclip` (X11); the `.deb` installs it, and the
+AppImage tells you if it's missing.
+
+With Wayland (the default on Ubuntu and Fedora), apps can't see
 each other's keys, so Speechify reads the keyboard from `/dev/input` and pastes
-through a virtual keyboard. That needs your user in the `input` group; the
-installer offers to set it up, and you log out and back in once afterwards.
-On X11 nothing extra is needed.
+through a virtual keyboard. That needs your user in the `input` group. The
+first start offers to set it up, asking for your password, and then carries
+on; from the next login it's permanent. On X11 nothing extra is needed.
 
-**Without an NVIDIA GPU** (every Mac, and many Linux PCs), the first start
+Without an NVIDIA GPU (every Mac, and many Linux PCs), the first start
 picks NVIDIA Parakeet TDT 0.6B v3 instead of Whisper, because it's the fastest
 accurate model on a CPU. It runs with int8 weights there: a 0.7 GB download
 instead of 2.5 GB, and nearly twice as fast at the same accuracy. Models are
 installed with their CPU-only packages, which are a fraction of the size.
 Linux PCs with the NVIDIA driver get the same GPU setup as Windows.
 
-From a source checkout: `uv sync --no-install-package evdev`, then `./start.sh`.
+To run from a source checkout instead, install
+[uv](https://docs.astral.sh/uv/), then `uv sync` and `start.bat` on Windows, or
+`uv sync --no-install-package evdev` and `./start.sh` on Linux and macOS.
 
 ## Using it
 
@@ -246,9 +248,9 @@ and ship a fix.
 - **Mac: the talk key does nothing**: open System Settings > Privacy &
   Security, and allow Speechify under Input Monitoring and Accessibility. If
   you start it from a terminal, allow the terminal app instead.
-- **Linux: "can't read the keyboard"**: on Wayland, run
-  `sudo usermod -aG input $USER` and log out and back in, or run the installer
-  again.
+- **Linux: "can't read the keyboard"**: on Wayland, start Speechify again and
+  accept the setup it offers, or run `sudo usermod -aG input $USER` and log
+  out and back in.
 - **Linux: Ctrl+V doesn't paste in a terminal**: terminals paste with
   Ctrl+Shift+V, so dictate into other apps, or paste the text yourself.
 - **Linux on Wayland with a non-QWERTY layout**: pasting presses Ctrl and the

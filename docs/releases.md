@@ -13,40 +13,37 @@ All releases are on the [releases page](https://github.com/Sumedhbhat/speechify/
 
 ## Installing a channel
 
-On Windows, in PowerShell:
+Stable releases are under
+[latest release](https://github.com/Sumedhbhat/speechify/releases/latest);
+nightlies and older versions are further down the
+[releases page](https://github.com/Sumedhbhat/speechify/releases). Every
+release has the same four installers (see below); download the one for your
+system and run it.
 
-```powershell
-# Stable (the latest release that isn't a prerelease)
-irm https://github.com/Sumedhbhat/speechify/releases/latest/download/install.ps1 | iex
+Updating is the same: install the new version over the old one, or switch
+channels by installing a version from the other channel. The installer
+replaces the app (in `%LOCALAPPDATA%\Programs\Speechify` on Windows,
+`/Applications/Speechify.app` on macOS, `/opt/speechify` for the `.deb`) and
+never touches the data folder (`%APPDATA%\speechify`,
+`~/Library/Application Support/speechify` or `~/.local/share/speechify`),
+where your recordings, corrections, settings, model environments and
+fine-tuned models live. Going back to an older version works the same way,
+except with the `.deb`, where apt needs `--allow-downgrades`.
 
-# Nightly
-$env:SPEECHIFY_CHANNEL = "nightly"; irm https://raw.githubusercontent.com/Sumedhbhat/speechify/main/scripts/install.ps1 | iex
+### Coming from install.sh or install.ps1
 
-# A specific version
-$env:SPEECHIFY_CHANNEL = "v0.1.2"; irm https://raw.githubusercontent.com/Sumedhbhat/speechify/main/scripts/install.ps1 | iex
-```
+Releases before the installers used scripts that put Speechify in
+`~/.local/share/speechify-app` (Linux, macOS) or
+`%LOCALAPPDATA%\Programs\Speechify` (Windows). Your data is in the same place
+either way, so nothing needs moving.
 
-On Linux or macOS:
-
-```bash
-# Stable
-curl -fsSL https://github.com/Sumedhbhat/speechify/releases/latest/download/install.sh | bash
-
-# Nightly
-curl -fsSL https://raw.githubusercontent.com/Sumedhbhat/speechify/main/scripts/install.sh | SPEECHIFY_CHANNEL=nightly bash
-
-# A specific version
-curl -fsSL https://raw.githubusercontent.com/Sumedhbhat/speechify/main/scripts/install.sh | SPEECHIFY_CHANNEL=v0.1.2 bash
-```
-
-Updating is the same command. The installer replaces the app in
-`%LOCALAPPDATA%\Programs\Speechify` (Windows) or
-`~/.local/share/speechify-app` (Linux, macOS) and never touches the data
-folder (`%APPDATA%\speechify`, `~/.local/share/speechify` or
-`~/Library/Application Support/speechify`), where your recordings,
-corrections, settings, model environments and fine-tuned models live. On
-macOS it leaves `~/Applications/Speechify.app` byte-for-byte the same, so the
-permissions you gave it stay.
+- Windows: run the new installer. It cleans out the old files in the same folder.
+- Linux: the new app menu entry replaces the old one. Delete
+  `~/.local/share/speechify-app` and `~/.local/bin/speechify`.
+- macOS: delete `~/Applications/Speechify.app`, `~/.local/share/speechify-app`
+  and `~/.local/bin/speechify`, plus
+  `~/Library/LaunchAgents/io.github.sumedhbhat.speechify.plist` if you used
+  `--autostart`.
 
 ## Which version am I running?
 
@@ -62,13 +59,25 @@ overwritten; a fix is always a new patch version.
 
 | Asset | What it is |
 | --- | --- |
-| `speechify-<version>.zip` | Source, `uv.lock` and a `VERSION` file. The installer runs `uv sync --frozen` on it, so you get exactly the locked dependencies. |
-| `install.ps1` | The Windows installer |
-| `install.sh` | The Linux and macOS installer |
-| `SHA256SUMS` | Checksums; the installer verifies the zip against it |
+| `Speechify-<version>-windows-x64-setup.exe` | Windows installer (Inno Setup). Per-user, no admin needed. |
+| `Speechify-<version>-macos-arm64.dmg` | macOS app for Apple silicon |
+| `speechify_<version>_amd64.deb` | Ubuntu, Debian and derivatives. Nightlies are `<version>~nightly.<run>` so apt sorts them before the stable release. |
+| `Speechify-<version>-x86_64.AppImage` | Any Linux with glibc 2.35 or newer |
+| `SHA256SUMS` | Checksums of all four |
 
-Speech models aren't in the zip. Each one is downloaded the first time you pick
-it (see "Models" in the README).
+Each one holds the app frozen by PyInstaller with its own Python, plus
+[uv](https://docs.astral.sh/uv/), which builds each speech model's
+environment the first time you pick it. The Linux builds also carry PortAudio,
+built without JACK so it only needs ALSA. `packaging/build.sh <version>` builds
+the installer for the platform it runs on.
+
+Speech models aren't in the installers. Each one is downloaded the first time
+you pick it (see "Models" in the README).
+
+The macOS app is ad-hoc signed, not with an Apple Developer ID, so Gatekeeper
+asks before the first start, and macOS forgets its Microphone, Input
+Monitoring and Accessibility permissions on every update. Signing and
+notarizing with a Developer ID would fix both.
 
 ## Cut a stable release
 
@@ -109,14 +118,13 @@ every push to `main` and `release/**`, and on pull requests:
 
 1. **Version**: reads `pyproject.toml` and picks the channel from the branch.
    On `main` it appends `-nightly.<run>`; it never edits the manifest.
-2. **Bundle**: runs the tests and builds the zip with the full version stamped
-   into it.
-3. **Verify**: unpacks the zip on Windows, Linux and macOS, runs
-   `uv sync --frozen`, and checks `speechify --version` prints the stamped
-   version. On Linux and macOS it also runs `install.sh` on the zip and checks
-   the command, app menu entry or app bundle it creates.
+2. **Package**: builds the installers with `packaging/build.sh`, on Windows,
+   macOS and Ubuntu 22.04 (the oldest glibc the Linux builds support).
+3. **Check package**: installs each one on a fresh runner (Ubuntu 24.04 for
+   Linux), checks `speechify --version` prints the stamped version, and runs
+   `speechify selftest --engine-only` through the installed app.
 4. **Publish** (pushes only, never PRs): creates the GitHub release with the
-   zip, installer and `SHA256SUMS`. Nightlies are marked as prereleases. If a
+   installers and `SHA256SUMS`. Nightlies are marked as prereleases. If a
    stable tag already exists, it skips publishing and says why in the log.
 
 ## Dependencies
@@ -153,8 +161,8 @@ gh secret set HF_TOKEN --repo Sumedhbhat/speechify
 
 Nothing is published unless `speechify selftest` passes on a Windows runner
 (the `selftest` job in `release.yml`), and `speechify selftest --engine-only`
-passes on Linux and macOS (`selftest-engine`): the CPU packages and default
-model a machine without an NVIDIA GPU gets. It runs the real app with a recorded
+passes in the installed app on Windows, Linux and macOS (`check-package`):
+the CPU packages and default model a machine without an NVIDIA GPU gets. It runs the real app with a recorded
 clip standing in for the microphone and checks, with a screenshot per step:
 
 - holding Right Ctrl transcribes the clip and pastes it into Notepad
