@@ -6,11 +6,16 @@ Protocol over stdin/stdout (stdout is reserved for it; anything a library
 prints goes to stderr instead):
 
     worker -> app   {"event": "ready", "device": ..., "load_s": ...}   (or {"event": "error", ...})
-    app -> worker   {"samples": N, "prompt": "..."}\\n  then N float32 samples (raw bytes)
-    worker -> app   {"text": "...", "ms": 123}   (or {"error": "..."})
+    app -> worker   {"samples": N, "prompt": "...", "score": false}\\n  then N float32 samples (raw bytes)
+    worker -> app   {"text": "...", "ms": 123, "logprob": null}   (or {"error": "..."})
+
+"score": true asks for the mean token log-probability as well (teacher
+labels); it's null when the backend doesn't expose one.
 
 With "download_only" in the config, the worker exits right after loading,
-which is how models get downloaded at install time.
+which is how models get downloaded at install time. With "fetch_only" in the
+opts as well, backends that can download without loading do that instead,
+so fetching a big teacher model doesn't take over the GPU.
 """
 
 from __future__ import annotations
@@ -56,6 +61,10 @@ def main() -> None:
             engine_cls = getattr(importlib.import_module(module), name)
         else:
             engine_cls = BACKEND_ENGINES[backend]
+        if cfg.get("download_only") and cfg["opts"].get("fetch_only") and \
+                getattr(engine_cls, "fetch", None) and engine_cls.fetch(cfg["repo"], cfg["opts"]):
+            send({"event": "ready", "device": "none", "load_s": round(time.perf_counter() - t0, 1)})
+            return
         engine = engine_cls(cfg["repo"], cfg["opts"])
         # The first call pays for kernel setup and caches; do it before the
         # user's first dictation rather than during it.
@@ -82,8 +91,13 @@ def main() -> None:
         try:
             t0 = time.perf_counter()
             audio = np.frombuffer(raw, dtype=np.float32)
-            text = engine.transcribe(audio, request.get("prompt")) or ""
-            send({"text": text.strip(), "ms": round((time.perf_counter() - t0) * 1000)})
+            logprob = None
+            if request.get("score") and hasattr(engine, "transcribe_scored"):
+                text, logprob = engine.transcribe_scored(audio, request.get("prompt"))
+            else:
+                text = engine.transcribe(audio, request.get("prompt"))
+            send({"text": (text or "").strip(), "ms": round((time.perf_counter() - t0) * 1000),
+                  "logprob": logprob})
         except Exception as exc:
             traceback.print_exc()
             send({"error": f"{type(exc).__name__}: {exc}"})

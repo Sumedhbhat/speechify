@@ -44,6 +44,27 @@ def resample(audio: np.ndarray, rate: int) -> np.ndarray:
     return np.interp(np.linspace(0, audio.size - 1, n), np.arange(audio.size), audio).astype(np.float32)
 
 
+def mean_logprob(torch, steps, tokens) -> float | None:
+    """Mean log-probability of the generated `tokens`, given the logits
+    `steps` that generate() returned for them (one tensor per step)."""
+    values = []
+    for logits, token in zip(steps, tokens):
+        lp = torch.log_softmax(logits[0].float(), dim=-1)[int(token)].item()
+        if lp == lp and lp != float("-inf"):  # skip NaN / -inf
+            values.append(lp)
+    return sum(values) / len(values) if values else None
+
+
+def keywords(prompt: str | None) -> str:
+    """Learner.prompt() ("Glossary: a, b.") as a plain list: "a, b"."""
+    if not prompt:
+        return ""
+    text = prompt.strip()
+    if text.startswith("Glossary:"):
+        text = text[len("Glossary:"):].strip().rstrip(".")
+    return text
+
+
 class Engine:
     """opts: device ("cuda"/"cpu"), compute_type, language ("" = auto), beam_size."""
 
@@ -54,6 +75,24 @@ class Engine:
 
     def transcribe(self, audio: np.ndarray, prompt: str | None) -> str:
         raise NotImplementedError
+
+    def transcribe_scored(self, audio: np.ndarray, prompt: str | None) -> tuple[str, float | None]:
+        """Text plus the mean token log-probability, for teacher labels.
+        None when the backend doesn't expose token probabilities."""
+        return self.transcribe(audio, prompt), None
+
+    @classmethod
+    def fetch(cls, repo: str, opts: dict) -> bool:
+        """Download the weights without loading the model. False means this
+        backend can't, and the worker loads the model once instead."""
+        return False
+
+
+def hf_fetch(repo: str) -> bool:
+    from huggingface_hub import snapshot_download
+
+    snapshot_download(repo)
+    return True
 
 
 class WhisperEngine(Engine):
@@ -153,6 +192,8 @@ class OnnxEngine(Engine):
 class TransformersEngine(Engine):
     """Granite Speech, Cohere Transcribe, Voxtral, Kyutai STT and Moonshine."""
 
+    fetch = classmethod(lambda cls, repo, opts: hf_fetch(repo))
+
     def __init__(self, repo, opts):
         import torch
 
@@ -188,10 +229,15 @@ class TransformersEngine(Engine):
         self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
             self.repo, device_map=self.device, dtype=self.dtype
         )
-        chat = [{"role": "user", "content": "<|audio|>transcribe the speech with proper punctuation and capitalization."}]
-        self.prompt = self.processor.tokenizer.apply_chat_template(
-            chat, tokenize=False, add_generation_prompt=True
-        )
+        self.prompt = self._granite_prompt(None)
+
+    def _granite_prompt(self, vocabulary: str | None) -> str:
+        instruction = "<|audio|>transcribe the speech with proper punctuation and capitalization."
+        words = keywords(vocabulary)
+        if words:  # Granite 4.1's keyword biasing format, from its model card
+            instruction += f" Keywords: {words}"
+        chat = [{"role": "user", "content": instruction}]
+        return self.processor.tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
 
     def _load_cohere(self):
         from transformers import AutoProcessor, CohereAsrForConditionalGeneration
@@ -232,12 +278,26 @@ class TransformersEngine(Engine):
         with self.torch.inference_mode():
             return getattr(self, f"_run_{self.kind}")(audio)
 
+    def transcribe_scored(self, audio, prompt):
+        if self.kind != "granite":
+            return self.transcribe(audio, prompt), None
+        with self.torch.inference_mode():
+            return self._granite(audio, self._granite_prompt(prompt), scored=True)
+
     def _run_granite(self, audio):
+        return self._granite(audio, self.prompt, scored=False)[0]
+
+    def _granite(self, audio, prompt, scored):
         wav = self.torch.from_numpy(audio).unsqueeze(0)
-        inputs = self.processor(self.prompt, wav, device=self.device, return_tensors="pt").to(self.device)
-        out = self.model.generate(**inputs, max_new_tokens=200, do_sample=False, num_beams=1)
-        new_tokens = out[:, inputs["input_ids"].shape[-1]:]
-        return self.processor.tokenizer.batch_decode(new_tokens, skip_special_tokens=True)[0]
+        inputs = self.processor(prompt, wav, device=self.device, return_tensors="pt").to(self.device)
+        # ~3 tokens a word and up to ~5 words a second; 200 covers a normal dictation.
+        max_new = max(200, int(audio.size / SAMPLE_RATE * 15) + 20)
+        out = self.model.generate(**inputs, max_new_tokens=max_new, do_sample=False, num_beams=1,
+                                  return_dict_in_generate=True, output_logits=scored)
+        new_tokens = out.sequences[:, inputs["input_ids"].shape[-1]:]
+        text = self.processor.tokenizer.batch_decode(new_tokens, skip_special_tokens=True)[0]
+        score = mean_logprob(self.torch, out.logits, new_tokens[0]) if scored and out.logits else None
+        return text, score
 
     def _run_cohere(self, audio):
         inputs = self.processor(audio, sampling_rate=SAMPLE_RATE, return_tensors="pt",
@@ -279,6 +339,8 @@ class TransformersEngine(Engine):
 
 
 class QwenEngine(Engine):
+    fetch = classmethod(lambda cls, repo, opts: hf_fetch(repo))
+
     def __init__(self, repo, opts):
         import torch
         from qwen_asr import Qwen3ASRModel
@@ -296,8 +358,40 @@ class QwenEngine(Engine):
         self.language = LANGUAGE_NAMES.get(language) if language else None
 
     def transcribe(self, audio, prompt):
-        results = self.model.transcribe(audio=(audio, SAMPLE_RATE), language=self.language)
+        results = self.model.transcribe(audio=(audio, SAMPLE_RATE), context=prompt or "",
+                                        language=self.language)
         return results[0].text
+
+    def transcribe_scored(self, audio, prompt):
+        """Same as transcribe(), plus token probabilities.
+
+        qwen-asr's transcribe() doesn't return them, so this repeats its
+        single-chunk path with logits switched on. It leans on qwen-asr
+        internals; if they change, it falls back to plain text, and the
+        label gets the heuristic confidence instead.
+        """
+        import torch
+
+        try:
+            from qwen_asr.inference.utils import parse_asr_output
+
+            m = self.model
+            text_prompt = m._build_text_prompt(context=prompt or "", force_language=self.language)
+            inputs = m.processor(text=[text_prompt], audio=[audio], return_tensors="pt", padding=True)
+            inputs = inputs.to(m.model.device).to(m.model.dtype)
+            max_new = max(256, int(audio.size / SAMPLE_RATE * 15) + 20)
+            with torch.inference_mode():
+                out = m.model.generate(**inputs, max_new_tokens=max_new, output_logits=True)
+            new_tokens = out.sequences[:, inputs["input_ids"].shape[1]:]
+            raw = m.processor.batch_decode(new_tokens, skip_special_tokens=True,
+                                           clean_up_tokenization_spaces=False)[0]
+            _, text = parse_asr_output(raw, user_language=self.language)
+            score = mean_logprob(torch, out.logits, new_tokens[0]) if out.logits else None
+            return text, score
+        except Exception as exc:
+            print(f"qwen-asr scoring unavailable ({type(exc).__name__}: {exc}); using plain transcribe",
+                  file=sys.stderr)
+            return self.transcribe(audio, prompt), None
 
 
 BACKEND_ENGINES: dict[str, type[Engine]] = {

@@ -200,11 +200,18 @@ def uninstall_backend(backend: str) -> None:
 
 
 class EngineHost:
-    """Owns the single running worker. Thread-safe."""
+    """Owns one running worker. Thread-safe.
+
+    The app has one for the dictation model, and autolearn.py may start a
+    second for the teacher.
+    """
 
     def __init__(self):
         self._proc: subprocess.Popen | None = None
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()  # one request at a time
+        self._load_lock = threading.Lock()
+        self._loading: subprocess.Popen | None = None
+        self._generation = 0  # bumped by kill(), so a cancelled load can't finish
         self.ready = threading.Event()
         self.spec: ModelSpec | None = None
         self.info: dict = {}
@@ -214,24 +221,42 @@ class EngineHost:
         self.stop()
         if not is_ready(spec):
             raise EngineError(f"{spec.name} isn't installed yet")
+        generation = self._generation
         try:
-            proc, msg = self._spawn(spec, opts, offline=not spec.id.startswith("ft:"))
+            proc, msg = self._spawn(spec, opts, offline=not spec.id.startswith("ft:"), generation=generation)
         except EngineError:
+            if self._generation != generation:
+                raise
             # Maybe the cache is incomplete; let it reach the network once.
-            proc, msg = self._spawn(spec, opts, offline=False)
+            proc, msg = self._spawn(spec, opts, offline=False, generation=generation)
         with self._lock:
+            if self._generation != generation:  # killed after it loaded
+                proc.kill()
+                raise EngineError(f"loading {spec.name} was cancelled")
             self._proc, self.spec, self.info = proc, spec, msg
         self.ready.set()
         return msg
 
-    def _spawn(self, spec: ModelSpec, opts: dict, offline: bool):
-        proc = subprocess.Popen(
-            [str(env_python(spec.backend)), "-m", "speechify.engines.worker"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None,
-            env=_worker_env(spec, opts, download_only=False, offline=offline),
-            creationflags=_NO_WINDOW,
-        )
-        line = proc.stdout.readline()
+    def _spawn(self, spec: ModelSpec, opts: dict, offline: bool, generation: int):
+        with self._load_lock:
+            if self._generation != generation:
+                raise EngineError(f"loading {spec.name} was cancelled")
+            proc = subprocess.Popen(
+                [str(env_python(spec.backend)), "-m", "speechify.engines.worker"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None,
+                env=_worker_env(spec, opts, download_only=False, offline=offline),
+                creationflags=_NO_WINDOW,
+            )
+            self._loading = proc
+        try:
+            line = proc.stdout.readline()
+        finally:
+            with self._load_lock:
+                if self._loading is proc:
+                    self._loading = None
+        if self._generation != generation:
+            proc.kill()
+            raise EngineError(f"loading {spec.name} was cancelled")
         msg = json.loads(line) if line else {"event": "error", "error": "worker exited while loading"}
         if msg.get("event") != "ready":
             proc.kill()
@@ -239,6 +264,16 @@ class EngineHost:
         return proc, msg
 
     def transcribe(self, audio: np.ndarray, prompt: str | None, timeout: float = 900) -> tuple[str, int]:
+        msg = self._request(audio, prompt, False, timeout)
+        return msg["text"], msg["ms"]
+
+    def transcribe_scored(self, audio: np.ndarray, prompt: str | None,
+                          timeout: float = 900) -> tuple[str, float | None]:
+        """Text and mean token log-probability (None if the backend has none)."""
+        msg = self._request(audio, prompt, True, timeout)
+        return msg["text"], msg.get("logprob")
+
+    def _request(self, audio: np.ndarray, prompt: str | None, score: bool, timeout: float) -> dict:
         if not self.ready.wait(timeout):
             raise EngineError("no model is loaded")
         with self._lock:
@@ -246,22 +281,46 @@ class EngineHost:
             if proc is None:
                 raise EngineError("no model is loaded")
             pcm = np.ascontiguousarray(audio, dtype=np.float32)
-            header = json.dumps({"samples": int(pcm.size), "prompt": prompt}).encode() + b"\n"
+            request = {"samples": int(pcm.size), "prompt": prompt}
+            if score:
+                request["score"] = True
+            header = json.dumps(request).encode() + b"\n"
             try:
                 proc.stdin.write(header)
                 proc.stdin.write(pcm.tobytes())
                 proc.stdin.flush()
                 line = proc.stdout.readline()
-            except OSError:
+            except (OSError, ValueError):
                 line = b""
             if not line:
-                self._proc = None
+                if self._proc is proc:
+                    self._proc = None
                 self.ready.clear()
                 raise EngineError("the model process crashed (details in the console)")
         msg = json.loads(line)
         if "error" in msg:
             raise EngineError(msg["error"])
-        return msg["text"], msg["ms"]
+        return msg
+
+    def kill(self) -> None:
+        """Stop the model at once, even mid-load or mid-transcription.
+
+        Doesn't wait for anything: it's called the moment you press the
+        dictation key. A transcription in progress fails with EngineError.
+        """
+        self.ready.clear()
+        with self._load_lock:
+            self._generation += 1
+            procs = [self._loading, self._proc]
+            self._loading = None
+        # Not under self._lock: a transcription may be holding it.
+        self._proc, self.spec = None, None
+        for proc in procs:
+            if proc is not None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
 
     def stop(self) -> None:
         self.ready.clear()

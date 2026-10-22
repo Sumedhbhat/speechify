@@ -9,7 +9,8 @@ import time
 import traceback
 from typing import Callable
 
-from . import __version__, config, keys, output, postprocess
+from . import __version__, config, keys, output, postprocess, versions
+from .autolearn import AutoLearner
 from .audio import Recorder, is_silent
 from .config import Config, data_dir
 from .engines import host
@@ -28,6 +29,11 @@ class App:
         self.recorder = recorder or Recorder(cfg.input_device or None)
         self.engine = host.EngineHost()
         self._switch_lock = threading.Lock()
+        # Teacher labels and retraining while you're away (autolearn.py).
+        self.autolearn = AutoLearner(
+            cfg, self.learner, self.engine, student_lock=self._switch_lock, log=self._log,
+            on_switch=lambda spec: self.ui.post(self.ui.refresh_models),
+        )
         self.last: Dictation | None = None
         # One worker, so dictations are pasted in the order they were spoken.
         self._jobs: queue.Queue[Callable[[], None]] = queue.Queue()
@@ -81,11 +87,13 @@ class App:
             print(f"{exc}; using the default model")
             spec = resolve(config.platform_defaults()["model"], data_dir())
         self.switch_model(spec)
+        self.autolearn.start()
         try:
             self.ui.run()
         except KeyboardInterrupt:
             pass
         finally:
+            self.autolearn.stop()
             self.ptt.stop()
             self.hotkeys.stop()
             self.engine.stop()
@@ -128,6 +136,8 @@ class App:
             return
 
         def run() -> None:
+            # A teacher or training run may be using the GPU the new model needs.
+            self.autolearn.preempt("model switch", restore=False)
             with self._switch_lock:
                 try:
                     if not host.is_ready(spec):
@@ -158,7 +168,20 @@ class App:
             active=lambda: self.engine.spec.id if self.engine.spec else None,
             use=self.switch_model,
             install=self.install_model,
+            rollback=self.rollback,
         )
+
+    def rollback(self) -> None:
+        """Go back one retrained version, and switch to it now."""
+        try:
+            target, description = versions.rollback(self.learner, self.cfg)
+            spec = resolve(target, data_dir())
+        except (versions.RollbackError, KeyError) as exc:
+            self._log(str(exc))
+            self.ui.post(lambda: self.ui.show("info", "Nothing to roll back", 2000))
+            return
+        self._log(f"Rolling back to {description}.")
+        self.switch_model(spec)
 
     def _work(self) -> None:
         while True:
@@ -173,16 +196,26 @@ class App:
 
     def _on_start(self) -> None:
         self.recorder.start()
+        # Stops a background job that would slow dictation down, and gets
+        # the dictation model loading again if it had been unloaded for it.
+        self.autolearn.key_down()
         self.ui.post(lambda: self.ui.show("listening", "Listening…"))
 
     def _on_cancel(self) -> None:
         self.recorder.stop()
+        self.autolearn.dictation_done()
         self.ui.post(self.ui.hide)
 
     def _on_stop(self) -> None:
         audio = self.recorder.stop()
         self.ui.post(lambda: self.ui.show("working", "Transcribing…"))
-        self._jobs.put(lambda: self._dictate(audio))
+        self._jobs.put(lambda: self._dictate_and_finish(audio))
+
+    def _dictate_and_finish(self, audio) -> None:
+        try:
+            self._dictate(audio)
+        finally:
+            self.autolearn.dictation_done()
 
     def _dictate(self, audio) -> None:
         if is_silent(audio):

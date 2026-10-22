@@ -203,6 +203,8 @@ jobs:
         run: |
           test "$("$APP" --version | tr -d '\r')" = "speechify $VERSION"
           "$APP" models
+          # Creates learning.db with the teacher columns, and reads it back.
+          "$APP" learn status
           # Loads PortAudio (bundled on Linux).
           "$APP" devices
 

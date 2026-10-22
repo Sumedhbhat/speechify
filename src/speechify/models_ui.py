@@ -13,7 +13,8 @@ from .ui import MONO
 
 
 class ModelsWindow:
-    """use(spec) installs if needed and switches; install(spec) only downloads.
+    """use(spec) installs if needed and switches; install(spec) only downloads;
+    rollback() goes back one retrained version.
 
     Both run in the background and report through log(); the window just
     calls them and refreshes.
@@ -25,9 +26,11 @@ class ModelsWindow:
         active: Callable[[], str | None],
         use: Callable[[ModelSpec], None],
         install: Callable[[ModelSpec], None],
+        rollback: Callable[[], None],
         on_close: Callable[[], None],
     ):
         self.active, self.use, self.install, self.on_close = active, use, install, on_close
+        self.rollback = rollback
         self.specs: dict[str, ModelSpec] = {}
         win = self.win = tk.Toplevel(master)
         win.title("Speechify: models")
@@ -63,6 +66,7 @@ class ModelsWindow:
         actions.pack(fill="x")
         ttk.Button(actions, text="Use this model", command=self._use).pack(side="right")
         ttk.Button(actions, text="Download only", command=self._install).pack(side="right", padx=6)
+        ttk.Button(actions, text="Roll back retrained model", command=self.rollback).pack(side="right")
         ttk.Label(
             actions, foreground="#888", wraplength=560, justify="left",
             text="Not included: " + "; ".join(f"{k} ({v})" for k, v in UNSUPPORTED.items()),
