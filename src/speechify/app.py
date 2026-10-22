@@ -47,7 +47,7 @@ class App:
             self.ptt.start()
             self.hotkeys.start()
             output.prepare()
-        except PermissionError as exc:
+        except OSError as exc:  # PermissionError, or no usable /dev/uinput
             self._fail(problem or str(exc))
         if problem:  # listening works but typing doesn't yet
             print(problem)
@@ -64,7 +64,7 @@ class App:
             spec = resolve(self.cfg.model, data_dir())
         except KeyError as exc:
             print(f"{exc}; using the default model")
-            spec = resolve("whisper-large-v3-turbo", data_dir())
+            spec = resolve(config.platform_defaults()["model"], data_dir())
         self.switch_model(spec)
         try:
             self.ui.run()

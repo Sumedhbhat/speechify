@@ -21,14 +21,15 @@ def test_same_key():
     assert not combos.same_key("f", "f13", None)
 
 
-@pytest.mark.parametrize("table", [keymaps.EVDEV, keymaps.MAC], ids=["evdev", "mac"])
-def test_key_tables_cover_the_defaults(table):
+@pytest.mark.parametrize("table,allowed", [(keymaps.EVDEV, keymaps.EVDEV_NAMES),
+                                           (keymaps.MAC, keymaps.MAC_NAMES)], ids=["evdev", "mac"])
+def test_key_tables_cover_the_defaults(table, allowed):
     chars = {c for _, c in table.values() if c}
     names = {n for n, _ in table.values() if n}
     assert set("abcdefghijklmnopqrstuvwxyz0123456789") <= chars
     assert {"ctrl_l", "ctrl_r", "alt_l", "alt_r", "shift_l", "shift_r", "cmd_l", "cmd_r",
             "f1", "f12", "f13", "caps_lock", "enter", "esc"} <= names
-    assert names <= keymaps.NAMES
+    assert names - {"caps_lock"} <= allowed
 
 
 def test_output_key_codes():
@@ -264,3 +265,23 @@ def test_mac_keys_round_trip_or_explains_permission():
         assert got.wait(5), events
     finally:
         listener.stop()
+
+
+@pytest.mark.parametrize("platform,key,ok", [
+    ("darwin", "alt_r", True), ("darwin", "fn", True),
+    ("darwin", "caps_lock", False),  # macOS only reports toggles, so it can't be held
+    ("darwin", "scroll_lock", False),
+    ("linux", "scroll_lock", True), ("linux", "fn", False), ("linux", "F", True),
+])
+def test_talk_key_must_exist_on_this_backend(monkeypatch, platform, key, ok):
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setenv("SPEECHIFY_KEYBOARD", "evdev")
+    keys.backend.cache_clear()
+    try:
+        if ok:
+            assert keys.check_key_name(key) == (key.lower() if len(key) == 1 else key)
+        else:
+            with pytest.raises(ValueError):
+                keys.check_key_name(key)
+    finally:
+        keys.backend.cache_clear()

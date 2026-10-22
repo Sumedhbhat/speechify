@@ -172,6 +172,11 @@ def install(spec: ModelSpec, opts: dict, log: Log = print) -> None:
     if not backend_installed(spec.backend):
         uv = find_uv()
         log(f"Setting up the {backend.label} environment (one time)...")
+        if _marker(spec.backend).exists():
+            # Installed with other requirements (say, the CPU build before a
+            # GPU was added). Installing on top would leave both onnxruntime
+            # and onnxruntime-gpu in one environment, so start clean.
+            shutil.rmtree(env_dir(spec.backend), ignore_errors=True)
         _run([uv, "venv", "--python", PYTHON, "--allow-existing", str(env_dir(spec.backend))], log)
         cmd = [uv, "pip", "install", "--python", str(env_python(spec.backend)),
                "--exclude-newer", MIN_PACKAGE_AGE, *requirements(spec.backend)]

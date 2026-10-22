@@ -17,6 +17,22 @@ import Quartz
 from . import keymaps
 
 _CAPS_LOCK = 57
+_v_code = keymaps.MAC_V  # the key that types "v" in the user's layout; see prepare()
+
+
+def prepare() -> None:
+    """Find which key types "v", so Cmd+V pastes on Dvorak and other layouts.
+
+    macOS only allows keyboard layout lookups on the main thread, so the app
+    calls this once at startup. If the lookup fails, the QWERTY key is used.
+    """
+    global _v_code
+    try:
+        from pynput._util.darwin import get_unicode_to_keycode_map
+
+        _v_code = get_unicode_to_keycode_map().get("v", keymaps.MAC_V)
+    except Exception as exc:
+        print(f"Couldn't read the keyboard layout ({exc}); pasting with the QWERTY V key.")
 
 
 def permission_problem(prompt: bool = True) -> str | None:
@@ -117,8 +133,8 @@ def _post(code: int, down: bool, flags: int) -> None:
 def cmd_v() -> None:
     cmd = Quartz.kCGEventFlagMaskCommand
     _post(keymaps.MAC_CMD, True, cmd)
-    _post(keymaps.MAC_V, True, cmd)
-    _post(keymaps.MAC_V, False, cmd)
+    _post(_v_code, True, cmd)
+    _post(_v_code, False, cmd)
     _post(keymaps.MAC_CMD, False, 0)
 
 

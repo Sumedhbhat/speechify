@@ -14,7 +14,7 @@ DEFAULT_CONFIG = """\
 # Speechify config. Restart the app after editing.
 
 # Hold this key to talk, release to transcribe and paste.
-# Any key name: ctrl_r, alt_r (Right Option on a Mac), f13, caps_lock, ...
+# Any key name: ctrl_r, alt_r (Right Option on a Mac), f13, scroll_lock, ...
 ptt_key = "{ptt_key}"
 
 # Opens the correction window for the last dictation.

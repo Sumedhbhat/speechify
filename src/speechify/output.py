@@ -41,9 +41,13 @@ def _pynput():
 
 
 def prepare() -> None:
-    """Set up key output at startup, so the first paste isn't slower or the
-    first to find out it's not allowed."""
-    if keys.backend() == "evdev":
+    """Set up key output at startup, on the main thread, so the first paste
+    isn't slower or the first to find out it's not allowed."""
+    if sys.platform == "darwin":
+        from . import mackeys
+
+        mackeys.prepare()
+    elif keys.backend() == "evdev":
         from . import linuxkeys
 
         linuxkeys.keyboard()

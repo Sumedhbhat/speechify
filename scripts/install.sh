@@ -76,7 +76,11 @@ main() {
     local unpacked
     unpacked=$(find "$tmp/unpacked" -mindepth 1 -maxdepth 1 -type d -name 'speechify-*' | head -n 1)
     [ -n "$unpacked" ] || die "$(basename "$zip") doesn't contain a speechify-<version> folder."
-    rm -rf "$install_dir"
+    # The previous version stays aside until the new one works, so a failed
+    # update (say, offline) leaves Speechify as it was.
+    local old=$install_dir.previous
+    rm -rf "$old"
+    [ -d "$install_dir" ] && mv "$install_dir" "$old"
     mkdir -p "$(dirname "$install_dir")"
     mv "$unpacked" "$install_dir"
     chmod +x "$install_dir/start.sh"
@@ -86,10 +90,19 @@ main() {
     # compiled. Skipping it means no C compiler is needed.
     local skip=()
     [ "$os" = Linux ] && skip=(--no-install-package evdev)
+    # uv's own Python, because Debian, Ubuntu and Homebrew build theirs
+    # without tkinter, which the app's windows need.
     # ${a[@]+...}: macOS's bash 3.2 treats an empty array as unset under set -u.
-    (cd "$install_dir" && uv sync --frozen --no-dev ${skip[@]+"${skip[@]}"} </dev/null)
-    local installed
-    installed=$("$install_dir/start.sh" --version)
+    local installed=""
+    if (cd "$install_dir" && uv sync --frozen --no-dev --managed-python ${skip[@]+"${skip[@]}"} </dev/null) &&
+        "$install_dir/.venv/bin/python" -c "import tkinter" &&
+        installed=$("$install_dir/start.sh" --version); then
+        rm -rf "$old"
+    else
+        rm -rf "$install_dir"
+        [ -d "$old" ] && mv "$old" "$install_dir"
+        die "Installing failed; the previous version (if any) is still in place. See the output above."
+    fi
 
     write_launchers "$os" "$install_dir" "$bin_dir" "$autostart"
 

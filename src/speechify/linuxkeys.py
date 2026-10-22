@@ -91,6 +91,10 @@ class Listener:
         self.on_press, self.on_release, self.ignore = on_press, on_release, ignore
         self._selector = selectors.DefaultSelector()
         self._open: dict[str, int] = {}
+        # Devices that aren't keyboards (mice, the lid switch), by path and
+        # inode, so the rescan doesn't reopen them; a replugged device gets a
+        # new inode and is checked again.
+        self._rejected: set[tuple[str, int]] = set()
         self._wake_r, self._wake_w = os.pipe()
         self._selector.register(self._wake_r, selectors.EVENT_READ, None)
         self._stopped = False
@@ -118,6 +122,12 @@ class Listener:
             if str(path) in self._open:
                 continue
             try:
+                node = (str(path), path.stat().st_ino)
+            except OSError:
+                continue
+            if node in self._rejected:
+                continue
+            try:
                 fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
             except PermissionError:
                 denied = True
@@ -126,6 +136,7 @@ class Listener:
                 continue
             if not _has_keyboard_keys(fd) or _device_name(fd) == self.ignore:
                 os.close(fd)
+                self._rejected.add(node)
                 continue
             self._open[str(path)] = fd
             self._selector.register(fd, selectors.EVENT_READ, str(path))
@@ -175,13 +186,17 @@ class Keyboard:
             self._fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
         except OSError as exc:
             raise PermissionError(UINPUT_HELP) from exc
-        fcntl.ioctl(self._fd, _ioc(1, "U", 100, 4), EV_KEY)  # UI_SET_EVBIT
-        for code in range(1, 249):  # every ordinary key, so it's classed as a keyboard
-            fcntl.ioctl(self._fd, _ioc(1, "U", 101, 4), code)  # UI_SET_KEYBIT
-        # struct uinput_setup: input_id (bus, vendor, product, version), name[80], ff_effects_max
-        setup = struct.pack("HHHH80sI", 0x06, 0x5350, 0x0001, 1, name.encode()[:79], 0)
-        fcntl.ioctl(self._fd, _ioc(1, "U", 3, len(setup)), setup)  # UI_DEV_SETUP
-        fcntl.ioctl(self._fd, _ioc(0, "U", 1, 0))  # UI_DEV_CREATE
+        try:
+            fcntl.ioctl(self._fd, _ioc(1, "U", 100, 4), EV_KEY)  # UI_SET_EVBIT
+            for code in range(1, 249):  # every ordinary key, so it's classed as a keyboard
+                fcntl.ioctl(self._fd, _ioc(1, "U", 101, 4), code)  # UI_SET_KEYBIT
+            # struct uinput_setup: input_id (bus, vendor, product, version), name[80], ff_effects_max
+            setup = struct.pack("HHHH80sI", 0x06, 0x5350, 0x0001, 1, name.encode()[:79], 0)
+            fcntl.ioctl(self._fd, _ioc(1, "U", 3, len(setup)), setup)  # UI_DEV_SETUP (Linux 4.5+)
+            fcntl.ioctl(self._fd, _ioc(0, "U", 1, 0))  # UI_DEV_CREATE
+        except OSError as exc:
+            os.close(self._fd)
+            raise OSError(exc.errno, f"Couldn't create a virtual keyboard through /dev/uinput: {exc}") from exc
         # The compositor needs a moment to pick up a new device before it
         # delivers its keys; this runs once, at startup.
         time.sleep(0.3)
@@ -222,7 +237,11 @@ def shift_left(count: int) -> None:
     kb = keyboard()
     with kb._lock:
         kb._emit(keymaps.EV_LEFTSHIFT, 1)
-        for _ in range(count):
+        for i in range(count):
             kb._emit(keymaps.EV_LEFT, 1)
             kb._emit(keymaps.EV_LEFT, 0)
+            if i % 16 == 15:
+                # A long burst overflows the compositor's event buffer and
+                # drops presses, which would select too little text.
+                time.sleep(0.005)
         kb._emit(keymaps.EV_LEFTSHIFT, 0)

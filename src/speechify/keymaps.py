@@ -62,10 +62,12 @@ EVDEV = {**{k: (None, c) for k, c in _EVDEV_CHARS.items()},
 MAC = {**{k: (None, c) for k, c in _MAC_CHARS.items()},
        **{k: (n, None) for k, n in _MAC_NAMES.items()}}
 
-# Key names the native backends can report; used to check the config.
-NAMES = frozenset(_EVDEV_NAMES.values()) | frozenset(_MAC_NAMES.values()) | {
-    "ctrl", "alt", "shift", "cmd", "alt_gr",
-}
+# Key names each native backend can report, for checking the talk key.
+# Generic names match the left key (combos.same_key). Caps Lock can't be held
+# on macOS: it only reports each toggle.
+_GENERIC = frozenset({"ctrl", "alt", "shift", "cmd", "alt_gr"})
+EVDEV_NAMES = frozenset(_EVDEV_NAMES.values()) | _GENERIC
+MAC_NAMES = (frozenset(_MAC_NAMES.values()) - {"caps_lock"}) | _GENERIC
 
 # evdev codes the Linux virtual keyboard sends.
 EV_LEFTCTRL, EV_LEFTSHIFT, EV_V, EV_LEFT = 29, 42, 47, 105

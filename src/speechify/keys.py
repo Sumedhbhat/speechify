@@ -44,9 +44,9 @@ def check_key_name(name: str) -> str:
 
         if hasattr(keyboard.Key, name):
             return name
-    elif name in keymaps.NAMES:
+    elif name in (keymaps.MAC_NAMES if backend() == "quartz" else keymaps.EVDEV_NAMES):
         return name
-    raise ValueError(f"unknown key {name!r}; use a key name like 'ctrl_r', 'alt_r' or 'f13'")
+    raise ValueError(f"{name!r} can't be the talk key here; use a key name like 'ctrl_r', 'alt_r' or 'f13'")
 
 
 class _PynputListener:
