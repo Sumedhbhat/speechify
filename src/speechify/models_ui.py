@@ -9,6 +9,7 @@ from typing import Callable
 from .config import data_dir
 from .engines import host
 from .engines.catalog import BACKENDS, UNSUPPORTED, ModelSpec, all_models, stars
+from .ui import MONO
 
 
 class ModelsWindow:
@@ -64,10 +65,10 @@ class ModelsWindow:
         ttk.Button(actions, text="Download only", command=self._install).pack(side="right", padx=6)
         ttk.Label(
             actions, foreground="#888", wraplength=560, justify="left",
-            text="Not on Windows: " + "; ".join(f"{k} ({v})" for k, v in UNSUPPORTED.items()),
+            text="Not included: " + "; ".join(f"{k} ({v})" for k, v in UNSUPPORTED.items()),
         ).pack(side="left", fill="x", expand=True)
 
-        self.log = tk.Text(win, height=5, font=("Consolas", 9), state="disabled", background="#f6f6f6")
+        self.log = tk.Text(win, height=5, font=(MONO, 9), state="disabled", background="#f6f6f6")
         self.log.pack(fill="x", padx=10, pady=(0, 10))
         self.refresh()
         win.lift()

@@ -22,7 +22,7 @@ from typing import Callable
 
 import numpy as np
 
-from ..config import data_dir
+from ..config import data_dir, has_cuda
 from .catalog import BACKENDS, ModelSpec
 
 PYTHON = "3.12"
@@ -51,8 +51,14 @@ def env_python(backend: str) -> Path:
     return d / "Scripts" / "python.exe" if sys.platform == "win32" else d / "bin" / "python"
 
 
+def requirements(backend: str) -> tuple[str, ...]:
+    return BACKENDS[backend].requirements_for(has_cuda())
+
+
 def _requirements_hash(backend: str) -> str:
-    return hashlib.sha256("\n".join(BACKENDS[backend].requirements).encode()).hexdigest()[:16]
+    # Covers the CUDA/CPU choice too, so adding a GPU later reinstalls the
+    # environment with the GPU packages.
+    return hashlib.sha256("\n".join(requirements(backend)).encode()).hexdigest()[:16]
 
 
 def _marker(backend: str) -> Path:
@@ -100,7 +106,9 @@ def find_uv() -> str:
     for c in candidates:
         if c and Path(c).exists():
             return c
-    raise EngineError("uv not found. Install it with: winget install astral-sh.uv")
+    hint = ("winget install astral-sh.uv" if sys.platform == "win32"
+            else "curl -LsSf https://astral.sh/uv/install.sh | sh")
+    raise EngineError(f"uv not found. Install it with: {hint}")
 
 
 def _shim() -> Path:
@@ -148,6 +156,13 @@ def _worker_env(spec: ModelSpec, opts: dict, download_only: bool, offline: bool)
     if offline:
         # Skips Hugging Face's "is there a newer revision" requests: faster startup, works offline.
         env["HF_HUB_OFFLINE"] = "1"
+    if sys.platform.startswith("linux"):
+        # pip's CUDA and cuDNN libraries (site-packages/nvidia/*/lib) aren't on
+        # the loader path, and CTranslate2 won't find them by itself. On
+        # Windows, backends.add_nvidia_dll_dirs does the same job.
+        libs = [str(d) for d in sorted(env_dir(spec.backend).glob("lib/python3*/site-packages/nvidia/*/lib"))]
+        if libs:
+            env["LD_LIBRARY_PATH"] = os.pathsep.join(libs + [env.get("LD_LIBRARY_PATH", "")]).rstrip(os.pathsep)
     return env
 
 
@@ -159,7 +174,7 @@ def install(spec: ModelSpec, opts: dict, log: Log = print) -> None:
         log(f"Setting up the {backend.label} environment (one time)...")
         _run([uv, "venv", "--python", PYTHON, "--allow-existing", str(env_dir(spec.backend))], log)
         cmd = [uv, "pip", "install", "--python", str(env_python(spec.backend)),
-               "--exclude-newer", MIN_PACKAGE_AGE, *backend.requirements]
+               "--exclude-newer", MIN_PACKAGE_AGE, *requirements(spec.backend)]
         if backend.needs_torch:
             cmd += ["--torch-backend", "auto"]  # picks the CUDA build that matches your driver
         _run(cmd, log)

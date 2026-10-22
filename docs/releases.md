@@ -13,6 +13,8 @@ All releases are on the [releases page](https://github.com/Sumedhbhat/speechify/
 
 ## Installing a channel
 
+On Windows, in PowerShell:
+
 ```powershell
 # Stable (the latest release that isn't a prerelease)
 irm https://github.com/Sumedhbhat/speechify/releases/latest/download/install.ps1 | iex
@@ -24,10 +26,27 @@ $env:SPEECHIFY_CHANNEL = "nightly"; irm https://raw.githubusercontent.com/Sumedh
 $env:SPEECHIFY_CHANNEL = "v0.1.2"; irm https://raw.githubusercontent.com/Sumedhbhat/speechify/main/scripts/install.ps1 | iex
 ```
 
+On Linux or macOS:
+
+```bash
+# Stable
+curl -fsSL https://github.com/Sumedhbhat/speechify/releases/latest/download/install.sh | bash
+
+# Nightly
+curl -fsSL https://raw.githubusercontent.com/Sumedhbhat/speechify/main/scripts/install.sh | SPEECHIFY_CHANNEL=nightly bash
+
+# A specific version
+curl -fsSL https://raw.githubusercontent.com/Sumedhbhat/speechify/main/scripts/install.sh | SPEECHIFY_CHANNEL=v0.1.2 bash
+```
+
 Updating is the same command. The installer replaces the app in
-`%LOCALAPPDATA%\Programs\Speechify` and never touches
-`%APPDATA%\speechify`, where your recordings, corrections, settings, model
-environments and fine-tuned models live.
+`%LOCALAPPDATA%\Programs\Speechify` (Windows) or
+`~/.local/share/speechify-app` (Linux, macOS) and never touches the data
+folder (`%APPDATA%\speechify`, `~/.local/share/speechify` or
+`~/Library/Application Support/speechify`), where your recordings,
+corrections, settings, model environments and fine-tuned models live. On
+macOS it leaves `~/Applications/Speechify.app` byte-for-byte the same, so the
+permissions you gave it stay.
 
 ## Which version am I running?
 
@@ -44,7 +63,8 @@ overwritten; a fix is always a new patch version.
 | Asset | What it is |
 | --- | --- |
 | `speechify-<version>.zip` | Source, `uv.lock` and a `VERSION` file. The installer runs `uv sync --frozen` on it, so you get exactly the locked dependencies. |
-| `install.ps1` | The installer |
+| `install.ps1` | The Windows installer |
+| `install.sh` | The Linux and macOS installer |
 | `SHA256SUMS` | Checksums; the installer verifies the zip against it |
 
 Speech models aren't in the zip. Each one is downloaded the first time you pick
@@ -91,8 +111,10 @@ every push to `main` and `release/**`, and on pull requests:
    On `main` it appends `-nightly.<run>`; it never edits the manifest.
 2. **Bundle**: runs the tests and builds the zip with the full version stamped
    into it.
-3. **Verify**: unpacks the zip on Windows and Linux, runs `uv sync --frozen`,
-   and checks `speechify --version` prints the stamped version.
+3. **Verify**: unpacks the zip on Windows, Linux and macOS, runs
+   `uv sync --frozen`, and checks `speechify --version` prints the stamped
+   version. On Linux and macOS it also runs `install.sh` on the zip and checks
+   the command, app menu entry or app bundle it creates.
 4. **Publish** (pushes only, never PRs): creates the GitHub release with the
    zip, installer and `SHA256SUMS`. Nightlies are marked as prereleases. If a
    stable tag already exists, it skips publishing and says why in the log.
@@ -130,7 +152,9 @@ gh secret set HF_TOKEN --repo Sumedhbhat/speechify
 ## Verification
 
 Nothing is published unless `speechify selftest` passes on a Windows runner
-(the `selftest` job in `release.yml`). It runs the real app with a recorded
+(the `selftest` job in `release.yml`), and `speechify selftest --engine-only`
+passes on Linux and macOS (`selftest-engine`): the CPU packages and default
+model a machine without an NVIDIA GPU gets. It runs the real app with a recorded
 clip standing in for the microphone and checks, with a screenshot per step:
 
 - holding Right Ctrl transcribes the clip and pastes it into Notepad
@@ -142,6 +166,10 @@ clip standing in for the microphone and checks, with a screenshot per step:
 
 The report and screenshots are attached to each run as the `selftest-report`
 artifact. The [Models workflow](../.github/workflows/models.yml) separately
-installs and runs every model on Windows, weekly and whenever engine code
-changes. Runners have no GPU, so GPU speed is the one thing CI can't measure;
+installs and runs every model on Windows, and one per backend on Linux and
+macOS, weekly and whenever engine code changes. CI also types through a real
+uinput virtual keyboard and reads it back from `/dev/input`, the path
+Speechify takes on Wayland. What CI can't cover is a desktop session on
+Linux or macOS: grabbing the talk key and pasting into another app there have
+only been tested by hand. Runners have no GPU, so GPU speed is the one thing CI can't measure;
 run `speechify selftest` on your own machine for that.

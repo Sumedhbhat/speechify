@@ -14,6 +14,7 @@ from typing import Callable
 
 from .audio import SAMPLE_RATE, play, stop_playback
 from .learning import Learner, Sample
+from .ui import FONT
 
 
 def _duration(sample: Sample) -> str:
@@ -89,7 +90,7 @@ class HistoryWindow:
         self.exclude_btn.pack(side="right")
 
         ttk.Label(right, text="Text (edit and save to use it for training):").pack(anchor="w", pady=(10, 2))
-        self.text = tk.Text(right, height=8, wrap="word", font=("Segoe UI", 11), undo=True)
+        self.text = tk.Text(right, height=8, wrap="word", font=(FONT, 11), undo=True)
         self.text.pack(fill="both", expand=True)
         self.heard = ttk.Label(right, foreground="#666", wraplength=380, justify="left")
         self.heard.pack(anchor="w", pady=(6, 0))

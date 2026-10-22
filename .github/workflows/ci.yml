@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025]
+        os: [ubuntu-24.04, windows-2025, macos-15]
 
     steps:
       - name: Check out repository
@@ -37,10 +37,30 @@ jobs:
       - name: Compile
         run: uv run --frozen python -m compileall -q src scripts
 
+      # Lets tests/test_platforms.py type through a uinput virtual keyboard
+      # and read it back from /dev/input: the path Speechify uses on Wayland.
+      # The install.sh setup, minus logging out and in (sg applies the group).
+      - name: Give the input group /dev/uinput
+        if: runner.os == 'Linux'
+        run: |
+          sudo modprobe uinput || { sudo apt-get install -y "linux-modules-extra-$(uname -r)" && sudo modprobe uinput; }
+          sudo chgrp input /dev/uinput
+          sudo chmod 0660 /dev/uinput
+          sudo usermod -aG input "$USER"
+
       - name: Test
+        if: runner.os != 'Linux'
         run: uv run --frozen pytest -q
+
+      - name: Test (with the input group)
+        if: runner.os == 'Linux'
+        env:
+          SPEECHIFY_REQUIRE_UINPUT: "1"
+        run: sg input -c "uv run --frozen pytest -q"
 
       - name: CLI starts
         run: |
           uv run --frozen speechify --version
           uv run --frozen speechify models
+          # The whole app, including the platform's keyboard and window code.
+          uv run --frozen python -c "import speechify.app, speechify.history, speechify.models_ui"

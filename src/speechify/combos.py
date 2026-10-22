@@ -17,6 +17,17 @@ MODIFIERS = {
 _MOD_OF = {name: mod for mod, names in MODIFIERS.items() for name in names}
 
 
+# Names that mean the same physical key on different platforms.
+_SAME = {"ctrl": "ctrl_l", "alt": "alt_l", "shift": "shift_l", "cmd": "cmd_l", "alt_gr": "alt_r"}
+
+
+def same_key(want: str, name: str | None, char: str | None) -> bool:
+    """Is this key event the configured key? `want` is a key name or one character."""
+    if len(want) == 1:
+        return (char or "").lower() == want.lower()
+    return name is not None and _SAME.get(name, name) == _SAME.get(want, want)
+
+
 def modifier(key_name: str | None) -> str | None:
     """'ctrl_l' -> 'ctrl'; None for keys that aren't modifiers."""
     return _MOD_OF.get(key_name or "")
@@ -36,7 +47,8 @@ def key_matches(last: str, name: str | None, vk: int | None, char: str | None) -
     """Does a key event (pynput Key name, or KeyCode vk/char) match `last`?"""
     if len(last) == 1:
         # Letters and digits: Windows virtual-key codes are the uppercase ASCII
-        # code; X11 keysyms are the lowercase one.
+        # code; X11 keysyms are the lowercase one. The native Linux and macOS
+        # backends report no vk, only the character (see keymaps.py).
         if vk is not None and vk in (ord(last.upper()), ord(last.lower())):
             return True
         return (char or "").lower() == last

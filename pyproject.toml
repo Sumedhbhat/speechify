@@ -1,7 +1,7 @@
 [project]
 name = "speechify"
 version = "0.1.0"
-description = "Hold-to-talk local dictation for Windows that learns from your corrections"
+description = "Hold-to-talk local dictation for Windows, Linux and macOS that learns from your corrections"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 # Kept small on purpose so the app starts fast. Each speech model's libraries

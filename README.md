@@ -1,10 +1,10 @@
 # speechify
 
 Hold a key, talk, let go, and the text is pasted wherever your cursor is. It
-runs locally on your NVIDIA GPU, lets you pick from 14 speech models, and gets
-better as you correct it.
+runs locally on Windows, Linux and macOS, on your NVIDIA GPU if you have one,
+lets you pick from 14 speech models, and gets better as you correct it.
 
-## Install (Windows)
+## Install on Windows
 
 In PowerShell:
 
@@ -24,15 +24,53 @@ each model's CUDA libraries come from pip. A recent NVIDIA driver is all you nee
 
 From a source checkout instead: `uv sync`, then `start.bat`.
 
+## Install on Linux or macOS
+
+In a terminal:
+
+```bash
+curl -fsSL https://github.com/Sumedhbhat/speechify/releases/latest/download/install.sh | bash
+```
+
+Run the same command again to update. For nightly builds, use
+`| SPEECHIFY_CHANNEL=nightly bash`. To start Speechify when you log in, use
+`| bash -s -- --autostart`.
+
+It installs Speechify to `~/.local/share/speechify-app`, adds a `speechify`
+command to `~/.local/bin`, and adds Speechify to your app menu (Linux) or
+`~/Applications` (macOS). On Linux it also offers to install what's missing:
+PortAudio for the microphone, and `wl-clipboard` or `xclip` for pasting. It
+asks before using `sudo`, and you don't need a C compiler.
+
+**On a Mac**, push to talk is **Right Option**, since Mac keyboards have no Right
+Ctrl. The first start asks for three permissions: Microphone, Input Monitoring
+(to see the talk key) and Accessibility (to paste). Allow all three, then start
+Speechify again.
+
+**On Linux with Wayland** (the default on Ubuntu and Fedora), apps can't see
+each other's keys, so Speechify reads the keyboard from `/dev/input` and pastes
+through a virtual keyboard. That needs your user in the `input` group; the
+installer offers to set it up, and you log out and back in once afterwards.
+On X11 nothing extra is needed.
+
+**Without an NVIDIA GPU** (every Mac, and many Linux PCs), the first start
+picks NVIDIA Parakeet TDT 0.6B v3 instead of Whisper, because it's the fastest
+accurate model on a CPU. It runs with int8 weights there: a 0.7 GB download
+instead of 2.5 GB, and nearly twice as fast at the same accuracy. Models are
+installed with their CPU-only packages, which are a fraction of the size.
+Linux PCs with the NVIDIA driver get the same GPU setup as Windows.
+
+From a source checkout: `uv sync --no-install-package evdev`, then `./start.sh`.
+
 ## Using it
 
 | Do this | What happens |
 | --- | --- |
-| Hold **Right Ctrl** and talk, then let go | Transcribes and pastes into the focused app |
-| Tap Right Ctrl, or use it in a shortcut (Ctrl+C) | Ignored. Nothing is recorded |
-| **Ctrl+Alt+F** | Opens the last dictation for fixing |
-| **Ctrl+Alt+H** | Opens every saved recording |
-| **Ctrl+Alt+M** | Opens the model picker |
+| Hold **Right Ctrl** (Mac: **Right Option**) and talk, then let go | Transcribes and pastes into the focused app |
+| Tap the key, or use it in a shortcut (Ctrl+C) | Ignored. Nothing is recorded |
+| **Ctrl+Alt+F** (Mac: **Control+Option+F**) | Opens the last dictation for fixing |
+| **Ctrl+Alt+H** (Mac: **Control+Option+H**) | Opens every saved recording |
+| **Ctrl+Alt+M** (Mac: **Control+Option+M**) | Opens the model picker |
 
 In the fix window, type the correction or hold Right Ctrl and say it. Then:
 
@@ -74,7 +112,7 @@ How it stays fast:
   starting the new one, so two models never compete for GPU memory. A
   dictation made while a model is loading waits for it instead of failing.
 - **Each model family gets its own environment** under
-  `%APPDATA%\speechify\engines`, created the first time you use one of its
+  `engines` in the data folder, created the first time you use one of its
   models. They need conflicting libraries (Qwen3-ASR pins transformers 4.57,
   Cohere needs 5.4+), so this is the only way all of them can be installed
   side by side. The app itself needs just four small packages, which is why it
@@ -87,14 +125,20 @@ How it stays fast:
 All models benefit from the auto-fix rules. Whisper models also use your
 learned vocabulary as hints and can be fine-tuned on your recordings. Cohere
 Transcribe is gated: accept its terms on Hugging Face and run
-`%APPDATA%\speechify\engines\transformers\Scripts\hf.exe auth login` first.
+`%APPDATA%\speechify\engines\transformers\Scripts\hf.exe auth login` first
+(on Linux or macOS, `engines/transformers/bin/hf auth login` in the data folder).
 Canary-Qwen 2.5B and Voxtral Mini 4B Realtime aren't included because they need
-NVIDIA NeMo or vLLM, which don't run on Windows.
+NVIDIA NeMo or vLLM, which don't run on Windows or macOS.
+
+The ratings assume an NVIDIA GPU. On a CPU, everything is slower, Parakeet and
+Moonshine the least; the LLM-based models can take several seconds.
 
 ## Your recordings
 
-The audio and text of every dictation are saved to `%APPDATA%\speechify`: WAV
-files in `audio\`, with their text in `learning.db`. Open them with
+The audio and text of every dictation are saved in the data folder: WAV
+files in `audio`, with their text in `learning.db`. The data folder is
+`%APPDATA%\speechify` on Windows, `~/.local/share/speechify` on Linux and
+`~/Library/Application Support/speechify` on macOS; `speechify where` prints it. Open them with
 **Ctrl+Alt+H** or `speechify history` to:
 
 - **play** any recording back
@@ -193,5 +237,20 @@ and ship a fix.
   into elevated windows. Run speechify as admin as well.
 - **Wrong mic**: run `speechify devices` and set `input_device`.
 - **A model fails to load**: the console shows the error from its worker.
-  Delete its environment folder under `%APPDATA%\speechify\engines` to
+  Delete its environment folder under `engines` in the data folder to
   reinstall it from scratch.
+- **Where's the console on Linux or macOS?** Started from the app menu,
+  Speechify logs to `~/.local/state/speechify/speechify.log` (Linux) or
+  `~/Library/Logs/Speechify.log` (macOS). Run `speechify` in a terminal to
+  watch it live.
+- **Mac: the talk key does nothing**: open System Settings > Privacy &
+  Security, and allow Speechify under Input Monitoring and Accessibility. If
+  you start it from a terminal, allow the terminal app instead.
+- **Linux: "can't read the keyboard"**: on Wayland, run
+  `sudo usermod -aG input $USER` and log out and back in, or run the installer
+  again.
+- **Linux: Ctrl+V doesn't paste in a terminal**: terminals paste with
+  Ctrl+Shift+V, so dictate into other apps, or paste the text yourself.
+- **Linux on Wayland with a non-QWERTY layout**: pasting presses Ctrl and the
+  key in the QWERTY V position, which a layout like Dvorak reads as a
+  different letter. Use an X11 session or a QWERTY layout for now.

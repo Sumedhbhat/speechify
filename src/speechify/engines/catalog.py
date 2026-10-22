@@ -21,8 +21,15 @@ class Backend:
     id: str
     label: str
     requirements: tuple[str, ...]
+    # Added on machines with an NVIDIA GPU (see config.has_cuda), and the
+    # CPU-only builds everywhere else, macOS included.
+    cuda: tuple[str, ...] = ()
+    cpu: tuple[str, ...] = ()
     # PyTorch wheels come from the CUDA index matching the installed driver.
     needs_torch: bool = False
+
+    def requirements_for(self, cuda: bool) -> tuple[str, ...]:
+        return self.requirements + (self.cuda if cuda else self.cpu)
 
 
 @dataclass(frozen=True)
@@ -49,12 +56,15 @@ BACKENDS: dict[str, Backend] = {
         Backend(
             "whisper",
             "faster-whisper (CTranslate2)",
-            ("numpy", "faster-whisper>=1.1", "nvidia-cublas-cu12", "nvidia-cudnn-cu12>=9,<10"),
+            ("numpy", "faster-whisper>=1.1"),
+            cuda=("nvidia-cublas-cu12", "nvidia-cudnn-cu12>=9,<10"),
         ),
         Backend(
             "onnx",
             "onnx-asr (ONNX Runtime)",
-            ("numpy", "onnx-asr[gpu,hub]>=0.12", "onnxruntime-gpu[cuda,cudnn]"),
+            ("numpy", "onnx-asr[hub]>=0.12"),
+            cuda=("onnxruntime-gpu[cuda,cudnn]",),
+            cpu=("onnxruntime",),
         ),
         Backend(
             "transformers",
@@ -103,7 +113,7 @@ MODELS: dict[str, ModelSpec] = {
         ModelSpec(
             "parakeet-tdt-0.6b-v3", "NVIDIA Parakeet TDT 0.6B v3", "onnx", "nemo-parakeet-tdt-0.6b-v3",
             "25 European languages", accuracy=4, speed=5, vram_gb=2, download_gb=2.5,
-            notes="Best speed/accuracy balance. Near-instant, even on CPU.",
+            notes="Best speed/accuracy balance, and the fastest model on a CPU.",
         ),
         ModelSpec(
             "parakeet-tdt-0.6b-v2", "NVIDIA Parakeet TDT 0.6B v2", "onnx", "nemo-parakeet-tdt-0.6b-v2",
@@ -156,10 +166,10 @@ MODELS: dict[str, ModelSpec] = {
     ]
 }
 
-# Models that exist but can't run on Windows, shown so it's clear why.
+# Models that exist but aren't offered, shown so it's clear why.
 UNSUPPORTED = {
-    "Canary-Qwen 2.5B": "needs NVIDIA NeMo, which doesn't support Windows",
-    "Voxtral Mini 4B Realtime": "needs vLLM, which doesn't support Windows",
+    "Canary-Qwen 2.5B": "needs NVIDIA NeMo, which doesn't support Windows or macOS",
+    "Voxtral Mini 4B Realtime": "needs vLLM, which doesn't support Windows or macOS",
 }
 
 # Names used before models had catalog ids.

@@ -6,18 +6,8 @@ import threading
 import time
 from typing import Callable
 
-from pynput import keyboard
-
-from .combos import Matcher
-
-
-def parse_key(name: str) -> keyboard.Key | keyboard.KeyCode:
-    if len(name) == 1:
-        return keyboard.KeyCode.from_char(name.lower())
-    try:
-        return getattr(keyboard.Key, name)
-    except AttributeError:
-        raise ValueError(f"unknown key {name!r}; use a pynput Key name like 'ctrl_r'") from None
+from . import keys
+from .combos import Matcher, same_key
 
 
 class PushToTalk:
@@ -36,12 +26,12 @@ class PushToTalk:
         on_stop: Callable[[], None],
         on_cancel: Callable[[], None],
     ):
-        self.key = parse_key(key)
+        self.key = keys.check_key_name(key)
         self.min_hold = min_hold_ms / 1000
         self.on_start, self.on_stop, self.on_cancel = on_start, on_stop, on_cancel
         self._down_at: float | None = None
         self._interrupted = False
-        self._listener = keyboard.Listener(on_press=self._press, on_release=self._release)
+        self._listener = keys.listener(self._press, self._release)
 
     def start(self) -> None:
         self._listener.start()
@@ -49,13 +39,8 @@ class PushToTalk:
     def stop(self) -> None:
         self._listener.stop()
 
-    def _matches(self, key) -> bool:
-        if isinstance(self.key, keyboard.KeyCode) and isinstance(key, keyboard.KeyCode):
-            return (key.char or "").lower() == self.key.char
-        return key == self.key
-
-    def _press(self, key) -> None:
-        if self._matches(key):
+    def _press(self, name, vk, char) -> None:
+        if same_key(self.key, name, char):
             if self._down_at is None:  # ignore OS key auto-repeat
                 self._down_at = time.perf_counter()
                 self._interrupted = False
@@ -64,8 +49,8 @@ class PushToTalk:
             self._interrupted = True
             self.on_cancel()
 
-    def _release(self, key) -> None:
-        if not self._matches(key) or self._down_at is None:
+    def _release(self, name, vk, char) -> None:
+        if not same_key(self.key, name, char) or self._down_at is None:
             return
         held = time.perf_counter() - self._down_at
         self._down_at = None
@@ -75,12 +60,6 @@ class PushToTalk:
             self.on_cancel()
         else:
             self.on_stop()
-
-
-def _describe(key) -> tuple[str | None, int | None, str | None]:
-    if isinstance(key, keyboard.Key):
-        return key.name, getattr(key.value, "vk", None), None
-    return None, getattr(key, "vk", None), getattr(key, "char", None)
 
 
 class GlobalHotkeys:
@@ -94,7 +73,7 @@ class GlobalHotkeys:
     def __init__(self, bindings: dict[str, Callable[[], None]]):
         self.bindings = bindings
         self.matcher = Matcher(list(bindings))
-        self._listener = keyboard.Listener(on_press=self._press, on_release=self._release)
+        self._listener = keys.listener(self._press, self.matcher.release)
 
     def start(self) -> None:
         self._listener.start()
@@ -102,12 +81,9 @@ class GlobalHotkeys:
     def stop(self) -> None:
         self._listener.stop()
 
-    def _press(self, key) -> None:
-        for combo in self.matcher.press(*_describe(key)):
+    def _press(self, name, vk, char) -> None:
+        for combo in self.matcher.press(name, vk, char):
             threading.Thread(target=self.bindings[combo], daemon=True).start()
-
-    def _release(self, key) -> None:
-        self.matcher.release(*_describe(key))
 
 
 def global_hotkeys(bindings: dict[str, Callable[[], None]]) -> GlobalHotkeys:

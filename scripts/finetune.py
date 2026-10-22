@@ -11,14 +11,15 @@
 # [tool.uv]
 # exclude-newer = "14 days"
 #
-# # PyPI only has CPU builds of torch for Windows.
+# # PyPI only has CPU builds of torch for Windows. The CUDA index has no Mac
+# # builds, and Macs can't fine-tune anyway, so they get PyPI's and a clear error.
 # [[tool.uv.index]]
 # name = "pytorch-cu126"
 # url = "https://download.pytorch.org/whl/cu126"
 # explicit = true
 #
 # [tool.uv.sources]
-# torch = { index = "pytorch-cu126" }
+# torch = { index = "pytorch-cu126", marker = "sys_platform != 'darwin'" }
 # ///
 """LoRA fine-tune Whisper on your own dictations, then convert it for faster-whisper.
 
@@ -113,7 +114,8 @@ def main() -> None:
     print(f"{len(train_set)} training samples, {len(eval_set)} held out for evaluation")
 
     if not torch.cuda.is_available():
-        sys.exit("CUDA isn't available to PyTorch. Install a CUDA build: https://pytorch.org/get-started/locally/")
+        sys.exit("Fine-tuning needs an NVIDIA GPU, and CUDA isn't available to PyTorch here. "
+                 "Run it on a PC with one and copy the model folder over; any OS can use it.")
     device = "cuda"
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     language = cfg.language or "en"

@@ -108,9 +108,22 @@ class OnnxEngine(Engine):
         # links into a shared blob folder, and ONNX Runtime refuses external
         # weight files that resolve outside the model's own directory.
         path = Path(opts["models_dir"]) / repo if opts.get("models_dir") else None
+        # Without a GPU, the int8 weights are a quarter of the download and
+        # several times faster on the CPU. compute_type is "int8" by default
+        # on machines without CUDA (config.platform_defaults).
+        quantization = "int8" if not accelerated and opts.get("compute_type") == "int8" else None
+        if quantization and path is not None and path.exists() and not any(path.glob("*.int8.onnx")):
+            # onnx-asr never downloads into a folder that exists, so a model
+            # first downloaded at full precision stays that way.
+            print("Using the full-precision weights already downloaded; delete "
+                  f"{path} to get the faster int8 ones.", file=sys.stderr)
+            quantization = None
         try:
-            self.model = onnx_asr.load_model(repo, path, providers=accelerated + ["CPUExecutionProvider"])
+            self.model = onnx_asr.load_model(repo, path, quantization=quantization,
+                                             providers=accelerated + ["CPUExecutionProvider"])
             self.device = (accelerated or ["CPUExecutionProvider"])[0]
+            if quantization:
+                self.device += " (int8)"
         except Exception as exc:
             if not accelerated:
                 raise
