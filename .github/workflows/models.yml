@@ -7,10 +7,13 @@ name: Models
 # backend is checked, install the CPU ones, as on a machine without NVIDIA.
 # Pull requests run the smaller set described at the plan job.
 #
-# Jobs with a device (vulkan, metal) run the model's transcribe.cpp (GGUF)
+# On Linux and macOS the existing backends run with --device cpu, as on a
+# machine without a GPU ("auto" would pick Metal on a Mac). Jobs with
+# device vulkan or metal run the model's transcribe.cpp (GGUF)
 # build, the way an AMD/Intel PC or a Mac does. The runners have no usable
 # GPU, so they also prove the fallback: transcribe.cpp moves to the CPU by
-# itself and the clip is still transcribed.
+# itself and the clip is still transcribed. (macOS runners have a
+# "Paravirtual" Metal device, which GgmlEngine skips because it garbles Whisper.)
 
 on:
   push:
@@ -63,7 +66,8 @@ jobs:
                else {"ubuntu-24.04": $all_gguf, "windows-2025": ["parakeet-tdt-0.6b-v3"],
                      "macos-15": ["parakeet-tdt-0.6b-v3", "whisper-large-v3-turbo"]}
                end) as $gguf
-            | {include: ([$native | to_entries[] | .key as $os | .value[] | {os: $os, model: ., device: ""}]
+            | {include: ([$native | to_entries[] | .key as $os | .value[]
+                          | {os: $os, model: ., device: (if $os == "windows-2025" then "" else "cpu" end)}]
                        + [$gguf | to_entries[] | .key as $os | .value[]
                           | {os: $os, model: ., device: (if $os == "macos-15" then "metal" else "vulkan" end)}])}')
           echo "$matrix" | jq -c '.include[]'
@@ -108,13 +112,13 @@ jobs:
 
       # The GGUF builds aren't gated, so Cohere runs on transcribe.cpp without a token.
       - name: Self-test ${{ matrix.model }}
-        if: matrix.model != 'cohere-transcribe' || env.HF_TOKEN != '' || matrix.device
+        if: matrix.model != 'cohere-transcribe' || env.HF_TOKEN != '' || matrix.device == 'vulkan' || matrix.device == 'metal'
         run: >-
           uv run --frozen --no-dev speechify selftest --engine-only --model ${{ matrix.model }} --out report
           ${{ matrix.device && format('--device {0}', matrix.device) || '' }}
 
       - name: Gated model skipped
-        if: matrix.model == 'cohere-transcribe' && env.HF_TOKEN == '' && !matrix.device
+        if: matrix.model == 'cohere-transcribe' && env.HF_TOKEN == '' && matrix.device != 'vulkan' && matrix.device != 'metal'
         shell: bash
         run: |
           echo "::warning::Skipped ${{ matrix.model }}, which is gated. Add an HF_TOKEN secret from an account that accepted its terms."

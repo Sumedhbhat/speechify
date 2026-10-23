@@ -474,7 +474,11 @@ class GgmlEngine(Engine):
         device = None
         if backend != "cpu":
             # Prefer a discrete GPU to an integrated one, then the biggest.
-            gpus = [d for d in self.tc.backends() if d.kind == backend and d.device_type in ("gpu", "igpu")]
+            # Skipped: software renderers (llvmpipe reports itself as a CPU)
+            # and macOS VMs' "Apple Paravirtual device", whose Metal returns
+            # garbage for Whisper (seen on GitHub's macOS runners).
+            gpus = [d for d in self.tc.backends() if d.kind == backend and d.device_type in ("gpu", "igpu")
+                    and "paravirtual" not in d.description.lower()]
             if not gpus:
                 found = ", ".join(f"{d.kind} {d.description} ({d.device_type})" for d in self.tc.backends())
                 raise RuntimeError(f"no {backend} GPU found (devices: {found or 'none'})")

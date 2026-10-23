@@ -272,6 +272,8 @@ class FakeTC(types.ModuleType):
     def backends(self):
         if "software" in self.fail:
             return [self.Device("vulkan", "cpu", "llvmpipe"), self.Device("cpu", "cpu", "Ryzen")]
+        if "vm" in self.fail:
+            return [self.Device("vulkan", "gpu", "Apple Paravirtual device"), self.Device("cpu", "cpu", "M1")]
         return [self.Device("vulkan", "igpu", "Radeon Vega 8", 4), self.Device("vulkan", "gpu", "RX 7600", 8),
                 self.Device("cpu", "cpu", "Ryzen")]
 
@@ -292,7 +294,7 @@ def test_ggml_prefers_the_discrete_gpu(monkeypatch, tmp_path):
     assert tc.runs[-1][2]["language"] == "en"
 
 
-@pytest.mark.parametrize("fail", [("load:vulkan",), ("software",)])
+@pytest.mark.parametrize("fail", [("load:vulkan",), ("software",), ("vm",)])
 def test_ggml_falls_back_to_the_cpu_when_the_gpu_wont_start(monkeypatch, tmp_path, capsys, fail):
     engine, _ = ggml_engine(monkeypatch, tmp_path, fail=fail)
     assert engine.device == "CPU (transcribe.cpp; vulkan failed to start)"
