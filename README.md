@@ -38,10 +38,10 @@ Settings > Privacy & Security, scroll down and click **Open Anyway**. To start
 it when you log in, add it under System Settings > General > Login Items.
 
 Push to talk on a Mac is **Right Option**, since Mac keyboards have no Right
-Ctrl. The first start asks for three permissions: Microphone, Input Monitoring
-(to see the talk key) and Accessibility (to paste). Allow all three, then start
-Speechify again. Until the app is signed, macOS treats each update as a new app
-and asks for these again.
+Ctrl. The first start asks for two permissions: Microphone and Accessibility
+(to see the talk key and to paste). Allow both, then start Speechify again.
+Until the app is signed, macOS treats each update as a new app and asks for
+these again.
 
 **On Linux**, Speechify is in your app menu (the AppImage adds itself the first
 time you run it). The `.deb` also adds a `speechify` command. Pasting needs
@@ -340,7 +340,7 @@ and ship a fix.
   `~/Library/Logs/Speechify.log` (macOS). Run `speechify` in a terminal to
   watch it live.
 - **Mac: the talk key does nothing**: open System Settings > Privacy &
-  Security, and allow Speechify under Input Monitoring and Accessibility. If
+  Security, and allow Speechify under Accessibility. If
   you start it from a terminal, allow the terminal app instead.
 - **Linux: "can't read the keyboard"**: on Wayland, start Speechify again and
   accept the setup it offers, or run `sudo usermod -aG input $USER` and log
