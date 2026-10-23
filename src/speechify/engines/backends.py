@@ -481,7 +481,8 @@ class GgmlEngine(Engine):
                     and "paravirtual" not in d.description.lower()]
             if not gpus:
                 found = ", ".join(f"{d.kind} {d.description} ({d.device_type})" for d in self.tc.backends())
-                raise RuntimeError(f"no {backend} GPU found (devices: {found or 'none'})")
+                raise RuntimeError(f"no usable {backend} GPU (found: {found or 'nothing'}; "
+                                   "software renderers and VM devices are skipped)")
             device = max(gpus, key=lambda d: (d.device_type == "gpu", d.memory_total))
         model = self.tc.Model(self.path, backend=backend, device=device)
         self.model, self.session = model, model.session()
