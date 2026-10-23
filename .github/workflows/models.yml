@@ -5,10 +5,11 @@ name: Models
 # proves each recipe and its dependencies work, not GPU speed. Windows installs
 # the CUDA packages (as on an RTX PC); Linux and macOS, where one model per
 # backend is checked, install the CPU ones, as on a machine without NVIDIA.
+# Pull requests run the smaller set described at the plan job.
 
 on:
   push:
-    branches: ["release/**"]
+    branches: [main, "release/**"]
     paths: [src/speechify/engines/**, .github/workflows/models.yml]
   pull_request:
     paths: [src/speechify/engines/**, .github/workflows/models.yml]
@@ -24,38 +25,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Pull requests check one model per backend on Windows and Linux, so a PR
+  # isn't kept waiting on the big models or the few macOS runners. Everything
+  # else (main, release branches, the weekly run) checks the full matrix.
+  plan:
+    name: Choose models
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          matrix=$(jq -nc --arg event "$EVENT" '
+            ["whisper-large-v3-turbo", "parakeet-tdt-0.6b-v3", "moonshine-base", "qwen3-asr-0.6b"] as $per_backend
+            | ["whisper-large-v3-turbo", "whisper-large-v3", "distil-whisper-large-v3",
+               "parakeet-tdt-0.6b-v3", "parakeet-tdt-0.6b-v2", "canary-1b-v2",
+               "granite-speech-4.1-2b", "cohere-transcribe", "qwen3-asr-1.7b", "qwen3-asr-0.6b",
+               "voxtral-mini-3b", "kyutai-stt-2.6b", "kyutai-stt-1b", "moonshine-base"] as $all
+            | (if $event == "pull_request"
+               then {"windows-2025": $per_backend, "ubuntu-24.04": $per_backend}
+               else {"windows-2025": $all, "ubuntu-24.04": $per_backend, "macos-15": $per_backend}
+               end)
+            | {include: [to_entries[] | .key as $os | .value[] | {os: $os, model: .}]}')
+          echo "$matrix" | jq -c '.include[]'
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   engine:
     name: ${{ matrix.model }} (${{ matrix.os }})
+    needs: plan
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      matrix:
-        os: [windows-2025]
-        model:
-          - whisper-large-v3-turbo
-          - whisper-large-v3
-          - distil-whisper-large-v3
-          - parakeet-tdt-0.6b-v3
-          - parakeet-tdt-0.6b-v2
-          - canary-1b-v2
-          - granite-speech-4.1-2b
-          - cohere-transcribe
-          - qwen3-asr-1.7b
-          - qwen3-asr-0.6b
-          - voxtral-mini-3b
-          - kyutai-stt-2.6b
-          - kyutai-stt-1b
-          - moonshine-base
-        include:
-          - { os: ubuntu-24.04, model: whisper-large-v3-turbo }
-          - { os: ubuntu-24.04, model: parakeet-tdt-0.6b-v3 }
-          - { os: ubuntu-24.04, model: moonshine-base }
-          - { os: ubuntu-24.04, model: qwen3-asr-0.6b }
-          - { os: macos-15, model: whisper-large-v3-turbo }
-          - { os: macos-15, model: parakeet-tdt-0.6b-v3 }
-          - { os: macos-15, model: moonshine-base }
-          - { os: macos-15, model: qwen3-asr-0.6b }
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}  # only needed for the gated Cohere model
 
