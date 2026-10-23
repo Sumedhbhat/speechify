@@ -6,6 +6,8 @@ imported by any environment and only needs numpy.
 
 from __future__ import annotations
 
+import hashlib
+import math
 import os
 import sys
 import tempfile
@@ -137,19 +139,19 @@ class OnnxEngine(Engine):
             ort.preload_dlls()
         import onnx_asr
 
-        available = ort.get_available_providers()
+        # Only CUDA: onnxruntime-gpu has no DirectML, and the CPU build has
+        # no GPU at all. Other GPUs run Parakeet and Canary on transcribe.cpp
+        # (GgmlEngine) instead.
         accelerated = []
-        if device == "cuda" and "CUDAExecutionProvider" in available:
+        if device == "cuda" and "CUDAExecutionProvider" in ort.get_available_providers():
             accelerated = ["CUDAExecutionProvider"]
-        elif "DmlExecutionProvider" in available:
-            accelerated = ["DmlExecutionProvider"]
         # A plain folder of real files: Hugging Face's cache stores weights as
         # links into a shared blob folder, and ONNX Runtime refuses external
         # weight files that resolve outside the model's own directory.
         path = Path(opts["models_dir"]) / repo if opts.get("models_dir") else None
         # Without a GPU, the int8 weights are a quarter of the download and
-        # nearly twice as fast on the CPU, with the same transcripts. compute_type is "int8" by default
-        # on machines without CUDA (config.platform_defaults).
+        # nearly twice as fast on the CPU, with the same transcripts. compute_type
+        # is "int8" by default on machines without CUDA (config.platform_defaults).
         wanted = "int8" if not accelerated and opts.get("compute_type") == "int8" else None
         quantization = wanted
         if path is not None and path.exists():
@@ -394,9 +396,145 @@ class QwenEngine(Engine):
             return self.transcribe(audio, prompt), None
 
 
+def fetch_gguf(gguf: dict, models_dir: str) -> Path:
+    """Download a pinned GGUF file (catalog.Gguf as a dict) once, and check its SHA-256.
+
+    A plain file in models/gguf/<repo>/, next to a .sha256 file written only
+    after the check passed, so later loads skip both the network and the hash.
+    """
+    dest = Path(models_dir) / "gguf" / gguf["repo"].split("/")[-1]
+    path, checked = dest / gguf["file"], dest / (gguf["file"] + ".sha256")
+    if (path.exists() and path.stat().st_size == gguf["size"] and checked.exists()
+            and checked.read_text().strip() == gguf["sha256"]):
+        return path
+    from huggingface_hub import hf_hub_download
+
+    hf_hub_download(gguf["repo"], gguf["file"], revision=gguf["revision"], local_dir=dest)
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1 << 24):
+            digest.update(chunk)
+    if digest.hexdigest() != gguf["sha256"]:
+        path.unlink(missing_ok=True)
+        raise ValueError(f"{gguf['file']} doesn't match its checksum (got {digest.hexdigest()}, "
+                         f"expected {gguf['sha256']}); deleted it, so the next try downloads it again")
+    checked.write_text(digest.hexdigest())
+    return path
+
+
+def split_long(audio: np.ndarray, limit: int) -> list[np.ndarray]:
+    """Cut audio longer than `limit` samples into pieces that fit, each cut at
+    the quietest 0.1 s in the last fifth of its piece, so words stay whole."""
+    pieces, window = [], SAMPLE_RATE // 10
+    while audio.size > limit:
+        lo = int(limit * 0.8)
+        tail = audio[lo:limit]
+        n = max(1, tail.size // window)
+        energy = (tail[:n * window].reshape(n, window) ** 2).mean(axis=1)
+        cut = lo + int(np.argmin(energy)) * window + window // 2
+        pieces.append(audio[:cut])
+        audio = audio[cut:]
+    pieces.append(audio)
+    return pieces
+
+
+class GgmlEngine(Engine):
+    """transcribe.cpp (ggml), the engine Handy uses: GGUF models on Vulkan
+    (AMD, Intel and other GPUs), Metal (Apple Silicon), CUDA or the CPU.
+
+    If the GPU won't start, or a run on it fails, this switches to the CPU
+    by itself and says so on stderr, so a driver problem costs speed rather
+    than the dictation. `device` always names what's in use.
+    """
+
+    @classmethod
+    def fetch(cls, repo, opts):
+        fetch_gguf(opts["gguf"], opts["models_dir"])
+        return True
+
+    def __init__(self, repo, opts):
+        self.path = fetch_gguf(opts["gguf"], opts["models_dir"])
+        import transcribe_cpp
+
+        self.tc = transcribe_cpp
+        self.language = opts["language"] or None
+        wanted = opts["device"] if opts["device"] in ("vulkan", "metal", "cuda") else "cpu"
+        self.model = self.session = None
+        try:
+            self._load(wanted)
+        except Exception as exc:
+            if wanted == "cpu":
+                raise
+            print(f"transcribe.cpp: {wanted} didn't start ({type(exc).__name__}: {exc}); "
+                  "using the CPU instead.", file=sys.stderr)
+            self._load("cpu", why=f"{wanted} failed to start")
+
+    def _load(self, backend: str, why: str = "") -> None:
+        self.close()
+        device = None
+        if backend != "cpu":
+            # Prefer a discrete GPU to an integrated one, then the biggest.
+            gpus = [d for d in self.tc.backends() if d.kind == backend and d.device_type in ("gpu", "igpu")]
+            if not gpus:
+                found = ", ".join(f"{d.kind} {d.description} ({d.device_type})" for d in self.tc.backends())
+                raise RuntimeError(f"no {backend} GPU found (devices: {found or 'none'})")
+            device = max(gpus, key=lambda d: (d.device_type == "gpu", d.memory_total))
+        model = self.tc.Model(self.path, backend=backend, device=device)
+        self.model, self.session = model, model.session()
+        self.backend = backend
+        caps = model.capabilities
+        self.languages = set(caps.languages)
+        self.max_samples = caps.max_audio_ms * SAMPLE_RATE // 1000 if caps.max_audio_ms > 0 else 0
+        if backend == "cpu":
+            self.device = "CPU (transcribe.cpp" + (f"; {why})" if why else ")")
+        else:
+            self.device = f"{backend.capitalize() if backend != 'cuda' else 'CUDA'}: {model.device.description}"
+
+    def close(self) -> None:
+        if self.session is not None:
+            self.session.close()
+        if self.model is not None:
+            self.model.close()
+        self.model = self.session = None
+
+    def transcribe(self, audio, prompt):
+        return self.transcribe_scored(audio, prompt)[0]
+
+    def transcribe_scored(self, audio, prompt):
+        try:
+            return self._run(audio, prompt)
+        except (self.tc.InvalidArgument, self.tc.UnsupportedRequest, self.tc.InputTooLong):
+            raise  # about the request, not the GPU: the CPU would fail the same way
+        except Exception as exc:
+            if self.backend == "cpu":
+                raise
+            print(f"transcribe.cpp: a run on {self.device} failed ({type(exc).__name__}: {exc}); "
+                  "switching to the CPU and running it again.", file=sys.stderr)
+            self._load("cpu", why=f"{self.backend} failed during a run")
+            return self._run(audio, prompt)
+
+    def _run(self, audio, prompt):
+        kwargs = {"language": self.language if self.language in self.languages else None}
+        words = [w.strip() for w in keywords(prompt).split(",") if w.strip()]
+        if words and self.model.supports("vocabulary"):
+            kwargs["vocabulary"] = words
+        elif prompt and self.model.supports("initial_prompt"):
+            kwargs["family"] = self.tc.WhisperRunOptions(initial_prompt=prompt)
+        elif prompt and self.model.supports("context_prompt"):
+            kwargs["prompt"] = prompt
+        pieces = split_long(audio, self.max_samples) if self.max_samples else [audio]
+        texts, logprobs = [], []
+        for piece in pieces:
+            result = self.session.run(np.ascontiguousarray(piece, dtype=np.float32), **kwargs)
+            texts.append(result.text.strip())
+            logprobs += [math.log(t.p) for t in result.tokens if 0 < t.p <= 1]
+        return " ".join(t for t in texts if t), (sum(logprobs) / len(logprobs) if logprobs else None)
+
+
 BACKEND_ENGINES: dict[str, type[Engine]] = {
     "whisper": WhisperEngine,
     "onnx": OnnxEngine,
     "transformers": TransformersEngine,
     "qwen": QwenEngine,
+    "ggml": GgmlEngine,
 }

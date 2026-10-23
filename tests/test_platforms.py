@@ -70,18 +70,18 @@ def test_keyboard_backend(monkeypatch, platform, env, expected):
         keys.backend.cache_clear()
 
 
-@pytest.mark.parametrize("platform,cuda,ptt,model,device", [
-    ("win32", True, "ctrl_r", "whisper-large-v3-turbo", "cuda"),
-    ("darwin", False, "alt_r", "parakeet-tdt-0.6b-v3", "cpu"),
-    ("linux", True, "ctrl_r", "whisper-large-v3-turbo", "cuda"),
-    ("linux", False, "ctrl_r", "parakeet-tdt-0.6b-v3", "cpu"),
+@pytest.mark.parametrize("platform,cuda,ptt,model", [
+    ("win32", True, "ctrl_r", "whisper-large-v3-turbo"),
+    ("darwin", False, "alt_r", "parakeet-tdt-0.6b-v3"),
+    ("linux", True, "ctrl_r", "whisper-large-v3-turbo"),
+    ("linux", False, "ctrl_r", "parakeet-tdt-0.6b-v3"),
 ])
-def test_platform_defaults(monkeypatch, tmp_path, platform, cuda, ptt, model, device):
+def test_platform_defaults(monkeypatch, tmp_path, platform, cuda, ptt, model):
     monkeypatch.setenv("SPEECHIFY_HOME", str(tmp_path))
     monkeypatch.setattr(sys, "platform", platform)
     monkeypatch.setattr(config, "has_cuda", lambda: cuda)
     cfg = config.Config.load()
-    assert (cfg.ptt_key, cfg.model, cfg.device) == (ptt, model, device)
+    assert (cfg.ptt_key, cfg.model, cfg.device) == (ptt, model, "auto")
     assert cfg.compute_type == ("float16" if cuda else "int8")
     assert f'ptt_key = "{ptt}"' in (tmp_path / "config.toml").read_text(encoding="utf-8")
 
@@ -91,7 +91,7 @@ def test_saved_settings_win_over_platform_defaults(monkeypatch, tmp_path):
     (tmp_path / "config.toml").write_text('model = "moonshine-base"\n', encoding="utf-8")
     monkeypatch.setattr(config, "has_cuda", lambda: False)
     cfg = config.Config.load()
-    assert cfg.model == "moonshine-base" and cfg.device == "cpu"
+    assert cfg.model == "moonshine-base" and cfg.device == "auto"
 
 
 def test_cuda_override(monkeypatch):

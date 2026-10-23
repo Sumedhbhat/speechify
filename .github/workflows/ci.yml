@@ -62,5 +62,6 @@ jobs:
         run: |
           uv run --frozen speechify --version
           uv run --frozen speechify models
+          uv run --frozen speechify bench --help
           # The whole app, including the platform's keyboard and window code.
           uv run --frozen python -c "import speechify.app, speechify.history, speechify.models_ui"

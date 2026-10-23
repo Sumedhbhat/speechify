@@ -36,3 +36,24 @@ class Teacher:
         text = self.cfg.get("text", "the teacher heard this")
         logprob = self.cfg.get("logprob")
         return text or (prompt or ""), float(logprob) if logprob else None
+
+
+class GpuCrash:
+    """Takes the whole process down on any device but the CPU, the way a
+    broken GPU driver does. repo "load" crashes while loading, "run" in the
+    first real transcription."""
+
+    def __init__(self, repo, opts):
+        import os
+
+        self.device = opts["device"]
+        self.crash = repo if self.device != "cpu" else ""
+        if self.crash == "load":
+            os._exit(3)
+
+    def transcribe(self, audio, prompt):
+        import os
+
+        if self.crash == "run" and audio.size != 16_000:  # not the warm-up
+            os._exit(3)
+        return f"{audio.size} samples on {self.device}"

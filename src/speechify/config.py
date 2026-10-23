@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import ctypes.util
+import functools
 import json
 import os
+import platform
 import re
 import sys
 import tomllib
@@ -30,8 +33,11 @@ models_hotkey = "<ctrl>+<alt>+m"
 # `speechify models` to list them. A path to a model from scripts/finetune.py
 # also works.
 model = "{model}"
-device = "{device}"{device_pad}# "cuda" (NVIDIA GPU) or "cpu"
-compute_type = "{compute_type}"{compute_pad}# "float16" on GPU; "int8" on CPU, also for Parakeet/Canary
+# "auto" uses the best GPU there is: CUDA on NVIDIA; Vulkan on AMD and Intel
+# GPUs and Metal on Apple Silicon (through transcribe.cpp); else the CPU.
+# Or name one: "cuda", "vulkan", "metal" or "cpu".
+device = "{device}"{device_pad}# `speechify selftest --engine-only` shows what it picked
+compute_type = "{compute_type}"{compute_pad}# CUDA models: "float16"; CPU: "int8", also for Parakeet/Canary
 language = "en"            # "" for auto-detect (slower, less reliable)
 beam_size = 5              # Whisper only: 1 is ~2x faster, 5 is a bit more accurate
 
@@ -75,35 +81,105 @@ keep_versions = 3          # trained versions kept on disk
 """
 
 
+DRI = Path("/dev/dri")  # GPU device nodes on Linux
+
+# What `device` can be set to. "auto" picks one of the others (accelerator()).
+DEVICES = ("auto", "cuda", "vulkan", "metal", "cpu")
+
+
 def has_cuda() -> bool:
     """Whether to set up models for an NVIDIA GPU.
 
-    Windows always does: that's the machine Speechify is built for, and CI has
-    to test the GPU packages there even though its runners have no GPU. On
-    Linux it depends on the NVIDIA driver being loaded; Macs have no CUDA.
-    SPEECHIFY_CUDA=1 or 0 overrides this.
+    On Windows and Linux that depends on the NVIDIA driver being installed;
+    Macs have no CUDA. SPEECHIFY_CUDA=1 or 0 overrides this (CI sets it to
+    test the GPU packages on runners without a GPU).
     """
     override = os.environ.get("SPEECHIFY_CUDA")
     if override in ("0", "1"):
         return override == "1"
     if sys.platform == "win32":
-        return True
+        # Every NVIDIA display driver installs nvcuda.dll; nothing else does.
+        return (_system32() / "nvcuda.dll").exists()
     if sys.platform == "darwin":
         return False
     return Path("/proc/driver/nvidia/version").exists()
 
 
+def accelerator() -> str:
+    """What "auto" means on this machine: "cuda", "vulkan", "metal" or "cpu".
+
+    NVIDIA GPUs keep the CUDA builds of each backend. Any other GPU runs the
+    models transcribe.cpp supports through Vulkan, and Apple Silicon through
+    Metal. This only checks that a GPU and the Vulkan loader exist, without
+    loading a driver into the app; the model worker makes sure the GPU
+    really works and falls back to the CPU if it doesn't.
+    SPEECHIFY_GPU=<device> overrides it.
+    """
+    override = os.environ.get("SPEECHIFY_GPU")
+    if override in DEVICES[1:]:
+        return override
+    if has_cuda():
+        return "cuda"
+    return _probe_gpu()
+
+
+@functools.cache
+def _probe_gpu() -> str:
+    if sys.platform == "darwin":
+        # transcribe.cpp ships Metal for Apple Silicon only; Intel Macs get its CPU build.
+        return "metal" if platform.machine() == "arm64" else "cpu"
+    if sys.platform == "win32":
+        # vulkan-1.dll comes with every AMD, Intel and NVIDIA driver.
+        return "vulkan" if (_system32() / "vulkan-1.dll").exists() else "cpu"
+    # Linux: a GPU render node and the Vulkan loader (libvulkan.so.1). Mesa
+    # provides the driver for AMD and Intel GPUs.
+    if any(DRI.glob("renderD*")) and _find_library("vulkan"):
+        return "vulkan"
+    return "cpu"
+
+
+def _find_library(name: str) -> str | None:
+    try:
+        return ctypes.util.find_library(name)
+    except OSError:
+        return None
+
+
+def _system32() -> Path:
+    return Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+
+
 def platform_defaults() -> dict:
-    """Settings that depend on the machine. Without a GPU, Parakeet is the
-    default: it's the fastest accurate model on a CPU, with int8 weights."""
+    """Settings that depend on the machine. Without an NVIDIA GPU, Parakeet
+    is the default: it's the fastest accurate model on Vulkan, Metal and the
+    CPU (with int8 weights there)."""
     cuda = has_cuda()
     return {
         # Mac keyboards have no Right Ctrl.
         "ptt_key": "alt_r" if sys.platform == "darwin" else "ctrl_r",
         "model": "whisper-large-v3-turbo" if cuda else "parakeet-tdt-0.6b-v3",
-        "device": "cuda" if cuda else "cpu",
+        "device": "auto",
         "compute_type": "float16" if cuda else "int8",
     }
+
+
+# The `device` line that config files written before "auto" existed start
+# with. Left untouched it only recorded what the machine had then, so it
+# becomes "auto"; a line someone edited is kept.
+_OLD_DEVICE_LINES = [
+    f'device = "{d}"{" " * (16 - len(d))}# "cuda" (NVIDIA GPU) or "cpu"' for d in ("cuda", "cpu")
+]
+
+
+def _upgrade(text: str) -> str:
+    for old in _OLD_DEVICE_LINES:
+        if re.search(rf"(?m)^{re.escape(old)}$", text):
+            new = default_config().split("\n")
+            start = next(i for i, line in enumerate(new) if line.startswith("# \"auto\" uses"))
+            block = "\n".join(new[start:start + 4])
+            text = re.sub(rf"(?m)^{re.escape(old)}$", lambda m: block, text)
+            print('config: device is now "auto", so a GPU other than NVIDIA is used too')
+    return text
 
 
 def default_config() -> str:
@@ -137,7 +213,7 @@ class Config:
     history_hotkey: str = "<ctrl>+<alt>+h"
     models_hotkey: str = "<ctrl>+<alt>+m"
     model: str = "whisper-large-v3-turbo"
-    device: str = "cuda"
+    device: str = "auto"
     compute_type: str = "float16"
     language: str = "en"
     beam_size: int = 5
@@ -162,16 +238,27 @@ class Config:
         path = data_dir() / "config.toml"
         if not path.exists():
             path.write_text(default_config(), encoding="utf-8")
-        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        upgraded = _upgrade(text)
+        if upgraded != text:
+            path.write_text(upgraded, encoding="utf-8")
+        raw = tomllib.loads(upgraded)
         known = {f.name for f in fields(cls)}
         unknown = set(raw) - known
         if unknown:
             print(f"config: ignoring unknown keys {sorted(unknown)}")
         return cls(**{**platform_defaults(), **{k: v for k, v in raw.items() if k in known}})
 
+    def resolved_device(self) -> str:
+        """`device` with "auto" replaced by what this machine has."""
+        if self.device not in DEVICES:
+            print(f"config: unknown device {self.device!r}; using \"auto\"")
+            return accelerator()
+        return accelerator() if self.device == "auto" else self.device
+
     def engine_opts(self) -> dict:
         return {
-            "device": self.device,
+            "device": self.resolved_device(),
             "compute_type": self.compute_type,
             "language": self.language,
             "beam_size": self.beam_size,

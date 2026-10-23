@@ -213,23 +213,24 @@ def run_engine_only(model: str, device: str, report: Report) -> None:
     from .audio import load_wav
     from .config import Config, data_dir
     from .engines import host
-    from .engines.catalog import resolve
+    from .engines.catalog import placed, resolve
     from .metrics import wer
 
     cfg = Config.load()
     if device:
         cfg.device = device
-    if cfg.device == "cpu":
+    if cfg.resolved_device() != "cuda":
         cfg.compute_type = "int8"
     spec = resolve(model or cfg.model, data_dir())
-    report.facts.update(model=spec.id, backend=spec.backend)
+    report.facts.update(model=spec.id, backend=placed(spec, cfg.resolved_device()).backend,
+                        device_setting=f"{cfg.device} ({cfg.resolved_device()})")
     audio = load_wav(SAMPLE)
     engine = host.EngineHost()
     with report.step(f"install {spec.id}") as s:
         t0 = time.perf_counter()
         host.install(spec, cfg.engine_opts())
         s["detail"] = f"{time.perf_counter() - t0:.0f}s (0s if already installed)"
-    if not host.is_ready(spec):
+    if not host.is_ready(spec, cfg.resolved_device()):
         return
     with report.step("load model") as s:
         info = engine.start(spec, cfg.engine_opts())
@@ -244,6 +245,7 @@ def run_engine_only(model: str, device: str, report: Report) -> None:
                 score = wer([REFERENCE], [text])
                 report.facts[f"{attempt}_transcribe_ms"] = ms
                 report.facts["wer"] = f"{score:.1%}"
+                report.facts["device"] = engine.info.get("device")  # changes if it fell back to the CPU
                 s["detail"] = f"{ms} ms for {audio.size / 16000:.1f}s of audio, WER {score:.1%}: {text}"
                 assert score <= MAX_WER, f"WER {score:.1%} is above {MAX_WER:.0%}"
     finally:
@@ -272,7 +274,7 @@ def run_desktop(model: str, report: Report) -> None:
     if model:
         cfg.model = model
     spec = resolve(cfg.model, config.data_dir())
-    report.facts.update(model=spec.id, backend=spec.backend)
+    report.facts.update(model=spec.id, device_setting=f"{cfg.device} ({cfg.resolved_device()})")
 
     pasted: list[str] = []
     real_paste = output.paste
@@ -336,7 +338,8 @@ def run_desktop(model: str, report: Report) -> None:
             with report.step("model installs and loads") as s:
                 wait_for(lambda: app.engine.ready.is_set(), 1800, "the model to load", 1)
                 info = app.engine.info
-                report.facts.update(device=info.get("device"), load_seconds=info.get("load_s"))
+                report.facts.update(backend=app.engine.spec.backend, device=info.get("device"),
+                                    load_seconds=info.get("load_s"))
                 s["detail"] = f"{spec.name} on {info.get('device')} in {info.get('load_s')}s"
 
             with report.step("Notepad opens") as s:

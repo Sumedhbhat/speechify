@@ -192,7 +192,7 @@ class UI:
         """True while a window is open that you might be dictating a fix into."""
         return self._correction is not None or self._history is not None
 
-    def open_models(self, active, use, install, rollback) -> None:
+    def open_models(self, active, use, install, rollback, device) -> None:
         from .models_ui import ModelsWindow
 
         if self._models is not None:
@@ -203,7 +203,7 @@ class UI:
         def closed() -> None:
             self._models = None
 
-        self._models = ModelsWindow(self.root, active, use, install, rollback, on_close=closed)
+        self._models = ModelsWindow(self.root, active, use, install, rollback, device, on_close=closed)
         bring_to_front(self._models.win)
 
     def refresh_models(self) -> None:

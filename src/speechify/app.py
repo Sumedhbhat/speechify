@@ -140,7 +140,7 @@ class App:
             self.autolearn.preempt("model switch", restore=False)
             with self._switch_lock:
                 try:
-                    if not host.is_ready(spec):
+                    if not host.is_ready(spec, self.cfg.resolved_device()):
                         self.ui.post(lambda: self.ui.show("working", f"Installing {spec.name}…"))
                         host.install(spec, self.cfg.engine_opts(), self._log)
                     self.ui.post(lambda: self.ui.show("working", f"Loading {spec.name}…"))
@@ -165,11 +165,17 @@ class App:
 
     def _open_models(self) -> None:
         self.ui.open_models(
-            active=lambda: self.engine.spec.id if self.engine.spec else None,
+            active=self._active_model,
             use=self.switch_model,
             install=self.install_model,
             rollback=self.rollback,
+            device=self.cfg.resolved_device(),
         )
+
+    def _active_model(self) -> tuple[str, str] | None:
+        """(model id, the device it's actually running on), for the model window."""
+        spec = self.engine.spec
+        return (spec.id, self.engine.info.get("device") or "?") if spec else None
 
     def rollback(self) -> None:
         """Go back one retrained version, and switch to it now."""

@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from . import __version__
-from .config import Config, data_dir
+from .config import DEVICES, Config, data_dir
 
 
 def main() -> None:
@@ -38,8 +38,14 @@ def main() -> None:
     selftest.add_argument("--model", help="model id to test (default: the configured one)")
     selftest.add_argument("--engine-only", action="store_true",
                           help="only install, load and transcribe; no desktop needed")
-    selftest.add_argument("--device", choices=["cuda", "cpu"], help="override the configured device")
+    selftest.add_argument("--device", choices=DEVICES, help="override the configured device")
     selftest.add_argument("--out", help="folder for report.json, summary.md and screenshots")
+    bench = sub.add_parser("bench", help="time each engine for a model on this machine (GPU vs transcribe.cpp)")
+    bench.add_argument("--model", action="append", help="model id (repeatable; default: Parakeet v3 and Whisper turbo)")
+    bench.add_argument("--runs", type=int, default=5, help="runs per clip; the median is reported (default 5)")
+    bench.add_argument("--cpu", action="store_true", help="also time both engines on the CPU")
+    bench.add_argument("--clips", help="folder with clips.json and WAV files (default: the self-test clip)")
+    bench.add_argument("--out", help="JSON file for the results")
     sub.add_parser("devices", help="list microphones")
     sub.add_parser("where", help="print the config and data directory")
     args = parser.parse_args()
@@ -55,6 +61,10 @@ def main() -> None:
         print(data_dir())
         return
 
+    if args.cmd == "bench":
+        from .bench import main as bench
+
+        raise SystemExit(bench(args.model, args.runs, args.cpu, args.clips, args.out))
     if args.cmd == "selftest":
         from .selftest import main as selftest
 
@@ -162,7 +172,7 @@ def learn_command(cfg: Config, action: str, force_retrain: bool) -> None:
 def models_command(cfg: Config, action: str, model: str | None) -> None:
     from .config import set_value
     from .engines import host
-    from .engines.catalog import UNSUPPORTED, all_models, resolve, stars
+    from .engines.catalog import UNSUPPORTED, all_models, placed, resolve, stars
 
     if action == "list":
         current = cfg.model
@@ -173,11 +183,14 @@ def models_command(cfg: Config, action: str, model: str | None) -> None:
             def stars(rating: float) -> str:
                 return f"{rating:g}/5" if rating > 0 else "yours"
 
-        print(f"{'':2}{'id':<36}{'accuracy':<10}{'speed':<8}{'VRAM':<7}{'status':<16}languages")
+        device = cfg.resolved_device()
+        print(f"Device: {cfg.device}" + (f" ({device} on this machine)" if cfg.device == "auto" else ""))
+        print(f"{'':2}{'id':<36}{'accuracy':<10}{'speed':<8}{'VRAM':<7}{'engine':<14}{'status':<16}languages")
         for spec in all_models(data_dir()):
             mark = "*" if current in (spec.id, spec.repo) else " "
             print(f"{mark} {spec.id:<36}{stars(spec.accuracy):<10}{stars(spec.speed):<8}"
-                  f"{spec.vram_gb:<7g}{host.status(spec):<16}{spec.languages}")
+                  f"{spec.vram_gb:<7g}{placed(spec, device).backend:<14}{host.status(spec, device):<16}"
+                  f"{spec.languages}")
         print("\n* = selected.  speechify models use <id>  installs (if needed) and selects a model.")
         for name, why in UNSUPPORTED.items():
             print(f"  Not available: {name}, {why}.")
