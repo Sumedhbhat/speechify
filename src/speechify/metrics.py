@@ -15,8 +15,13 @@ from dataclasses import dataclass
 _DROP = str.maketrans("", "", string.punctuation)
 
 
+# Spellings of the same word: LibriSpeech writes MISTER, Whisper "Mr.",
+# Parakeet "mister".
+_SAME = {"mister": "mr", "missus": "mrs"}
+
+
 def words(text: str) -> list[str]:
-    return text.lower().replace("-", " ").translate(_DROP).split()
+    return [_SAME.get(w, w) for w in text.lower().replace("-", " ").translate(_DROP).split()]
 
 
 def _edit_table(r: list[str], h: list[str]) -> list[list[int]]:

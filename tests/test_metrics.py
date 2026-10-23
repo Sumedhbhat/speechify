@@ -11,6 +11,7 @@ QUILTER = "Nor is Mr. Quilter's manner less interesting than his matter."
 def test_wer_ignores_case_and_punctuation():
     assert wer([QUILTER], ["nor is mr quilter's manner less interesting than his matter"]) == 0
     assert wer(["a b c d"], ["a x c"]) == 0.5
+    assert wer([QUILTER], ["Nor is mister Quilter's manner less interesting than his matter."]) == 0
 
 
 def test_formatting_is_perfect_for_the_reference():
