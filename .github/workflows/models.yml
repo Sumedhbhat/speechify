@@ -6,6 +6,14 @@ name: Models
 # the CUDA packages (as on an RTX PC); Linux and macOS, where one model per
 # backend is checked, install the CPU ones, as on a machine without NVIDIA.
 # Pull requests run the smaller set described at the plan job.
+#
+# On Linux and macOS the existing backends run with --device cpu, as on a
+# machine without a GPU ("auto" would pick Metal on a Mac). Jobs with
+# device vulkan or metal run the model's transcribe.cpp (GGUF)
+# build, the way an AMD/Intel PC or a Mac does. The runners have no usable
+# GPU, so they also prove the fallback: transcribe.cpp moves to the CPU by
+# itself and the clip is still transcribed. (macOS runners have a
+# "Paravirtual" Metal device, which GgmlEngine skips because it garbles Whisper.)
 
 on:
   push:
@@ -45,16 +53,28 @@ jobs:
                "parakeet-tdt-0.6b-v3", "parakeet-tdt-0.6b-v2", "canary-1b-v2",
                "granite-speech-4.1-2b", "cohere-transcribe", "qwen3-asr-1.7b", "qwen3-asr-0.6b",
                "voxtral-mini-3b", "kyutai-stt-2.6b", "kyutai-stt-1b", "moonshine-base"] as $all
+            | ["parakeet-tdt-0.6b-v3", "parakeet-tdt-0.6b-v2", "canary-1b-v2",
+               "whisper-large-v3-turbo", "whisper-large-v3", "qwen3-asr-0.6b", "qwen3-asr-1.7b",
+               "cohere-transcribe", "granite-speech-4.1-2b", "voxtral-mini-3b", "moonshine-base"] as $all_gguf
+            | ["parakeet-tdt-0.6b-v3", "whisper-large-v3-turbo", "qwen3-asr-0.6b", "moonshine-base"] as $per_family
             | (if $event == "pull_request"
                then {"windows-2025": $per_backend, "ubuntu-24.04": $per_backend}
                else {"windows-2025": $all, "ubuntu-24.04": $per_backend, "macos-15": $per_backend}
-               end)
-            | {include: [to_entries[] | .key as $os | .value[] | {os: $os, model: .}]}')
+               end) as $native
+            | (if $event == "pull_request"
+               then {"ubuntu-24.04": $per_family, "windows-2025": ["parakeet-tdt-0.6b-v3"]}
+               else {"ubuntu-24.04": $all_gguf, "windows-2025": ["parakeet-tdt-0.6b-v3"],
+                     "macos-15": ["parakeet-tdt-0.6b-v3", "whisper-large-v3-turbo"]}
+               end) as $gguf
+            | {include: ([$native | to_entries[] | .key as $os | .value[]
+                          | {os: $os, model: ., device: (if $os == "windows-2025" then "" else "cpu" end)}]
+                       + [$gguf | to_entries[] | .key as $os | .value[]
+                          | {os: $os, model: ., device: (if $os == "macos-15" then "metal" else "vulkan" end)}])}')
           echo "$matrix" | jq -c '.include[]'
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   engine:
-    name: ${{ matrix.model }} (${{ matrix.os }})
+    name: ${{ matrix.model }} (${{ matrix.os }}${{ matrix.device && format(', {0}', matrix.device) || '' }})
     needs: plan
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
@@ -63,6 +83,9 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}  # only needed for the gated Cohere model
+      # Windows runners have no NVIDIA driver; install the CUDA packages anyway,
+      # as on an RTX PC, except in the transcribe.cpp jobs.
+      SPEECHIFY_CUDA: ${{ matrix.os == 'windows-2025' && !matrix.device && '1' || '' }}
 
     steps:
       # D: on Windows has the most room; elsewhere the home folder does.
@@ -87,12 +110,15 @@ jobs:
       - name: Install
         run: uv sync --frozen --no-dev
 
+      # The GGUF builds aren't gated, so Cohere runs on transcribe.cpp without a token.
       - name: Self-test ${{ matrix.model }}
-        if: matrix.model != 'cohere-transcribe' || env.HF_TOKEN != ''
-        run: uv run --frozen --no-dev speechify selftest --engine-only --model ${{ matrix.model }} --out report
+        if: matrix.model != 'cohere-transcribe' || env.HF_TOKEN != '' || matrix.device == 'vulkan' || matrix.device == 'metal'
+        run: >-
+          uv run --frozen --no-dev speechify selftest --engine-only --model ${{ matrix.model }} --out report
+          ${{ matrix.device && format('--device {0}', matrix.device) || '' }}
 
       - name: Gated model skipped
-        if: matrix.model == 'cohere-transcribe' && env.HF_TOKEN == ''
+        if: matrix.model == 'cohere-transcribe' && env.HF_TOKEN == '' && matrix.device != 'vulkan' && matrix.device != 'metal'
         shell: bash
         run: |
           echo "::warning::Skipped ${{ matrix.model }}, which is gated. Add an HF_TOKEN secret from an account that accepted its terms."
@@ -106,7 +132,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: model-${{ matrix.model }}
+          name: model-${{ matrix.model }}-${{ matrix.os }}${{ matrix.device && format('-{0}', matrix.device) || '' }}
           path: report
           if-no-files-found: ignore
           retention-days: 14

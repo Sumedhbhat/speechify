@@ -4,12 +4,14 @@ Layout under the data directory:
 
     engines/
       _shim/speechify/engines/*.py   worker code, importable from any env
-      whisper/ onnx/ transformers/ qwen/   one virtualenv per backend
+      whisper/ onnx/ transformers/ qwen/ ggml/   one virtualenv per backend
+      models/                         ONNX and GGUF weights (the rest use the HF cache)
       downloaded.json                 models whose weights are on disk
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -23,7 +25,7 @@ from typing import Callable
 import numpy as np
 
 from ..config import data_dir, has_cuda
-from .catalog import BACKENDS, ModelSpec
+from .catalog import BACKENDS, GGML_DEVICES, ModelSpec, placed
 
 PYTHON = "3.12"
 MIN_PACKAGE_AGE = "14 days"  # same rule as Dependabot's cooldown: never install brand-new releases
@@ -33,6 +35,12 @@ Log = Callable[[str], None]
 
 class EngineError(RuntimeError):
     pass
+
+
+class WorkerCrashed(EngineError):
+    def __init__(self, message: str, spec: ModelSpec, opts: dict):
+        super().__init__(message)
+        self.spec, self.opts = spec, opts
 
 
 def _root() -> Path:
@@ -84,13 +92,23 @@ def _set_downloaded(model_id: str, value: bool) -> None:
     (_root() / "downloaded.json").write_text(json.dumps(sorted(ids)))
 
 
-def is_ready(spec: ModelSpec) -> bool:
-    """Installed and downloaded: selecting it loads straight from disk."""
+def _download_key(spec: ModelSpec) -> str:
+    # A model's ONNX/PyTorch weights and its GGUF are separate downloads.
+    return f"{spec.id}@ggml" if spec.backend == "ggml" else spec.id
+
+
+def is_ready(spec: ModelSpec, device: str | None = None) -> bool:
+    """Installed and downloaded: selecting it loads straight from disk.
+
+    `device` (a resolved config device) picks the build that runs there; see catalog.placed.
+    """
+    spec = placed(spec, device)
     local = spec.id.startswith("ft:")
-    return backend_installed(spec.backend) and (local or spec.id in _downloaded())
+    return backend_installed(spec.backend) and (local or _download_key(spec) in _downloaded())
 
 
-def status(spec: ModelSpec) -> str:
+def status(spec: ModelSpec, device: str | None = None) -> str:
+    spec = placed(spec, device)
     if is_ready(spec):
         return "ready"
     if backend_installed(spec.backend):
@@ -152,9 +170,15 @@ def _worker_env(spec: ModelSpec, opts: dict, download_only: bool, offline: bool)
     env = dict(os.environ)
     env["PYTHONPATH"] = str(_shim())
     env["PYTHONUNBUFFERED"] = "1"
+    opts = {**opts, "models_dir": str(_root() / "models")}
+    if spec.gguf is not None and spec.backend == "ggml":
+        opts["gguf"] = dataclasses.asdict(spec.gguf)
+    elif opts.get("device") in GGML_DEVICES:
+        # A model without a transcribe.cpp build, on an AMD, Intel or Apple
+        # GPU: its own backend only knows CUDA and the CPU.
+        opts.update(device="cpu", compute_type="int8")
     env["SPEECHIFY_WORKER"] = json.dumps({
-        "backend": spec.backend, "repo": spec.repo, "download_only": download_only,
-        "opts": {**opts, "models_dir": str(_root() / "models")},
+        "backend": spec.backend, "repo": spec.repo, "download_only": download_only, "opts": opts,
     })
     if offline:
         # Skips Hugging Face's "is there a newer revision" requests: faster startup, works offline.
@@ -171,6 +195,7 @@ def _worker_env(spec: ModelSpec, opts: dict, download_only: bool, offline: bool)
 
 def install(spec: ModelSpec, opts: dict, log: Log = print) -> None:
     """Create the backend environment if needed, then download the model."""
+    spec = placed(spec, opts.get("device"))
     backend = BACKENDS[spec.backend]
     if not backend_installed(spec.backend):
         uv = find_uv()
@@ -181,8 +206,12 @@ def install(spec: ModelSpec, opts: dict, log: Log = print) -> None:
             # and onnxruntime-gpu in one environment, so start clean.
             shutil.rmtree(env_dir(spec.backend), ignore_errors=True)
         _run([uv, "venv", "--python", PYTHON, "--allow-existing", str(env_dir(spec.backend))], log)
+        # A requirements file, so pinned packages can carry their hashes
+        # (uv checks every hash it's given, and fails on a mismatch).
+        reqs = env_dir(spec.backend) / "speechify-requirements.txt"
+        reqs.write_text("\n".join(requirements(spec.backend)) + "\n", encoding="utf-8")
         cmd = [uv, "pip", "install", "--python", str(env_python(spec.backend)),
-               "--exclude-newer", MIN_PACKAGE_AGE, *requirements(spec.backend)]
+               "--exclude-newer", MIN_PACKAGE_AGE, "-r", str(reqs)]
         if backend.needs_torch:
             cmd += ["--torch-backend", "auto"]  # picks the CUDA build that matches your driver
         _run(cmd, log)
@@ -191,12 +220,21 @@ def install(spec: ModelSpec, opts: dict, log: Log = print) -> None:
         log(f"Downloading {spec.name} (about {spec.download_gb:g} GB)...")
         _run([str(env_python(spec.backend)), "-m", "speechify.engines.worker"], log,
              env=_worker_env(spec, opts, download_only=True, offline=False))
-        _set_downloaded(spec.id, True)
+        _set_downloaded(_download_key(spec), True)
     log(f"{spec.name} is ready.")
 
 
 def uninstall_backend(backend: str) -> None:
     shutil.rmtree(env_dir(backend), ignore_errors=True)
+
+
+def falls_back_to_cpu(spec: ModelSpec, opts: dict) -> bool:
+    """Whether a worker that dies on the GPU is restarted on the CPU.
+
+    transcribe.cpp models only: their GGUF runs on the CPU as it is. The
+    others need different packages for the CPU, and CUDA is reliable enough.
+    """
+    return spec.backend == "ggml" and opts.get("device") != "cpu"
 
 
 class EngineHost:
@@ -214,26 +252,41 @@ class EngineHost:
         self._generation = 0  # bumped by kill(), so a cancelled load can't finish
         self.ready = threading.Event()
         self.spec: ModelSpec | None = None
-        self.info: dict = {}
+        self.opts: dict = {}
+        self.info: dict = {}  # the worker's "ready" message; info["device"] is what it runs on
 
     def start(self, spec: ModelSpec, opts: dict) -> dict:
-        """Stop the current model and load `spec`. Blocks until it's ready."""
+        """Stop the current model and load `spec`. Blocks until it's ready.
+
+        `spec` is placed on opts["device"] (catalog.placed), so self.spec may
+        name the transcribe.cpp build of the model that was asked for.
+        """
         self.stop()
+        spec = placed(spec, opts.get("device"))
         if not is_ready(spec):
             raise EngineError(f"{spec.name} isn't installed yet")
         generation = self._generation
-        try:
-            proc, msg = self._spawn(spec, opts, offline=not spec.id.startswith("ft:"), generation=generation)
-        except EngineError:
-            if self._generation != generation:
-                raise
-            # Maybe the cache is incomplete; let it reach the network once.
-            proc, msg = self._spawn(spec, opts, offline=False, generation=generation)
+        attempts = [(opts, not spec.id.startswith("ft:")),
+                    (opts, False)]  # maybe the cache is incomplete; let it reach the network once
+        if falls_back_to_cpu(spec, opts):
+            # The worker falls back to the CPU itself when the GPU reports an
+            # error. This covers a driver that takes the whole process down.
+            attempts.append(({**opts, "device": "cpu"}, False))
+        for i, (attempt, offline) in enumerate(attempts):
+            try:
+                proc, msg = self._spawn(spec, attempt, offline=offline, generation=generation)
+                break
+            except EngineError as exc:
+                if self._generation != generation or i == len(attempts) - 1:
+                    raise
+                if attempts[i + 1][0] is not opts:
+                    print(f"{spec.name} didn't load on {opts.get('device')} ({exc}); "
+                          "trying the CPU instead.", file=sys.stderr)
         with self._lock:
             if self._generation != generation:  # killed after it loaded
                 proc.kill()
                 raise EngineError(f"loading {spec.name} was cancelled")
-            self._proc, self.spec, self.info = proc, spec, msg
+            self._proc, self.spec, self.opts, self.info = proc, spec, attempt, msg
         self.ready.set()
         return msg
 
@@ -264,14 +317,28 @@ class EngineHost:
         return proc, msg
 
     def transcribe(self, audio: np.ndarray, prompt: str | None, timeout: float = 900) -> tuple[str, int]:
-        msg = self._request(audio, prompt, False, timeout)
+        msg = self._request_or_fall_back(audio, prompt, False, timeout)
         return msg["text"], msg["ms"]
 
     def transcribe_scored(self, audio: np.ndarray, prompt: str | None,
                           timeout: float = 900) -> tuple[str, float | None]:
         """Text and mean token log-probability (None if the backend has none)."""
-        msg = self._request(audio, prompt, True, timeout)
+        msg = self._request_or_fall_back(audio, prompt, True, timeout)
         return msg["text"], msg.get("logprob")
+
+    def _request_or_fall_back(self, audio, prompt, score: bool, timeout: float) -> dict:
+        try:
+            return self._request(audio, prompt, score, timeout)
+        except WorkerCrashed as exc:
+            spec, opts = exc.spec, exc.opts
+            if not falls_back_to_cpu(spec, opts):
+                raise
+        # A GPU driver crash took the worker down mid-run. Rather than lose
+        # the dictation, reload on the CPU and run it again.
+        print(f"{spec.name} crashed on {self.info.get('device')}; reloading it on the CPU "
+              "and transcribing again.", file=sys.stderr)
+        self.start(spec, {**opts, "device": "cpu"})
+        return self._request(audio, prompt, score, timeout)
 
     def _request(self, audio: np.ndarray, prompt: str | None, score: bool, timeout: float) -> dict:
         if not self.ready.wait(timeout):
@@ -293,11 +360,14 @@ class EngineHost:
             except (OSError, ValueError):
                 line = b""
             if not line:
-                if self._proc is proc:
-                    self._proc = None
                 self.ready.clear()
-                raise EngineError("the model process crashed (details in the console)")
-        msg = json.loads(line)
+                if self._proc is not proc:  # kill() stopped it on purpose
+                    raise EngineError("the model was stopped")
+                self._proc = None
+                raise WorkerCrashed("the model process crashed (details in the console)", self.spec, self.opts)
+            msg = json.loads(line)
+            if msg.get("device"):
+                self.info["device"] = msg["device"]
         if "error" in msg:
             raise EngineError(msg["error"])
         return msg

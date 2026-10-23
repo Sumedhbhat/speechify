@@ -8,13 +8,15 @@ from typing import Callable
 
 from .config import data_dir
 from .engines import host
-from .engines.catalog import BACKENDS, UNSUPPORTED, ModelSpec, all_models, stars
+from .engines.catalog import BACKENDS, UNSUPPORTED, ModelSpec, all_models, placed, stars
 from .ui import MONO
 
 
 class ModelsWindow:
     """use(spec) installs if needed and switches; install(spec) only downloads;
-    rollback() goes back one retrained version.
+    rollback() goes back one retrained version. active() is the model in use
+    and the device it runs on; `device` is the configured device, which
+    decides whether each model runs on its own backend or transcribe.cpp.
 
     Both run in the background and report through log(); the window just
     calls them and refreshes.
@@ -23,14 +25,15 @@ class ModelsWindow:
     def __init__(
         self,
         master: tk.Misc,
-        active: Callable[[], str | None],
+        active: Callable[[], tuple[str, str] | None],
         use: Callable[[ModelSpec], None],
         install: Callable[[ModelSpec], None],
         rollback: Callable[[], None],
+        device: str,
         on_close: Callable[[], None],
     ):
         self.active, self.use, self.install, self.on_close = active, use, install, on_close
-        self.rollback = rollback
+        self.rollback, self.device = rollback, device
         self.specs: dict[str, ModelSpec] = {}
         win = self.win = tk.Toplevel(master)
         win.title("Speechify: models")
@@ -82,9 +85,10 @@ class ModelsWindow:
         selected = self.tree.selection()
         self.tree.delete(*self.tree.get_children())
         self.specs.clear()
-        active = self.active()
+        active, in_use = self.active() or (None, None)
         for spec in all_models(data_dir()):
-            state = host.status(spec)
+            state = host.status(spec, self.device)
+            size = placed(spec, self.device).download_gb
             if self.only_ready.get() and state != "ready":
                 continue
             label = "● in use" if spec.id == active else state
@@ -93,13 +97,13 @@ class ModelsWindow:
             self.specs[spec.id] = spec
             self.tree.insert("", "end", iid=spec.id, tags=tags, values=(
                 spec.name, stars(spec.accuracy), stars(spec.speed), spec.languages,
-                f"{spec.vram_gb:g} GB", f"{spec.download_gb:g} GB" if spec.download_gb else "local",
+                f"{spec.vram_gb:g} GB", f"{size:g} GB" if size else "local",
                 learns, label,
             ))
         if selected and selected[0] in self.specs:
             self.tree.selection_set(selected[0])
         name = self.specs[active].name if active in self.specs else active
-        self.current.configure(text=f"In use: {name}" if active else "No model loaded")
+        self.current.configure(text=f"In use: {name}, on {in_use}" if active else "No model loaded")
 
     def _selected(self) -> ModelSpec | None:
         sel = self.tree.selection()
@@ -108,8 +112,8 @@ class ModelsWindow:
     def _describe(self) -> None:
         spec = self._selected()
         if spec:
-            backend = BACKENDS[spec.backend].label
-            self.notes.configure(text=f"{spec.name}, runs on {backend}. {spec.notes}".strip())
+            backend = BACKENDS[placed(spec, self.device).backend].label
+            self.notes.configure(text=f"{spec.name}, runs on {backend} here. {spec.notes}".strip())
 
     def _use(self) -> None:
         spec = self._selected()

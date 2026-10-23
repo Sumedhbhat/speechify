@@ -68,7 +68,8 @@ TRAINERS = {
 def trainer_for(spec: ModelSpec | None) -> Trainer | None:
     if spec is None or not spec.finetune:
         return None
-    return TRAINERS.get(spec.backend)
+    # A Whisper model running on transcribe.cpp trains like the CTranslate2 one.
+    return TRAINERS.get(spec.origin or spec.backend)
 
 
 def version_info(model_dir: Path) -> dict:

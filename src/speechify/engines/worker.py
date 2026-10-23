@@ -7,7 +7,7 @@ prints goes to stderr instead):
 
     worker -> app   {"event": "ready", "device": ..., "load_s": ...}   (or {"event": "error", ...})
     app -> worker   {"samples": N, "prompt": "...", "score": false}\\n  then N float32 samples (raw bytes)
-    worker -> app   {"text": "...", "ms": 123, "logprob": null}   (or {"error": "..."})
+    worker -> app   {"text": "...", "ms": 123, "logprob": null, "device": ...}   (or {"error": "..."})
 
 "score": true asks for the mean token log-probability as well (teacher
 labels); it's null when the backend doesn't expose one.
@@ -96,8 +96,9 @@ def main() -> None:
                 text, logprob = engine.transcribe_scored(audio, request.get("prompt"))
             else:
                 text = engine.transcribe(audio, request.get("prompt"))
+            # "device" too: GgmlEngine may have moved to the CPU during this run.
             send({"text": (text or "").strip(), "ms": round((time.perf_counter() - t0) * 1000),
-                  "logprob": logprob})
+                  "logprob": logprob, "device": getattr(engine, "device", "?")})
         except Exception as exc:
             traceback.print_exc()
             send({"error": f"{type(exc).__name__}: {exc}"})

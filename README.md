@@ -1,8 +1,9 @@
 # speechify
 
 Hold a key, talk, let go, and the text is pasted wherever your cursor is. It
-runs locally on Windows, Linux and macOS, on your NVIDIA GPU if you have one,
-lets you pick from 14 speech models, and gets better as you correct it.
+runs locally on Windows, Linux and macOS, on whatever GPU the machine has
+(NVIDIA, AMD, Intel or Apple Silicon), lets you pick from 14 speech models,
+and gets better as you correct it.
 
 ## Install
 
@@ -53,12 +54,13 @@ through a virtual keyboard. That needs your user in the `input` group. The
 first start offers to set it up, asking for your password, and then carries
 on; from the next login it's permanent. On X11 nothing extra is needed.
 
-Without an NVIDIA GPU (every Mac, and many Linux PCs), the first start
-picks NVIDIA Parakeet TDT 0.6B v3 instead of Whisper, because it's the fastest
-accurate model on a CPU. It runs with int8 weights there: a 0.7 GB download
-instead of 2.5 GB, and nearly twice as fast at the same accuracy. Models are
-installed with their CPU-only packages, which are a fraction of the size.
-Linux PCs with the NVIDIA driver get the same GPU setup as Windows.
+Without an NVIDIA GPU, the first start picks NVIDIA Parakeet TDT 0.6B v3
+instead of Whisper, because it's the fastest accurate model there. On an AMD
+or Intel GPU (built in or separate) it runs through Vulkan, and on Apple
+Silicon through Metal, using [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp),
+the engine Handy uses: a 0.7 GB download. With no usable GPU at all it runs on
+the CPU with int8 weights, also 0.7 GB. Linux PCs with the NVIDIA driver get
+the same CUDA setup as Windows. See [GPUs](#gpus) for what runs where.
 
 To run from a source checkout instead, install
 [uv](https://docs.astral.sh/uv/), then `uv sync` and `start.bat` on Windows, or
@@ -90,25 +92,44 @@ just the ones you can switch to instantly. Pick one and press **Use this
 model**: if it isn't downloaded yet, it's installed first, with progress shown
 in the window. Your choice is saved for next time.
 
-| Model | Accuracy | Speed | VRAM | Languages |
-| --- | --- | --- | --- | --- |
-| IBM Granite Speech 4.1 2B | ★★★★★ | ★★★ | 6 GB | en, fr, de, es, pt, ja |
-| Cohere Transcribe | ★★★★½ | ★★★ | 5 GB | 14 |
-| Qwen3-ASR 1.7B | ★★★★½ | ★★★½ | 5 GB | 52 |
-| NVIDIA Parakeet TDT 0.6B v3 | ★★★★ | ★★★★★ | 2 GB | 25 European |
-| NVIDIA Parakeet TDT 0.6B v2 | ★★★★ | ★★★★★ | 2 GB | English |
-| NVIDIA Canary 1B v2 | ★★★★ | ★★★★ | 3 GB | 25 European |
-| Qwen3-ASR 0.6B | ★★★★ | ★★★★ | 2.5 GB | 52 |
-| Mistral Voxtral Mini 3B | ★★★★ | ★★½ | 9 GB | 8 |
-| Kyutai STT 2.6B | ★★★★ | ★★★ | 6 GB | English |
-| Kyutai STT 1B | ★★★½ | ★★★★ | 3 GB | English, French |
-| **Whisper large-v3-turbo** (default) | ★★★½ | ★★★★ | 2 GB | 99 |
-| Whisper large-v3 | ★★★½ | ★★½ | 4 GB | 99 |
-| Distil-Whisper large-v3 | ★★★ | ★★★★½ | 2 GB | English |
-| Moonshine base | ★★ | ★★★★★ | 1 GB | English |
+| Model | Accuracy | Speed | VRAM | Languages | AMD, Intel, Apple GPUs |
+| --- | --- | --- | --- | --- | --- |
+| IBM Granite Speech 4.1 2B | ★★★★★ | ★★★ | 6 GB | en, fr, de, es, pt, ja | ✓ 2.6 GB |
+| Cohere Transcribe | ★★★★½ | ★★★ | 5 GB | 14 | ✓ 2.4 GB, no login |
+| Qwen3-ASR 1.7B | ★★★★½ | ★★★½ | 5 GB | 52 | ✓ 2.2 GB |
+| NVIDIA Parakeet TDT 0.6B v3 | ★★★★ | ★★★★★ | 2 GB | 25 European | ✓ 0.7 GB (default) |
+| NVIDIA Parakeet TDT 0.6B v2 | ★★★★ | ★★★★★ | 2 GB | English | ✓ 0.7 GB |
+| NVIDIA Canary 1B v2 | ★★★★ | ★★★★ | 3 GB | 25 European | ✓ 1.1 GB |
+| Qwen3-ASR 0.6B | ★★★★ | ★★★★ | 2.5 GB | 52 | ✓ 0.9 GB |
+| Mistral Voxtral Mini 3B | ★★★★ | ★★½ | 9 GB | 8 | ✓ 5 GB |
+| Kyutai STT 2.6B | ★★★★ | ★★★ | 6 GB | English | CPU only |
+| Kyutai STT 1B | ★★★½ | ★★★★ | 3 GB | English, French | CPU only |
+| **Whisper large-v3-turbo** (default with NVIDIA) | ★★★½ | ★★★★ | 2 GB | 99 | ✓ 0.9 GB |
+| Whisper large-v3 | ★★★½ | ★★½ | 4 GB | 99 | ✓ 1.7 GB |
+| Distil-Whisper large-v3 | ★★★ | ★★★★½ | 2 GB | English | CPU only |
+| Moonshine base | ★★ | ★★★★★ | 1 GB | English | ✓ 0.08 GB |
+
+The last column is the transcribe.cpp build used on GPUs other than NVIDIA's
+(see [GPUs](#gpus)), with its download size. VRAM is for the NVIDIA builds; the
+GGUF builds need about their download size in GPU memory, which on a built-in
+GPU is shared with the system's RAM.
 
 How it stays fast:
 
+- **It uses the GPU you have.** NVIDIA GPUs run each model's CUDA build
+  (CTranslate2, ONNX Runtime or PyTorch). Any other GPU runs the same models
+  through transcribe.cpp: Vulkan on AMD and Intel GPUs, built in or separate,
+  and Metal on Apple Silicon. On a Ryzen 5 3500U laptop on mains power,
+  Parakeet v3 on its built-in Radeon Vega 8 transcribes 5 s of speech in
+  0.55 s and 32 s in 2.2 s, against 1.1 s and 7.7 s on the same laptop's CPU,
+  and loads in 1.3 s instead of 4.9 s, with the same text. (On battery that
+  laptop holds its GPU at its lowest clock, and the two come out about even.)
+- **A GPU problem never costs a dictation.** If Vulkan or Metal won't start,
+  or a transcription on the GPU fails, Speechify switches that model to the
+  CPU and says so in the console; if the GPU driver takes the model's process
+  down, it's restarted on the CPU and the dictation is transcribed again. The
+  model window and `speechify selftest --engine-only` show the device actually
+  in use.
 - **Only the selected model is loaded.** It runs in a separate worker process
   and stays loaded between dictations. Switching stops the old worker before
   starting the new one, so two models never compete for GPU memory. A
@@ -123,6 +144,9 @@ How it stays fast:
   mode, which skips Hugging Face's version checks.
 - Packages for these environments are only installed if they were released at
   least 14 days ago, the same rule as the repo's Dependabot setup.
+  transcribe.cpp is pinned to an exact version with its file hashes, and each
+  GGUF model to a Hugging Face revision whose SHA-256 is checked after the
+  download.
 
 All models benefit from the auto-fix rules. Whisper models also use your
 learned vocabulary as hints and can be fine-tuned on your recordings. Cohere
@@ -134,6 +158,22 @@ NVIDIA NeMo or vLLM, which don't run on Windows or macOS.
 
 The ratings assume an NVIDIA GPU. On a CPU, everything is slower, Parakeet and
 Moonshine the least; the LLM-based models can take several seconds.
+
+### GPUs
+
+`device = "auto"` in `config.toml` (the default) picks one of these:
+
+| Machine | `device` | Models with a GGUF build | Others |
+| --- | --- | --- | --- |
+| NVIDIA GPU (Windows, or Linux with the NVIDIA driver) | `cuda` | their CUDA build | their CUDA build |
+| AMD or Intel GPU, or another Vulkan GPU | `vulkan` | transcribe.cpp on Vulkan | CPU |
+| Apple Silicon Mac | `metal` | transcribe.cpp on Metal | CPU |
+| No GPU, or an Intel Mac | `cpu` | their own CPU build (int8 where there is one) | CPU |
+
+Set `device` to one of those names to choose yourself. On Linux, Vulkan needs
+your GPU's Mesa driver (`mesa-vulkan-drivers` on Ubuntu, usually installed
+already). Whether transcribe.cpp's CUDA build would beat the current one on
+NVIDIA GPUs is still open: `speechify bench` times both on your machine.
 
 ## Your recordings
 
@@ -240,6 +280,8 @@ fine-tune on the corrections you've collected, kept only if it scores better.
 ```
 speechify            start dictation
 speechify models     list models; `models use <id>` installs and selects one
+speechify bench      time each engine for a model on this machine (`--cpu`, `--model`)
+speechify selftest --engine-only   install, load and transcribe a test clip
 speechify --version  print the installed version
 speechify history    browse, replay and edit every recording
 speechify export D   copy recordings + text to folder D
@@ -259,6 +301,8 @@ speechify where      print the config and data folder
 - The model is loaded and warmed up once, then stays loaded. With Whisper
   large-v3-turbo each sentence is a single GPU pass of roughly 0.2–0.5 s on an
   RTX card. Parakeet is faster still.
+- On AMD, Intel and Apple GPUs it runs the same engine and model files as
+  Handy (transcribe.cpp, Q8_0 GGUF), so it's at least as fast there.
 - Text is pasted through the clipboard in one go instead of typed one character at a time.
   The clipboard is restored afterwards.
 
@@ -282,6 +326,9 @@ and ship a fix.
 ## Troubleshooting
 
 - **"CUDA unavailable … falling back to CPU"**: update the NVIDIA driver.
+- **"transcribe.cpp: vulkan didn't start … using the CPU instead"**: update the
+  GPU driver (on Linux, install `mesa-vulkan-drivers`). `vulkaninfo --summary`
+  should list your GPU. Set `device = "cpu"` to stop trying the GPU.
 - **Nothing pastes into an admin app**: Windows blocks input from normal apps
   into elevated windows. Run speechify as admin as well.
 - **Wrong mic**: run `speechify devices` and set `input_device`.
