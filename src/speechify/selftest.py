@@ -268,6 +268,7 @@ def run_desktop(model: str, report: Report) -> None:
 
     config.set_value("autocorrect_after", 1)  # one fix is enough for the rule to apply
     cfg = Config.load()
+    cfg.learn_auto = False  # no teacher downloads or training in the middle of a test
     if model:
         cfg.model = model
     spec = resolve(cfg.model, config.data_dir())

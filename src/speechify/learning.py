@@ -10,11 +10,16 @@ When you fix a dictation, three things happen:
    first time. This takes effect on the very next dictation.
 3. The audio and corrected text are saved as a training pair for
    scripts/finetune.py, which LoRA fine-tunes Whisper on your voice.
+
+Recordings you didn't correct get their training text from a bigger
+"teacher" model that re-transcribes them while you're away (see autolearn.py
+and labels.py), never from what was pasted.
 """
 
 from __future__ import annotations
 
 import difflib
+import json
 import re
 import sqlite3
 import string
@@ -40,6 +45,7 @@ CREATE TABLE IF NOT EXISTS samples (
     pasted TEXT NOT NULL,    -- what we typed, after rules / LLM cleanup
     corrected TEXT,          -- what you said it should have been
     excluded INTEGER NOT NULL DEFAULT 0  -- 1 = keep, but don't train on it
+    -- plus the teacher columns in TEACHER_COLUMNS, added by migrate()
 );
 CREATE TABLE IF NOT EXISTS rules (
     wrong TEXT NOT NULL,     -- lowercase, punctuation-stripped
@@ -51,7 +57,39 @@ CREATE TABLE IF NOT EXISTS vocab (
     term TEXT PRIMARY KEY,
     count INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS learn_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL      -- JSON
+);
 """
+
+# Added to `samples` for teacher labels. Nullable, so adding them to an
+# existing database is a cheap metadata change that touches no rows.
+TEACHER_COLUMNS = {
+    "teacher_text": "TEXT",          # the teacher's transcript (kept even if rejected)
+    "teacher_model": "TEXT",         # catalog id of the teacher
+    "teacher_confidence": "REAL",    # 0-1, see labels.judge
+    "teacher_ts": "REAL",            # when it was transcribed; NULL = not yet
+    "teacher_note": "TEXT",          # why it was rejected; NULL = accepted
+}
+
+
+def migrate(db: sqlite3.Connection) -> None:
+    """Bring an existing learning.db up to date. Safe to run every start."""
+    db.executescript(SCHEMA)
+    columns = {row[1] for row in db.execute("PRAGMA table_info(samples)")}
+    missing = [n for n in TEACHER_COLUMNS if n not in columns]
+    if "excluded" not in columns or missing:
+        # sqlite3 doesn't open a transaction for DDL by itself; do it
+        # explicitly so a crash halfway leaves the database as it was.
+        db.execute("BEGIN")
+    with db:
+        if "excluded" not in columns:  # databases created before the history window
+            db.execute("ALTER TABLE samples ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0")
+        for name, kind in TEACHER_COLUMNS.items():
+            if name not in columns:
+                db.execute(f"ALTER TABLE samples ADD COLUMN {name} {kind}")
+        db.execute("CREATE INDEX IF NOT EXISTS samples_teacher ON samples (teacher_ts, ts)")
 
 
 def _strip(token: str) -> str:
@@ -133,7 +171,7 @@ class Sample:
 
     @property
     def text(self) -> str:
-        """The text used for training."""
+        """Your text for it: the correction, or what was pasted."""
         return self.corrected if self.corrected is not None else self.pasted
 
     @property
@@ -148,10 +186,7 @@ class Learner:
         self.autocorrect_after = autocorrect_after
         self._lock = threading.Lock()
         self._db = sqlite3.connect(data_dir / "learning.db", check_same_thread=False)
-        self._db.executescript(SCHEMA)
-        columns = {row[1] for row in self._db.execute("PRAGMA table_info(samples)")}
-        if "excluded" not in columns:  # databases created before the history window
-            self._db.execute("ALTER TABLE samples ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0")
+        migrate(self._db)
         self._reload()
 
     def _reload(self) -> None:
@@ -292,6 +327,43 @@ class Learner:
                     writer.writerow([name, text])
                     n += 1
         return n
+
+    # --- teacher labels (autolearn.py) ----------------------------------------
+
+    def teacher_queue(self, limit: int = 50) -> list[tuple[int, Path]]:
+        """Recordings without a teacher transcript yet, newest first."""
+        rows = self._db.execute(
+            "SELECT id, audio FROM samples WHERE teacher_ts IS NULL AND excluded = 0 "
+            "AND audio IS NOT NULL ORDER BY ts DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [(i, self.audio_dir / name) for i, name in rows]
+
+    def set_teacher(self, sample_id: int, text: str, model: str, confidence: float,
+                    note: str | None) -> None:
+        with self._lock:
+            self._db.execute(
+                "UPDATE samples SET teacher_text = ?, teacher_model = ?, teacher_confidence = ?, "
+                "teacher_ts = ?, teacher_note = ? WHERE id = ?",
+                (text, model, confidence, time.time(), note, sample_id),
+            )
+            self._db.commit()
+
+    def clips(self):
+        from .labels import load_clips
+
+        return load_clips(self._db)
+
+    def get_state(self, key: str, default=None):
+        row = self._db.execute("SELECT value FROM learn_state WHERE key = ?", (key,)).fetchone()
+        return json.loads(row[0]) if row else default
+
+    def set_state(self, key: str, value) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO learn_state VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                (key, json.dumps(value)),
+            )
+            self._db.commit()
 
     # --- management (CLI) ---------------------------------------------------
 

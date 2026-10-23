@@ -150,8 +150,10 @@ files in `audio`, with their text in `learning.db`. The data folder is
 - **exclude** a recording from training (a cough, background TV) without
   deleting it, or **delete** it for good
 
-Every recording that isn't excluded is used for fine-tuning. Edited ones train
-on your text and the rest train on what was pasted. `speechify export <folder>`
+Every recording that isn't excluded can be used for fine-tuning. Edited ones
+train on your text. The rest train on what a bigger "teacher" model heard
+(see [Getting better on its own](#getting-better-on-its-own)), never on what
+was pasted, so the model can't learn its own mistakes. `speechify export <folder>`
 copies them out as a standard Hugging Face audiofolder dataset (WAVs plus
 `metadata.csv`), so you can train other models on the same data.
 
@@ -176,12 +178,55 @@ uv run scripts/finetune.py --apply
 uv reads the training dependencies (PyTorch with CUDA, transformers, PEFT) from
 the top of the script and builds a separate environment for them.
 
-This trains a LoRA adapter on your saved samples and checks it against a
-held-out slice of your audio. It only saves the new model, and with `--apply`
-switches to it, if your word error rate went down. Fine-tuned models also show
-up in the model picker. You'll want at
-least 50 samples; a few hundred is better. Run it every few weeks; each run
-starts again from the base model and trains on all of your recordings.
+This trains a LoRA adapter on your labelled recordings and only saves the new
+model, and with `--apply` switches to it, if it passes both gates described
+below. Fine-tuned models also show up in the model picker. You'll want at
+least 50 labelled recordings; a few hundred is better. Each run starts again
+from the base model and trains on all of them. Speechify also does this by
+itself.
+
+### Getting better on its own
+
+While you're away (no dictation for `idle_minutes`, 5 by default) and the
+computer is on mains power, Speechify:
+
+1. **Labels your recordings with a teacher model.** Granite Speech 4.1 2B, or
+   Qwen3-ASR 1.7B if your GPU is too small for Granite, re-transcribes every
+   recording that doesn't have a teacher transcript yet, newest first, with
+   your learned vocabulary as a hint. Output that looks like a hallucination
+   (empty, a repeated phrase, or too many or too few words for the audio) is
+   rejected. The rest gets a confidence score, and only transcripts scoring at
+   least `teacher_min_confidence` are trained on.
+2. **Retrains the dictation model** after `retrain_after_labels` (300) new
+   labelled recordings, or `retrain_after_days` (7) with at least one. The new
+   model is switched in only if it passes two gates:
+   - on a held-out slice of your recordings it has a lower word error rate
+     than the model you use now. Once you've corrected 20 recordings, the slice
+     is made of those; until then, of confident teacher labels;
+   - on 50 LibriSpeech test-clean clips (downloaded once, about 10 MB) it's no
+     more than `max_regression_wer` (0.5) points worse than the base model.
+
+Each recording's training text is your correction if you made one, otherwise
+the teacher's transcript if it's confident, otherwise nothing.
+
+Dictation never waits for any of this. If your GPU has room for both models,
+the teacher runs next to the dictation model and pauses while you talk.
+Otherwise the dictation model is unloaded while the teacher or training runs,
+and pressing the dictation key kills them instantly and reloads it while you
+speak. Without an NVIDIA GPU the teacher doesn't run unless you set
+`teacher_on_cpu = true`, and training needs one.
+
+```
+speechify learn status       labelled / pending / skipped, last runs, gate results
+speechify learn run          label and retrain now, without waiting (quit the app first)
+speechify models --rollback  go back to the previous version
+```
+
+The model window (Ctrl+Alt+M) has a **Roll back retrained model** button
+that does the same as `--rollback` and switches straight away. The last
+`keep_versions` (3) retrained versions are kept; older ones are deleted.
+Set `learn_auto = false` to turn all of this off, or `teacher = "off"` to
+stop just the teacher.
 
 ### Why not reinforcement learning after every fix?
 
@@ -199,6 +244,8 @@ speechify --version  print the installed version
 speechify history    browse, replay and edit every recording
 speechify export D   copy recordings + text to folder D
 speechify stats      counts of samples, rules, vocabulary
+speechify learn      teacher labels and retraining: `learn status`, `learn run`
+speechify models --rollback   go back to the previous retrained model
 speechify rules      list learned fixes (* = applied automatically)
 speechify forget X   delete a bad rule or vocabulary term
 speechify devices    list microphones (set input_device in config)

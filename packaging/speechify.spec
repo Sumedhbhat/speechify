@@ -26,6 +26,10 @@ datas = [
 ]
 # Copied out to each model environment at runtime, so they're needed as files.
 datas += [(str(src / "engines" / f), "speechify/engines") for f in ("__init__.py", "backends.py", "worker.py")]
+# Automatic retraining runs scripts/finetune.py in its own environment, with
+# copies of these (src/speechify/students.py stages them).
+datas += [(str(src / f), "speechify") for f in ("__init__.py", "audio.py", "config.py", "labels.py", "metrics.py")]
+datas += [(str(root / "scripts" / "finetune.py"), "speechify/_scripts")]
 binaries = [(uv, ".")]
 runtime_hooks = []
 if sys.platform.startswith("linux"):

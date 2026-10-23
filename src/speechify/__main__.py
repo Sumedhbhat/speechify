@@ -28,6 +28,12 @@ def main() -> None:
     models = sub.add_parser("models", help="list speech models, or install / switch to one")
     models.add_argument("action", nargs="?", choices=["list", "install", "use"], default="list")
     models.add_argument("model", nargs="?", help="model id from `speechify models`")
+    models.add_argument("--rollback", action="store_true",
+                        help="go back to the version before the current retrained model")
+    learn = sub.add_parser("learn", help="teacher labels and automatic retraining")
+    learn.add_argument("action", nargs="?", choices=["status", "run"], default="status",
+                       help="status (default), or run: label and retrain now, without waiting to be idle")
+    learn.add_argument("--retrain", action="store_true", help="with run: retrain even if it isn't due")
     selftest = sub.add_parser("selftest", help="drive the real app end to end and report what works")
     selftest.add_argument("--model", help="model id to test (default: the configured one)")
     selftest.add_argument("--engine-only", action="store_true",
@@ -56,7 +62,13 @@ def main() -> None:
 
     cfg = Config.load()
     if args.cmd == "models":
-        models_command(cfg, args.action, args.model)
+        if args.rollback:
+            rollback_command(cfg)
+        else:
+            models_command(cfg, args.action, args.model)
+        return
+    if args.cmd == "learn":
+        learn_command(cfg, args.action, args.retrain)
         return
     if args.cmd in ("stats", "rules", "forget", "history", "export"):
         from .learning import Learner
@@ -110,6 +122,41 @@ def _log_to_file_without_terminal() -> None:
     os.dup2(stream.fileno(), 1)
     os.dup2(stream.fileno(), 2)
     sys.stdout = sys.stderr = stream
+
+
+def rollback_command(cfg: Config) -> None:
+    from . import versions
+    from .learning import Learner
+
+    learner = Learner(data_dir(), cfg.autocorrect_after)
+    try:
+        target, description = versions.rollback(learner, cfg)
+    except versions.RollbackError as exc:
+        raise SystemExit(str(exc)) from None
+    print(f"Rolled back to {description}. A running Speechify picks it up on restart, "
+          "or use Roll back in the model window (Ctrl+Alt+M) to switch live.")
+
+
+def learn_command(cfg: Config, action: str, force_retrain: bool) -> None:
+    from . import autolearn
+    from .engines.host import EngineHost
+    from .learning import Learner
+
+    learner = Learner(data_dir(), cfg.autocorrect_after)
+    if action == "status":
+        print(autolearn.status_text(cfg, learner))
+        return
+    # No dictation model is loaded here, so nothing needs unloading or reloading.
+    auto = autolearn.AutoLearner(cfg, learner, EngineHost())
+    if learner.teacher_queue(1):
+        print(f"Teacher pass: {auto.teacher_pass(check_idle=False)}")
+        if learner.teacher_queue(1) and not auto.job:  # it only installed the teacher
+            print(f"Teacher pass: {auto.teacher_pass(check_idle=False)}")
+    due, why = auto.retrain_status()
+    if due or force_retrain:
+        print(f"Retraining ({why}): {auto.retrain(check_idle=False)}")
+    else:
+        print(f"Not retraining: {why}. Pass --retrain to retrain anyway.")
 
 
 def models_command(cfg: Config, action: str, model: str | None) -> None:

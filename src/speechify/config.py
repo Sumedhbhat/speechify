@@ -54,6 +54,24 @@ keep_all_audio = true
 # Adds latency; leave empty to disable.
 llm_url = ""               # e.g. "http://localhost:11434/v1/chat/completions"
 llm_model = ""             # e.g. "qwen2.5:3b-instruct"
+
+# --- Getting better on its own ------------------------------------------------
+# While you're away and the computer is plugged in, a bigger "teacher" model
+# re-transcribes your saved recordings to make training labels, and the
+# dictation model is retrained on them now and then. A new version is only
+# switched in if it beats the current one. `speechify learn status` shows
+# progress; `speechify models --rollback` undoes a switch.
+learn_auto = true
+# "auto" = Granite Speech 4.1 2B, or Qwen3-ASR 1.7B when VRAM is short.
+# Any model id from `speechify models` works, or "off".
+teacher = "auto"
+idle_minutes = 5           # no dictation for this long counts as idle
+teacher_on_cpu = false     # without an NVIDIA GPU, only run the teacher if true
+teacher_min_confidence = 0.7  # 0-1; less confident teacher labels aren't trained on
+retrain_after_labels = 300 # retrain after this many new labelled recordings...
+retrain_after_days = 7     # ...or this many days, whichever comes first
+max_regression_wer = 0.5   # WER points a new model may lose on LibriSpeech vs the base
+keep_versions = 3          # trained versions kept on disk
 """
 
 
@@ -129,6 +147,15 @@ class Config:
     keep_all_audio: bool = True
     llm_url: str = ""
     llm_model: str = ""
+    learn_auto: bool = True
+    teacher: str = "auto"
+    idle_minutes: float = 5
+    teacher_on_cpu: bool = False
+    teacher_min_confidence: float = 0.7
+    retrain_after_labels: int = 300
+    retrain_after_days: float = 7
+    max_regression_wer: float = 0.5
+    keep_versions: int = 3
 
     @classmethod
     def load(cls) -> Config:
