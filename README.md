@@ -119,10 +119,11 @@ How it stays fast:
 - **It uses the GPU you have.** NVIDIA GPUs run each model's CUDA build
   (CTranslate2, ONNX Runtime or PyTorch). Any other GPU runs the same models
   through transcribe.cpp: Vulkan on AMD and Intel GPUs, built in or separate,
-  and Metal on Apple Silicon. On a Ryzen 5 3500U laptop, Parakeet v3 on its
-  built-in Radeon Vega 8 transcribes 5 s of speech in 0.5 s and 30 s in 2.1 s,
-  against 1.1 s and 7.4 s on the same laptop's CPU, and loads in 1.3 s
-  instead of 4.8 s (same text, median of 5 runs).
+  and Metal on Apple Silicon. On a Ryzen 5 3500U laptop on mains power,
+  Parakeet v3 on its built-in Radeon Vega 8 transcribes 5 s of speech in
+  0.55 s and 32 s in 2.2 s, against 1.1 s and 7.7 s on the same laptop's CPU,
+  and loads in 1.3 s instead of 4.9 s, with the same text. (On battery that
+  laptop holds its GPU at its lowest clock, and the two come out about even.)
 - **A GPU problem never costs a dictation.** If Vulkan or Metal won't start,
   or a transcription on the GPU fails, Speechify switches that model to the
   CPU and says so in the console; if the GPU driver takes the model's process

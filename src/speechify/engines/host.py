@@ -25,7 +25,7 @@ from typing import Callable
 import numpy as np
 
 from ..config import data_dir, has_cuda
-from .catalog import BACKENDS, ModelSpec, placed
+from .catalog import BACKENDS, GGML_DEVICES, ModelSpec, placed
 
 PYTHON = "3.12"
 MIN_PACKAGE_AGE = "14 days"  # same rule as Dependabot's cooldown: never install brand-new releases
@@ -173,6 +173,10 @@ def _worker_env(spec: ModelSpec, opts: dict, download_only: bool, offline: bool)
     opts = {**opts, "models_dir": str(_root() / "models")}
     if spec.gguf is not None and spec.backend == "ggml":
         opts["gguf"] = dataclasses.asdict(spec.gguf)
+    elif opts.get("device") in GGML_DEVICES:
+        # A model without a transcribe.cpp build, on an AMD, Intel or Apple
+        # GPU: its own backend only knows CUDA and the CPU.
+        opts.update(device="cpu", compute_type="int8")
     env["SPEECHIFY_WORKER"] = json.dumps({
         "backend": spec.backend, "repo": spec.repo, "download_only": download_only, "opts": opts,
     })

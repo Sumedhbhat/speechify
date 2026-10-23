@@ -194,6 +194,18 @@ def test_install_passes_hashes_in_a_requirements_file(monkeypatch, tmp_path):
     assert host.status(spec, "vulkan") == "ready" and host.status(spec, "cpu") == "not installed"
 
 
+def test_models_without_a_gguf_get_the_cpu_on_vulkan(monkeypatch, tmp_path):
+    monkeypatch.setenv("SPEECHIFY_ENGINES", str(tmp_path))
+    monkeypatch.setattr(host, "_shim", lambda: tmp_path)
+    for model in ("distil-whisper-large-v3", "kyutai-stt-1b"):
+        env = host._worker_env(catalog.MODELS[model], {"device": "metal", "compute_type": "float16"}, False, True)
+        opts = json.loads(env["SPEECHIFY_WORKER"])["opts"]
+        assert (opts["device"], opts["compute_type"]) == ("cpu", "int8") and "gguf" not in opts
+    ggml = catalog.placed(catalog.MODELS["moonshine-base"], "metal")
+    opts = json.loads(host._worker_env(ggml, {"device": "metal"}, False, True)["SPEECHIFY_WORKER"])["opts"]
+    assert opts["device"] == "metal" and opts["gguf"]["file"] == "moonshine-base-Q8_0.gguf"
+
+
 def test_fetch_gguf_checks_the_hash(monkeypatch, tmp_path):
     payload = b"GGUF fake weights"
     calls = []
@@ -376,7 +388,8 @@ def crashy(tmp_path, monkeypatch):
 def test_worker_that_dies_loading_on_the_gpu_restarts_on_the_cpu(crashy, capsys):
     engine = host.EngineHost()
     try:
-        info = engine.start(crashy("load"), {"device": "vulkan"})
+        # Any GPU device: falls_back_to_cpu is patched to allow the fake engine.
+        info = engine.start(crashy("load"), {"device": "cuda"})
         assert info["device"] == "cpu" and engine.opts["device"] == "cpu"
         assert "trying the CPU instead" in capsys.readouterr().err
     finally:
@@ -386,7 +399,7 @@ def test_worker_that_dies_loading_on_the_gpu_restarts_on_the_cpu(crashy, capsys)
 def test_worker_that_dies_mid_dictation_reruns_it_on_the_cpu(crashy, capsys):
     engine = host.EngineHost()
     try:
-        assert engine.start(crashy("run"), {"device": "vulkan"})["device"] == "vulkan"
+        assert engine.start(crashy("run"), {"device": "cuda"})["device"] == "cuda"
         text, _ = engine.transcribe(np.zeros(20, np.float32), None)
         assert text == "20 samples on cpu" and engine.info["device"] == "cpu"
         assert "reloading it on the CPU" in capsys.readouterr().err
