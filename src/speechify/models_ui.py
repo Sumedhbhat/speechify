@@ -113,7 +113,8 @@ class ModelsWindow:
         spec = self._selected()
         if spec:
             backend = BACKENDS[placed(spec, self.device).backend].label
-            self.notes.configure(text=f"{spec.name}, runs on {backend} here. {spec.notes}".strip())
+            plain = "" if spec.punctuates else " Writes lowercase without punctuation."
+            self.notes.configure(text=f"{spec.name}, runs on {backend} here.{plain} {spec.notes}".strip())
 
     def _use(self) -> None:
         spec = self._selected()

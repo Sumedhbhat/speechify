@@ -31,8 +31,13 @@ from pathlib import Path
 
 import numpy as np
 
+from .engines.backends import WHISPER_STYLE
+
 MAX_SPAN_WORDS = 4  # longer edits are rewrites, not mis-hearings
 MAX_PROMPT_CHARS = 600  # Whisper's prompt window is ~224 tokens
+# The glossary's share: Whisper gets WHISPER_STYLE in front of it, and the
+# whole prompt has to fit, or faster-whisper cuts the start off.
+MAX_GLOSSARY_CHARS = MAX_PROMPT_CHARS - len(WHISPER_STYLE) - len("Glossary: .") - 1
 
 _PUNCT = string.punctuation + "“”‘’…"
 
@@ -200,7 +205,7 @@ class Learner:
         prompt, used = "", []
         for term in terms:
             candidate = ", ".join(used + [term])
-            if len(candidate) > MAX_PROMPT_CHARS:
+            if len(candidate) > MAX_GLOSSARY_CHARS:
                 break
             used.append(term)
             prompt = candidate

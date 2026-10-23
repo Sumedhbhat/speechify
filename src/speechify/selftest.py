@@ -34,7 +34,15 @@ REFERENCE = (
     "He hoped there would be stew for dinner, turnips and carrots and bruised potatoes "
     "and fat mutton pieces to be ladled out in thick, peppered, flour-fattened sauce."
 )
+# Checks capital letters and punctuation; see selftest_data/README.md.
+FORMAT_SAMPLE = SAMPLE.with_name("librispeech-quilter.wav")
+FORMAT_REFERENCE = "Nor is Mr. Quilter's manner less interesting than his matter."
 MAX_WER = 0.15
+# Formatting F1 (metrics.formatting) over both clips. Their references have
+# 4 capitals and 5 punctuation marks; leaving out a comma or two is a style
+# choice, an all-lowercase, unpunctuated transcript scores 0.
+MIN_CASE = 0.75
+MIN_PUNCT = 0.5
 FIX_WORD = "Stoo"  # what the test "corrects" a word to; no model will produce it by itself
 
 
@@ -238,18 +246,39 @@ def run_engine_only(model: str, device: str, report: Report) -> None:
         s["detail"] = f"device {info.get('device')}, {info.get('load_s')}s"
     if not engine.ready.is_set():
         return  # the failed step above says why; transcribing would only time out
+    texts = {}
     try:
-        for attempt in ("first", "warm"):
+        for attempt, clip, reference in (("first", audio, REFERENCE), ("warm", audio, REFERENCE),
+                                         ("formatting clip", load_wav(FORMAT_SAMPLE), FORMAT_REFERENCE)):
             with report.step(f"transcribe ({attempt})") as s:
-                text, ms = engine.transcribe(audio, None)
-                score = wer([REFERENCE], [text])
-                report.facts[f"{attempt}_transcribe_ms"] = ms
-                report.facts["wer"] = f"{score:.1%}"
+                text, ms = engine.transcribe(clip, None)
+                texts[reference] = text
+                score = wer([reference], [text])
+                report.facts[f"{attempt.split()[0]}_transcribe_ms"] = ms
+                if reference == REFERENCE:
+                    report.facts["wer"] = f"{score:.1%}"
                 report.facts["device"] = engine.info.get("device")  # changes if it fell back to the CPU
-                s["detail"] = f"{ms} ms for {audio.size / 16000:.1f}s of audio, WER {score:.1%}: {text}"
+                s["detail"] = f"{ms} ms for {clip.size / 16000:.1f}s of audio, WER {score:.1%}: {text}"
                 assert score <= MAX_WER, f"WER {score:.1%} is above {MAX_WER:.0%}"
     finally:
         engine.stop()
+    if len(texts) == 2:
+        with report.step("capitals and punctuation") as s:
+            s["detail"] = check_formatting(spec, list(texts), list(texts.values()), report)
+
+
+def check_formatting(spec, refs: list[str], texts: list[str], report: Report) -> str:
+    """Score capitals and punctuation, and fail if a model that should
+    format its output didn't (spec.punctuates)."""
+    from .metrics import formatting
+
+    score = formatting(refs, texts)
+    report.facts["formatting"] = str(score)
+    if not spec.punctuates:
+        return f"{score} (not checked: {spec.name} doesn't punctuate)"
+    assert score.case >= MIN_CASE and score.punct >= MIN_PUNCT, (
+        f"{score}; needs capitals {MIN_CASE:.0%} and punctuation {MIN_PUNCT:.0%}")
+    return str(score)
 
 
 def run_desktop(model: str, report: Report) -> None:
@@ -408,6 +437,13 @@ def run_desktop(model: str, report: Report) -> None:
                 report.screenshot(s, "pasted")
                 assert text == pasted[0].strip(), f"Notepad has {text!r}, app pasted {pasted[0]!r}"
                 assert score <= MAX_WER, f"WER {score:.1%} is above {MAX_WER:.0%}"
+
+            with report.step("the pasted text has capitals and punctuation") as s:
+                # The model directly, the way the dictation above was run:
+                # one dictation is too short a sample to judge this by.
+                quilter = app.engine.transcribe(load_wav(FORMAT_SAMPLE), app.learner.prompt() or None)[0]
+                s["detail"] = check_formatting(app.engine.spec, [REFERENCE, FORMAT_REFERENCE],
+                                               [text, quilter], report)
 
             with report.step("overlay never takes focus from the app being dictated into") as s:
                 assert focus_kept and all(focus_kept), "the overlay became the foreground window"

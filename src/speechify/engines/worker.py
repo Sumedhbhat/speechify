@@ -39,6 +39,47 @@ def _claim_stdout():
     return proto
 
 
+def tidy(text: str) -> str:
+    """Two formatting fixes for models that sometimes miss them, applied to
+    sentences of three or more words. Shorter fragments ("kubectl", "next
+    line") stay exactly as the model wrote them.
+
+    - A capital letter at the start. Parakeet and Canary punctuate, but begin
+      sentences with "mister Quilter" (their way of writing "Mr."). A first
+      word with a capital inside ("iPhone", "macOS") is left alone.
+    - A full stop at the end, if it ends in a letter or digit. Parakeet v2,
+      Distil-Whisper and Cohere sometimes leave it out.
+    """
+    words = text.split()
+    if len(words) < 3:
+        return text
+    if text[0].islower() and words[0].islower():
+        text = text[0].upper() + text[1:]
+    if text[-1].isalnum():
+        text += "."
+    return text
+
+
+def warmup_audio(path: str | None, seconds: float = 3.0):
+    """The first `seconds` of the self-test clip (speech), or silence if it's missing.
+
+    Speech, not silence: Whisper's VAD filter drops silence before the
+    model sees it, so warming up on silence never ran the encoder and the
+    first dictation paid for the warm-up instead.
+    """
+    import wave
+
+    import numpy as np
+
+    try:
+        with wave.open(path, "rb") as f:
+            pcm = np.frombuffer(f.readframes(int(f.getframerate() * seconds)), dtype=np.int16)
+        return pcm.astype(np.float32) / 32768.0
+    except Exception as exc:
+        print(f"Warm-up clip unavailable ({exc}); warming up on silence.", file=sys.stderr)
+        return np.zeros(16_000, dtype=np.float32)
+
+
 def main() -> None:
     proto = _claim_stdout()
     # Passed via the environment: JSON with Windows paths doesn't survive argv quoting.
@@ -69,7 +110,7 @@ def main() -> None:
         # The first call pays for kernel setup and caches; do it before the
         # user's first dictation rather than during it.
         try:
-            engine.transcribe(np.zeros(16_000, dtype=np.float32), None)
+            engine.transcribe(warmup_audio(cfg["opts"].get("warmup_wav")), None)
         except Exception:
             traceback.print_exc()
         send({"event": "ready", "device": getattr(engine, "device", "?"),
@@ -97,7 +138,7 @@ def main() -> None:
             else:
                 text = engine.transcribe(audio, request.get("prompt"))
             # "device" too: GgmlEngine may have moved to the CPU during this run.
-            send({"text": (text or "").strip(), "ms": round((time.perf_counter() - t0) * 1000),
+            send({"text": tidy((text or "").strip()), "ms": round((time.perf_counter() - t0) * 1000),
                   "logprob": logprob, "device": getattr(engine, "device", "?")})
         except Exception as exc:
             traceback.print_exc()

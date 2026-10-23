@@ -63,6 +63,11 @@ class ModelSpec:
     prompt: bool = False
     finetune: bool = False
     gated: bool = False
+    # Whether its transcripts come with capital letters and punctuation. The
+    # self-test fails a model that should and doesn't (metrics.formatting);
+    # the model picker says so for one that doesn't. Every model in the
+    # catalog does as of 2026-10 (Kyutai and Moonshine included).
+    punctuates: bool = True
     notes: str = ""
     # The same model for transcribe.cpp, used on GPUs other than NVIDIA's (see placed()).
     gguf: Gguf | None = None

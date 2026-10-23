@@ -67,6 +67,22 @@ def keywords(prompt: str | None) -> str:
     return text
 
 
+# Whisper copies the style of the text before it. With no prompt, it picks
+# one for itself, and for some clips that's all lowercase without
+# punctuation ("nor is mr quilter's manner less interesting than his
+# matter"), the style of part of its training data. Any punctuated prompt
+# fixes that, so Whisper always gets one: this sentence, then the learned
+# glossary. English only, so it can't pull other languages towards English.
+WHISPER_STYLE = "Hello, how are you? I'm fine."
+
+
+def whisper_prompt(prompt: str | None, language: str | None) -> str | None:
+    """The initial prompt for Whisper: WHISPER_STYLE, then Learner.prompt()."""
+    if language != "en":
+        return prompt or None
+    return f"{WHISPER_STYLE} {prompt}" if prompt else WHISPER_STYLE
+
+
 class Engine:
     """opts: device ("cuda"/"cpu"), compute_type, language ("" = auto), beam_size."""
 
@@ -120,7 +136,7 @@ class WhisperEngine(Engine):
             audio,
             language=self.language,
             beam_size=self.beam_size,
-            initial_prompt=prompt or None,
+            initial_prompt=whisper_prompt(prompt, self.language),
             condition_on_previous_text=False,
             without_timestamps=True,
             vad_filter=True,
@@ -520,11 +536,15 @@ class GgmlEngine(Engine):
 
     def _run(self, audio, prompt):
         kwargs = {"language": self.language if self.language in self.languages else None}
+        if self.model.supports("pnc"):
+            kwargs["pnc"] = "on"  # capitals and punctuation, on models where it's a switch
         words = [w.strip() for w in keywords(prompt).split(",") if w.strip()]
-        if words and self.model.supports("vocabulary"):
+        if self.model.supports("initial_prompt"):  # Whisper: see WHISPER_STYLE
+            initial = whisper_prompt(prompt, self.language)
+            if initial:
+                kwargs["family"] = self.tc.WhisperRunOptions(initial_prompt=initial)
+        elif words and self.model.supports("vocabulary"):
             kwargs["vocabulary"] = words
-        elif prompt and self.model.supports("initial_prompt"):
-            kwargs["family"] = self.tc.WhisperRunOptions(initial_prompt=prompt)
         elif prompt and self.model.supports("context_prompt"):
             kwargs["prompt"] = prompt
         pieces = split_long(audio, self.max_samples) if self.max_samples else [audio]

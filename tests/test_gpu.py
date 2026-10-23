@@ -341,7 +341,8 @@ def test_ggml_cpu_device_never_touches_the_gpu(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("features,expect", [
     ({"vocabulary"}, ("vocabulary", ["Speechify", "Sumedh"])),
-    ({"initial_prompt"}, ("family", ("whisper", "Glossary: Speechify, Sumedh."))),
+    ({"initial_prompt"}, ("family", ("whisper", f"{backends.WHISPER_STYLE} Glossary: Speechify, Sumedh."))),
+    ({"initial_prompt", "vocabulary"}, ("family", ("whisper", f"{backends.WHISPER_STYLE} Glossary: Speechify, Sumedh."))),
     ({"context_prompt"}, ("prompt", "Glossary: Speechify, Sumedh.")),
     (set(), None),
 ])
@@ -352,6 +353,21 @@ def test_ggml_vocabulary_hints(monkeypatch, tmp_path, features, expect):
     if expect:
         assert kwargs[expect[0]] == expect[1]
     assert not ({"vocabulary", "family", "prompt"} - ({expect[0]} if expect else set())) & set(kwargs)
+
+
+def test_ggml_whisper_gets_the_style_prompt_without_a_glossary(monkeypatch, tmp_path):
+    engine, tc = ggml_engine(monkeypatch, tmp_path, features={"initial_prompt"})
+    engine.transcribe(np.zeros(5, np.float32), None)
+    assert tc.runs[-1][2]["family"] == ("whisper", backends.WHISPER_STYLE)
+
+
+def test_ggml_turns_punctuation_on_where_it_is_a_switch(monkeypatch, tmp_path):
+    engine, tc = ggml_engine(monkeypatch, tmp_path, features={"pnc"})
+    engine.transcribe(np.zeros(5, np.float32), None)
+    assert tc.runs[-1][2]["pnc"] == "on"
+    engine, tc = ggml_engine(monkeypatch, tmp_path, features=set())
+    engine.transcribe(np.zeros(5, np.float32), None)
+    assert "pnc" not in tc.runs[-1][2]
 
 
 def test_ggml_splits_audio_longer_than_the_model_takes(monkeypatch, tmp_path):
@@ -401,7 +417,7 @@ def test_worker_that_dies_mid_dictation_reruns_it_on_the_cpu(crashy, capsys):
     try:
         assert engine.start(crashy("run"), {"device": "cuda"})["device"] == "cuda"
         text, _ = engine.transcribe(np.zeros(20, np.float32), None)
-        assert text == "20 samples on cpu" and engine.info["device"] == "cpu"
+        assert text == "20 samples on cpu."  # worker.tidy adds the full stop and engine.info["device"] == "cpu"
         assert "reloading it on the CPU" in capsys.readouterr().err
     finally:
         engine.stop()
