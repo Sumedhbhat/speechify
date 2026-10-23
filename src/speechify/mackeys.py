@@ -3,15 +3,20 @@
 pynput's listener looks up the keyboard layout from its own thread, which
 newer macOS versions only allow on the main thread, and it reports letters as
 Mac key codes the hotkey matcher can't use. This reads physical key codes and
-names them with keymaps.MAC instead. Listening needs Input Monitoring
-permission and typing needs Accessibility; see permission_problem().
+names them with keymaps.MAC instead.
+
+Both listening and typing need only Accessibility, the one permission the app
+asks for. A listen-only tap would need Input Monitoring as well, so the tap is
+a regular one (like Handy's) that passes every event through untouched.
 """
 
 from __future__ import annotations
 
+import queue
 import threading
 from typing import Callable
 
+import ApplicationServices
 import Quartz
 
 from . import keymaps
@@ -41,36 +46,34 @@ def permission_problem(prompt: bool = True) -> str | None:
     With prompt=True, macOS shows its own permission dialog the first time and
     adds Speechify to the list in System Settings.
     """
-    missing = []
-    preflight_listen = getattr(Quartz, "CGPreflightListenEventAccess", None)
-    if preflight_listen and not preflight_listen():
-        missing.append("Input Monitoring")
-        if prompt:
-            Quartz.CGRequestListenEventAccess()
-    preflight_post = getattr(Quartz, "CGPreflightPostEventAccess", None)
-    if preflight_post and not preflight_post():
-        missing.append("Accessibility")
-        if prompt:
-            Quartz.CGRequestPostEventAccess()
-    if not missing:
+    options = {ApplicationServices.kAXTrustedCheckOptionPrompt: prompt}
+    if ApplicationServices.AXIsProcessTrustedWithOptions(options):
         return None
     return (
-        f"Allow Speechify under System Settings > Privacy & Security > {' and '.join(missing)}, "
+        "Allow Speechify under System Settings > Privacy & Security > Accessibility, "
         "then restart it. (If you started it from a terminal, allow the terminal app instead.)"
     )
 
 
 class Listener:
-    """Calls on_press / on_release(name, vk, char) for every key, like pynput."""
+    """Calls on_press / on_release(name, vk, char) for every key, like pynput.
+
+    The tap holds each key event until its callback returns, so the callback
+    only queues the key and the handlers run on a thread of their own: opening
+    the microphone can't make typing lag.
+    """
 
     def __init__(self, on_press: Callable, on_release: Callable):
         self.on_press, self.on_release = on_press, on_release
         self._tap = None
         self._loop = None
         self._ready = threading.Event()
+        self._events: queue.Queue = queue.Queue()
         self._thread = threading.Thread(target=self._run, daemon=True, name="quartz-keys")
+        self._handler = threading.Thread(target=self._handle, daemon=True, name="quartz-keys-handler")
 
     def start(self) -> None:
+        self._handler.start()
         self._thread.start()
         self._ready.wait(5)
         if self._tap is None:
@@ -86,9 +89,9 @@ class Listener:
                 | Quartz.CGEventMaskBit(Quartz.kCGEventFlagsChanged))
         self._tap = Quartz.CGEventTapCreate(
             Quartz.kCGSessionEventTap, Quartz.kCGHeadInsertEventTap,
-            Quartz.kCGEventTapOptionListenOnly, mask, self._callback, None,
+            Quartz.kCGEventTapOptionDefault, mask, self._callback, None,
         )
-        if self._tap is None:  # no Input Monitoring permission
+        if self._tap is None:  # no Accessibility permission
             self._ready.set()
             return
         source = Quartz.CFMachPortCreateRunLoopSource(None, self._tap, 0)
@@ -97,6 +100,14 @@ class Listener:
         Quartz.CGEventTapEnable(self._tap, True)
         self._ready.set()
         Quartz.CFRunLoopRun()
+
+    def _handle(self) -> None:
+        while True:
+            handler, name, char = self._events.get()
+            try:
+                handler(name, None, char)
+            except Exception as exc:
+                print(f"key handler failed: {exc}")
 
     def _callback(self, proxy, kind, event, refcon):
         try:
@@ -109,18 +120,18 @@ class Listener:
                 return event
             if kind == Quartz.kCGEventKeyDown:
                 if not Quartz.CGEventGetIntegerValueField(event, Quartz.kCGKeyboardEventAutorepeat):
-                    self.on_press(name, None, char)
+                    self._events.put((self.on_press, name, char))
             elif kind == Quartz.kCGEventKeyUp:
-                self.on_release(name, None, char)
+                self._events.put((self.on_release, name, char))
             elif kind == Quartz.kCGEventFlagsChanged:
                 if code == _CAPS_LOCK:  # reported once per toggle, not per press
-                    self.on_press(name, None, char)
-                    self.on_release(name, None, char)
+                    self._events.put((self.on_press, name, char))
+                    self._events.put((self.on_release, name, char))
                 elif code in keymaps.MAC_MODIFIER_BITS:
                     down = Quartz.CGEventGetFlags(event) & keymaps.MAC_MODIFIER_BITS[code]
-                    (self.on_press if down else self.on_release)(name, None, char)
+                    self._events.put((self.on_press if down else self.on_release, name, char))
         except Exception as exc:  # an exception here would kill the event tap
-            print(f"key handler failed: {exc}")
+            print(f"key tap failed: {exc}")
         return event
 
 
