@@ -190,8 +190,10 @@ def models_command(cfg: Config, action: str, model: str | None) -> None:
             mark = "*" if current in (spec.id, spec.repo) else " "
             print(f"{mark} {spec.id:<36}{stars(spec.accuracy):<10}{stars(spec.speed):<8}"
                   f"{spec.vram_gb:<7g}{placed(spec, device).backend:<14}{host.status(spec, device):<16}"
-                  f"{spec.languages}")
+                  f"{spec.languages}" + ("" if spec.punctuates else "  (lowercase at times)"))
         print("\n* = selected.  speechify models use <id>  installs (if needed) and selects a model.")
+        if any(not spec.punctuates for spec in all_models(data_dir())):
+            print("  (lowercase at times) = sometimes writes a dictation without capitals or punctuation.")
         for name, why in UNSUPPORTED.items():
             print(f"  Not available: {name}, {why}.")
         return

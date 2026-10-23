@@ -96,7 +96,8 @@ class ModelsWindow:
             tags = ("active",) if spec.id == active else () if state == "ready" else ("missing",)
             self.specs[spec.id] = spec
             self.tree.insert("", "end", iid=spec.id, tags=tags, values=(
-                spec.name, stars(spec.accuracy), stars(spec.speed), spec.languages,
+                spec.name + ("" if spec.punctuates else " (lowercase at times)"),
+                stars(spec.accuracy), stars(spec.speed), spec.languages,
                 f"{spec.vram_gb:g} GB", f"{size:g} GB" if size else "local",
                 learns, label,
             ))
@@ -113,7 +114,7 @@ class ModelsWindow:
         spec = self._selected()
         if spec:
             backend = BACKENDS[placed(spec, self.device).backend].label
-            plain = "" if spec.punctuates else " Writes lowercase without punctuation."
+            plain = "" if spec.punctuates else " Capitals and punctuation aren't reliable."
             self.notes.configure(text=f"{spec.name}, runs on {backend} here.{plain} {spec.notes}".strip())
 
     def _use(self) -> None:

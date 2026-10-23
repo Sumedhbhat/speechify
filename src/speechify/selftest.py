@@ -275,7 +275,7 @@ def check_formatting(spec, refs: list[str], texts: list[str], report: Report) ->
     score = formatting(refs, texts)
     report.facts["formatting"] = str(score)
     if not spec.punctuates:
-        return f"{score} (not checked: {spec.name} doesn't punctuate)"
+        return f"{score} (not checked: {spec.name} doesn't punctuate reliably)"
     assert score.case >= MIN_CASE and score.punct >= MIN_PUNCT, (
         f"{score}; needs capitals {MIN_CASE:.0%} and punctuation {MIN_PUNCT:.0%}")
     return str(score)
