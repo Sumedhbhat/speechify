@@ -72,7 +72,9 @@ To run from a source checkout instead, install
 Speechify runs in the background. Its icon (in the tray on Windows and Linux,
 the menu bar on a Mac) opens the settings, the history of your dictations, the
 model picker and the log, and quits it. The icon turns red while you hold the
-talk key.
+talk key. Starting Speechify again while it's running opens its settings, so
+the Start menu, app menu or Dock entry always gets you there. The first start
+opens the settings with a short introduction.
 
 A pill at the bottom of the screen shows what Speechify is doing: bars that
 move with your voice while you hold the key, a wave of dots while it
@@ -375,7 +377,7 @@ and ship a fix.
   `speechify` in a terminal to watch it live.
 - **No tray icon on Linux**: GNOME shows tray icons only with the AppIndicator
   extension (Ubuntu has it; on Fedora install `gnome-shell-extension-appindicator`).
-  Without one, use the shortcuts, and quit with Ctrl+C in a terminal.
+  Without one, start Speechify again to open its settings.
 - **Mac: the talk key does nothing**: open System Settings > Privacy &
   Security, and allow Speechify under Accessibility. If
   you start it from a terminal, allow the terminal app instead.

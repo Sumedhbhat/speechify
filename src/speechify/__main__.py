@@ -72,6 +72,7 @@ def main() -> None:
 
         raise SystemExit(selftest(args.model, args.engine_only, args.device, args.out))
 
+    first_start = not (data_dir() / "config.toml").exists()
     cfg = Config.load()
     if args.cmd == "models":
         if args.rollback:
@@ -107,9 +108,20 @@ def main() -> None:
             print(f"Removed {learner.forget(args.phrase)} entries")
         return
 
+    from .instance import Instance
+
+    instance = Instance()
+    if not instance.claim():
+        print("Speechify is already running; opened its settings.")
+        return
     from .app import App
 
-    App(cfg).run()
+    app = App(cfg, welcome=first_start)
+    instance.on_show = lambda: app.ui.post(app.open_settings)
+    try:
+        app.run()
+    finally:
+        instance.close()
 
 
 def rollback_command(cfg: Config) -> None:

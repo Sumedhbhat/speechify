@@ -6,7 +6,7 @@ import types
 
 import pytest
 
-from speechify import autostart, combos, settings
+from speechify import autostart, combos, instance, settings
 from speechify.config import Config
 
 
@@ -78,6 +78,36 @@ def test_autostart_desktop_entry(tmp_path, monkeypatch):
 def test_autostart_command_from_source(monkeypatch):
     monkeypatch.delenv("APPIMAGE", raising=False)
     assert autostart.command() == [sys.executable, "-m", "speechify"]
+
+
+# --- one instance ----------------------------------------------------------------
+
+
+def test_second_start_asks_the_first_to_show(home):
+    first = instance.Instance()
+    shown = []
+    first.on_show = lambda: shown.append(True)
+    assert first.claim()
+    try:
+        assert not instance.Instance().claim()
+        assert shown == [True]
+    finally:
+        first.close()
+    third = instance.Instance()
+    assert third.claim()  # the first one quit
+    third.close()
+
+
+def test_port_taken_by_something_else(home):
+    import socket
+
+    squatter = socket.socket()
+    squatter.bind(("127.0.0.1", instance.port()))
+    squatter.listen(1)
+    try:
+        assert instance.Instance().claim()  # not Speechify: run anyway
+    finally:
+        squatter.close()
 
 
 # --- tray ------------------------------------------------------------------------
