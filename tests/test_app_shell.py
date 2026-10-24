@@ -6,7 +6,7 @@ import types
 
 import pytest
 
-from speechify import combos
+from speechify import autostart, combos
 
 
 # --- names ---------------------------------------------------------------------
@@ -27,6 +27,27 @@ def test_keys_from_tk():
     assert combos.key_from_tk("F13") == "f13"
     assert combos.key_from_tk("a") is None  # would type while held
     assert combos.key_from_tk("Return") is None
+
+
+# --- start at login --------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="XDG autostart")
+def test_autostart_desktop_entry(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("APPIMAGE", "/home/me/Apps/Speechify 1.AppImage")
+    assert not autostart.is_enabled()
+    autostart.set_enabled(True)
+    entry = (tmp_path / "autostart" / "speechify.desktop").read_text()
+    assert "Exec='/home/me/Apps/Speechify 1.AppImage'" in entry
+    assert autostart.is_enabled()
+    autostart.set_enabled(False)
+    assert not autostart.is_enabled()
+
+
+def test_autostart_command_from_source(monkeypatch):
+    monkeypatch.delenv("APPIMAGE", raising=False)
+    assert autostart.command() == [sys.executable, "-m", "speechify"]
 
 
 # --- hotkeys ---------------------------------------------------------------------
