@@ -73,7 +73,7 @@ class GlobalHotkeys:
     def __init__(self, bindings: dict[str, Callable[[], None]]):
         self.bindings = bindings
         self.matcher = Matcher(list(bindings))
-        self._listener = keys.listener(self._press, self.matcher.release)
+        self._listener = keys.listener(self._press, self._release)
 
     def start(self) -> None:
         self._listener.start()
@@ -81,9 +81,19 @@ class GlobalHotkeys:
     def stop(self) -> None:
         self._listener.stop()
 
+    def rebind(self, bindings: dict[str, Callable[[], None]]) -> None:
+        """Swap in new shortcuts without restarting the keyboard listener."""
+        matcher = Matcher(list(bindings))
+        self.bindings, self.matcher = bindings, matcher
+
+    def _release(self, name, vk, char) -> None:
+        self.matcher.release(name, vk, char)
+
     def _press(self, name, vk, char) -> None:
-        for combo in self.matcher.press(name, vk, char):
-            threading.Thread(target=self.bindings[combo], daemon=True).start()
+        bindings, matcher = self.bindings, self.matcher  # rebind() may swap them meanwhile
+        for combo in matcher.press(name, vk, char):
+            if combo in bindings:
+                threading.Thread(target=bindings[combo], daemon=True).start()
 
 
 def global_hotkeys(bindings: dict[str, Callable[[], None]]) -> GlobalHotkeys:

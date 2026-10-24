@@ -84,3 +84,58 @@ class Matcher:
             self.held.pop(name, None)
         else:
             self.down.discard((name, vk, (char or "").lower()))
+
+
+# --- names people read -------------------------------------------------------
+
+_MOD_LABELS = {"ctrl": "Ctrl", "alt": "Alt", "shift": "Shift", "cmd": "Win"}
+_MAC_MOD_LABELS = {"ctrl": "Control", "alt": "Option", "shift": "Shift", "cmd": "Command"}
+_KEY_LABELS = {
+    "caps_lock": "Caps Lock", "scroll_lock": "Scroll Lock", "num_lock": "Num Lock",
+    "print_screen": "Print Screen", "page_up": "Page Up", "page_down": "Page Down",
+    "alt_gr": "AltGr", "esc": "Esc", "menu": "Menu",
+}
+
+
+def describe_key(name: str, mac: bool = False) -> str:
+    """'ctrl_r' -> 'Right Ctrl'; 'alt_r' on a Mac -> 'Right Option'."""
+    if len(name) == 1:
+        return name.upper()
+    if name in _KEY_LABELS:
+        return _KEY_LABELS[name]
+    base, _, side = name.partition("_")
+    if base in MODIFIERS and side in ("l", "r", ""):
+        label = (_MAC_MOD_LABELS if mac else _MOD_LABELS)[base]
+        return {"l": f"Left {label}", "r": f"Right {label}", "": label}[side]
+    return name.replace("_", " ").title() if not name[1:].isdigit() else name.upper()
+
+
+def describe_combo(combo: str, mac: bool = False) -> str:
+    """'<ctrl>+<alt>+h' -> 'Ctrl+Alt+H' (Mac: 'Control+Option+H')."""
+    mods, last = parse(combo)
+    labels = _MAC_MOD_LABELS if mac else _MOD_LABELS
+    order = [m for m in ("ctrl", "alt", "shift", "cmd") if m in mods]
+    return "+".join([labels[m] for m in order] + [describe_key(last, mac)])
+
+
+# Tk keysyms for keys that can be the talk key, as config key names.
+_TK_KEYS = {
+    "Control_L": "ctrl_l", "Control_R": "ctrl_r",
+    "Alt_L": "alt_l", "Alt_R": "alt_r", "Option_L": "alt_l", "Option_R": "alt_r",
+    "ISO_Level3_Shift": "alt_gr",
+    "Shift_L": "shift_l", "Shift_R": "shift_r",
+    "Super_L": "cmd_l", "Super_R": "cmd_r", "Win_L": "cmd_l", "Win_R": "cmd_r",
+    "Meta_L": "cmd_l", "Meta_R": "cmd_r", "Command": "cmd_l",
+    "Caps_Lock": "caps_lock", "Scroll_Lock": "scroll_lock", "Num_Lock": "num_lock",
+    "Pause": "pause", "Insert": "insert", "Menu": "menu", "App": "menu", "Print": "print_screen",
+}
+
+
+def key_from_tk(keysym: str) -> str | None:
+    """The config name for a key pressed in a Tk window, or None if it
+    can't be the talk key (letters would type while you hold them)."""
+    if keysym in _TK_KEYS:
+        return _TK_KEYS[keysym]
+    if keysym[:1] == "F" and keysym[1:].isdigit():
+        return keysym.lower()
+    return None
