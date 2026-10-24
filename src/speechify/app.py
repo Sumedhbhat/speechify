@@ -29,6 +29,7 @@ class App:
         self.recorder = recorder or Recorder(
             cfg.input_device or None, cfg.keep_mic_open, on_error=self._mic_failed
         )
+        self.ui.meter = self.recorder  # the overlay's level bars read it
         self.engine = host.EngineHost()
         self._switch_lock = threading.Lock()
         # Teacher labels and retraining while you're away (autolearn.py).

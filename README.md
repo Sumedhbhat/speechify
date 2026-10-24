@@ -69,6 +69,11 @@ To run from a source checkout instead, install
 
 ## Using it
 
+A pill at the bottom of the screen shows what Speechify is doing: bars that
+move with your voice while you hold the key, a wave of dots while it
+transcribes, then a check mark with how long it took. The microphone is only
+open while you hold the key, so the system's mic indicator lights up only then.
+
 | Do this | What happens |
 | --- | --- |
 | Hold **Right Ctrl** (Mac: **Right Option**) and talk, then let go | Transcribes and pastes into the focused app |
@@ -301,9 +306,10 @@ speechify where      print the config and data folder
 ## Why it should feel faster than Handy
 
 - The mic opens on a background thread the moment the key goes down, so the
-  keyboard never waits for it. If you lose the first syllable, set
-  `keep_mic_open = true`: the stream then stays open with 300 ms of pre-roll,
-  at the cost of the mic always showing as in use.
+  keyboard never waits for it, and the pill's dot turns red as soon as audio
+  is arriving. If you start talking before the dot is red and lose the first
+  syllable, set `keep_mic_open = true`: the stream then stays open with 300 ms
+  of pre-roll, at the cost of the mic always showing as in use.
 - The model is loaded and warmed up once, then stays loaded. With Whisper
   large-v3-turbo each sentence is a single GPU pass of roughly 0.2–0.5 s on an
   RTX card. Parakeet is faster still.

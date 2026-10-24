@@ -130,3 +130,18 @@ def test_open_failure_is_reported_and_retried():
     rec.stop()
     rec.close()
 
+
+def test_pill_helpers():
+    pytest.importorskip("tkinter")
+    from speechify import ui
+
+    assert ui.level_to_bar(0.0) == 0.0
+    assert ui.level_to_bar(1.0) == 1.0
+    assert 0.5 < ui.level_to_bar(0.05) < 1.0  # normal speech
+    assert ui.level_to_bar(0.001) < 0.1  # room noise
+
+    points = ui.capsule(0, 0, 100, 40)
+    xs, ys = points[0::2], points[1::2]
+    assert min(xs) == pytest.approx(0) and max(xs) == pytest.approx(100)
+    assert min(ys) == pytest.approx(0) and max(ys) == pytest.approx(40)
+    assert ui._mix("#ffffff", "#000000", 0.5) == "#808080"
