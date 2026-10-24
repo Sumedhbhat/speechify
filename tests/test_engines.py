@@ -2,12 +2,140 @@ import os
 import sys
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from speechify import config
 from speechify.engines import backends, catalog, host
+
+
+@pytest.fixture
+def onnx_runtime(monkeypatch):
+    """Exercise provider and thread setup without loading real model weights."""
+    calls = []
+    pools = []
+
+    class Options:
+        intra_op_num_threads = 0
+        inter_op_num_threads = 0
+        use_per_session_threads = True
+
+    ort = SimpleNamespace(
+        SessionOptions=Options,
+        get_available_providers=lambda: ["CPUExecutionProvider"],
+        set_global_thread_pool_sizes=lambda **kwargs: pools.append(kwargs),
+    )
+    model = SimpleNamespace(recognize=lambda *args, **kwargs: "transcript")
+
+    def load(*args, **kwargs):
+        calls.append(kwargs)
+        return model
+
+    monkeypatch.setitem(sys.modules, "onnxruntime", ort)
+    monkeypatch.setitem(sys.modules, "onnx_asr", SimpleNamespace(load_model=load))
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(8)), raising=False)
+    return ort, calls, pools
+
+
+def test_parakeet_shares_bounded_cpu_pool(onnx_runtime):
+    _, calls, pools = onnx_runtime
+    engine = backends.OnnxEngine("nemo-parakeet-tdt-0.6b-v3", {
+        "device": "cpu", "compute_type": "int8", "language": "en",
+    })
+    assert pools == [{"intra_op_num_threads": 4, "inter_op_num_threads": 1}]
+    options = calls[0]["sess_options"]
+    assert not options.use_per_session_threads
+    assert calls[0]["quantization"] == "int8"
+    assert calls[0]["providers"] == ["CPUExecutionProvider"]
+    assert engine.transcribe(np.zeros(10, dtype=np.float32), None) == "transcript"
+
+
+def test_onnx_threads_respects_process_affinity(onnx_runtime, monkeypatch):
+    ort, _, pools = onnx_runtime
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {2, 3})
+    options = backends._onnx_cpu_options(ort, 4)
+    assert not options.use_per_session_threads
+    assert pools[0]["intra_op_num_threads"] == 2
+
+
+def test_onnx_threads_without_affinity_api(onnx_runtime, monkeypatch):
+    ort, _, pools = onnx_runtime
+    monkeypatch.delattr(os, "sched_getaffinity")
+    monkeypatch.setattr(os, "cpu_count", lambda: None)
+    backends._onnx_cpu_options(ort, 4)
+    assert pools[0]["intra_op_num_threads"] == 1
+
+
+def test_zero_onnx_threads_restores_runtime_defaults(onnx_runtime):
+    ort, _, pools = onnx_runtime
+    options = backends._onnx_cpu_options(ort, 0)
+    assert options.intra_op_num_threads == options.inter_op_num_threads == 0
+    assert options.use_per_session_threads and not pools
+
+
+@pytest.mark.parametrize("supported", [False, True], ids=["older-runtime", "initialized-environment"])
+def test_onnx_pool_fallback(onnx_runtime, supported):
+    ort, _, _ = onnx_runtime
+    if supported:
+        def initialized(**kwargs):
+            raise RuntimeError("environment already initialized")
+        ort.set_global_thread_pool_sizes = initialized
+    else:
+        del ort.set_global_thread_pool_sizes
+    options = backends._onnx_cpu_options(ort, 4)
+    assert options.use_per_session_threads
+    assert options.intra_op_num_threads == 4
+
+
+def test_accelerated_onnx_keeps_runtime_options(onnx_runtime):
+    ort, calls, pools = onnx_runtime
+    ort.get_available_providers = lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    backends.OnnxEngine("nemo-parakeet-tdt-0.6b-v3", {
+        "device": "cuda", "compute_type": "float16", "language": "en",
+    })
+    assert calls[0]["providers"][0] == "CUDAExecutionProvider"
+    assert "sess_options" not in calls[0] and not pools
+
+
+def test_failed_gpu_load_uses_cpu_thread_options(onnx_runtime, monkeypatch):
+    ort, calls, pools = onnx_runtime
+    ort.get_available_providers = lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    original = sys.modules["onnx_asr"].load_model
+
+    def load(*args, **kwargs):
+        if kwargs["providers"][0] == "CUDAExecutionProvider":
+            raise RuntimeError("driver unavailable")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sys.modules["onnx_asr"], "load_model", load)
+    engine = backends.OnnxEngine("nemo-parakeet-tdt-0.6b-v3", {
+        "device": "cuda", "compute_type": "float16", "language": "en",
+    })
+    assert engine.device == "CPUExecutionProvider"
+    assert calls[0]["providers"] == ["CPUExecutionProvider"]
+    assert not calls[0]["sess_options"].use_per_session_threads and pools
+
+
+def test_other_onnx_models_keep_thread_defaults(onnx_runtime):
+    _, calls, pools = onnx_runtime
+    backends.OnnxEngine("nemo-canary-1b-v2", {"device": "cpu", "language": "en"})
+    assert "sess_options" not in calls[0] and not pools
+
+
+@pytest.mark.parametrize("threads", [-1, True, 1.5, "4"])
+def test_invalid_onnx_thread_count(onnx_runtime, threads):
+    with pytest.raises(ValueError, match="onnx_threads"):
+        backends.OnnxEngine("nemo-parakeet-tdt-0.6b-v3", {
+            "device": "cpu", "language": "en", "onnx_threads": threads,
+        })
+
+
+def test_saved_onnx_threads_reach_worker(data):
+    config.Config.load()
+    config.set_value("onnx_threads", 0)
+    assert config.Config.load().engine_opts()["onnx_threads"] == 0
 
 
 @pytest.fixture
