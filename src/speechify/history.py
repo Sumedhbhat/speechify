@@ -7,6 +7,7 @@ made with the correction hotkey.
 
 from __future__ import annotations
 
+import sys
 import time
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -23,6 +24,14 @@ def _duration(sample: Sample) -> str:
         return "–"
     seconds = max(0, path.stat().st_size - 44) / (SAMPLE_RATE * 2)
     return f"{seconds:.1f}s"
+
+
+FILTERS = {
+    "All recordings": lambda s: True,
+    "Edited": lambda s: not s.excluded and s.corrected is not None,
+    "As pasted": lambda s: not s.excluded and s.corrected is None,
+    "Excluded": lambda s: s.excluded,
+}
 
 
 def _status(sample: Sample) -> str:
@@ -53,6 +62,10 @@ class HistoryWindow:
         entry = ttk.Entry(top, textvariable=self.search, width=40)
         entry.pack(side="left", padx=6)
         entry.bind("<Return>", lambda e: self.refresh())
+        self.filter = tk.StringVar(value=next(iter(FILTERS)))
+        shown = ttk.Combobox(top, textvariable=self.filter, values=list(FILTERS), state="readonly", width=14)
+        shown.pack(side="left", padx=(0, 6))
+        shown.bind("<<ComboboxSelected>>", lambda e: self.refresh())
         ttk.Button(top, text="Refresh", command=self.refresh).pack(side="left")
         self.summary = ttk.Label(top, foreground="#666")
         self.summary.pack(side="right")
@@ -79,6 +92,7 @@ class HistoryWindow:
         self.tree.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._select())
+        self.tree.bind("<Double-1>", lambda e: self.copy())
         panes.add(left, weight=3)
 
         right = ttk.Frame(panes, padding=(10, 0, 0, 0))
@@ -86,6 +100,7 @@ class HistoryWindow:
         controls.pack(fill="x")
         ttk.Button(controls, text="▶ Play", command=self.play).pack(side="left")
         ttk.Button(controls, text="■ Stop", command=stop_playback).pack(side="left", padx=4)
+        ttk.Button(controls, text="Copy text", command=self.copy).pack(side="left")
         self.exclude_btn = ttk.Button(controls, text="Exclude from training", command=self.toggle_excluded)
         self.exclude_btn.pack(side="right")
 
@@ -115,7 +130,10 @@ class HistoryWindow:
         selected = self.current.id if self.current else None
         self.tree.delete(*self.tree.get_children())
         self.samples.clear()
+        keep = FILTERS.get(self.filter.get(), FILTERS["All recordings"])
         for s in self.learner.samples(self.search.get()):
+            if not keep(s):
+                continue
             iid = str(s.id)
             self.samples[iid] = s
             when = time.strftime("%b %d %H:%M", time.localtime(s.ts))
@@ -148,6 +166,16 @@ class HistoryWindow:
     def play(self) -> None:
         if self.current and self.current.path and self.current.path.exists():
             play(self.current.path)
+
+    def copy(self) -> None:
+        """Put the selected recording's text on the clipboard, to paste anywhere."""
+        if not self.current:
+            return
+        text = self.text.get("1.0", "end").strip()
+        self.win.clipboard_clear()
+        self.win.clipboard_append(text)
+        self.flash.configure(text="Copied. Paste it with Ctrl+V." if sys.platform != "darwin"
+                             else "Copied. Paste it with Command+V.")
 
     def save(self) -> None:
         if not self.current:

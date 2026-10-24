@@ -50,7 +50,9 @@ def main() -> None:
     sub.add_parser("where", help="print the config and data directory")
     args = parser.parse_args()
     if args.cmd in (None, "run"):
-        _log_to_file_without_terminal()
+        from .applog import redirect_to_file
+
+        redirect_to_file()
 
     if args.cmd == "devices":
         import sounddevice as sd
@@ -70,6 +72,7 @@ def main() -> None:
 
         raise SystemExit(selftest(args.model, args.engine_only, args.device, args.out))
 
+    first_start = not (data_dir() / "config.toml").exists()
     cfg = Config.load()
     if args.cmd == "models":
         if args.rollback:
@@ -105,33 +108,20 @@ def main() -> None:
             print(f"Removed {learner.forget(args.phrase)} entries")
         return
 
+    from .instance import Instance
+
+    instance = Instance()
+    if not instance.claim():
+        print("Speechify is already running; opened its settings.")
+        return
     from .app import App
 
-    App(cfg).run()
-
-
-def _log_to_file_without_terminal() -> None:
-    """Started from the app menu, Finder or the Dock, the installed app has no
-    console, so its output goes to a log file instead. (On Windows it keeps
-    its console window.)"""
-    if not getattr(sys, "frozen", False) or sys.platform == "win32":
-        return
-    if sys.stdout is not None and sys.stdout.isatty():
-        return
-    import os
-    from pathlib import Path
-
-    if sys.platform == "darwin":
-        log = Path.home() / "Library" / "Logs" / "Speechify.log"
-    else:
-        state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
-        log = state / "speechify" / "speechify.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
-    stream = open(log, "a", buffering=1, encoding="utf-8", errors="replace")
-    # At the descriptor level too, so the model worker's output lands there.
-    os.dup2(stream.fileno(), 1)
-    os.dup2(stream.fileno(), 2)
-    sys.stdout = sys.stderr = stream
+    app = App(cfg, welcome=first_start)
+    instance.on_show = lambda: app.ui.post(app.open_settings)
+    try:
+        app.run()
+    finally:
+        instance.close()
 
 
 def rollback_command(cfg: Config) -> None:

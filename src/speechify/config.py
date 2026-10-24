@@ -44,6 +44,11 @@ beam_size = 5              # Whisper only: 1 is ~2x faster, 5 is a bit more accu
 # Input device name or index; "" uses the system default microphone.
 input_device = ""
 
+# The microphone is only open while you hold the talk key. true keeps it open
+# all the time, with 300 ms of audio from before the key went down, so the
+# first word is never cut off; the system shows the mic as in use throughout.
+keep_mic_open = false
+
 # Presses shorter than this are ignored, so tapping the key does nothing.
 min_hold_ms = 250
 
@@ -218,6 +223,7 @@ class Config:
     language: str = "en"
     beam_size: int = 5
     input_device: str = ""
+    keep_mic_open: bool = False
     min_hold_ms: int = 250
     autocorrect_after: int = 2
     keep_all_audio: bool = True

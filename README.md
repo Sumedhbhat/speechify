@@ -29,17 +29,19 @@ CUDA; each model's CUDA libraries come from pip. A recent NVIDIA driver is all
 you need.
 
 **On Windows**, Speechify is in the Start menu, and the installer can also start
-it when you sign in. It runs in a minimized console window that shows each
-dictation; close that window to quit. New terminals get a `speechify` command.
+it when you sign in. It runs in the background with an icon in the tray, next
+to the clock (Windows may tuck it under the ^ arrow; drag it out to keep it in
+sight). New terminals get a `speechify` command.
 
 **On a Mac**, the app isn't signed with an Apple Developer ID yet, so the
 first time you open it macOS says it can't check it for malware. Open System
-Settings > Privacy & Security, scroll down and click **Open Anyway**. To start
-it when you log in, add it under System Settings > General > Login Items.
+Settings > Privacy & Security, scroll down and click **Open Anyway**.
+Speechify has no Dock icon; it lives in the menu bar.
 
 Push to talk on a Mac is **Right Option**, since Mac keyboards have no Right
-Ctrl. The first start asks for two permissions: Microphone and Accessibility
-(to see the talk key and to paste). Allow both, then start Speechify again.
+Ctrl. The first start asks for Accessibility (to see the talk key and to
+paste); allow it, then start Speechify again. The first time you hold the talk
+key, macOS asks for the Microphone too.
 Until the app is signed, macOS treats each update as a new app and asks for
 these again.
 
@@ -68,6 +70,18 @@ To run from a source checkout instead, install
 
 ## Using it
 
+Speechify runs in the background. Its icon (in the tray on Windows and Linux,
+the menu bar on a Mac) opens the settings, the history of your dictations, the
+model picker and the log, and quits it. The icon turns red while you hold the
+talk key. Starting Speechify again while it's running opens its settings, so
+the Start menu, app menu or Dock entry always gets you there. The first start
+opens the settings with a short introduction.
+
+A pill at the bottom of the screen shows what Speechify is doing: bars that
+move with your voice while you hold the key, a wave of dots while it
+transcribes, then a check mark with how long it took. The microphone is only
+open while you hold the key, so the system's mic indicator lights up only then.
+
 | Do this | What happens |
 | --- | --- |
 | Hold **Right Ctrl** (Mac: **Right Option**) and talk, then let go | Transcribes and pastes into the focused app |
@@ -81,7 +95,32 @@ In the fix window, type the correction or hold Right Ctrl and say it. Then:
 - **Ctrl+Enter** saves the fix and also swaps the text in the app you pasted into
 - **Shift+Enter** just saves it
 
-All of these keys can be changed in `config.toml`.
+All of these keys can be changed in the settings.
+
+## Settings
+
+Open **Settings…** from the tray or menu bar icon. Everything there is saved to
+`config.toml` and applied straight away, without a restart:
+
+- **General**: the talk key (pick one, or press **Press a key…** and press it),
+  the shortest press that counts, and starting Speechify when you sign in.
+- **Microphone**: which microphone, and whether to keep it open all the time.
+- **Shortcuts**: the fix, history and model picker shortcuts.
+- **Model**: the speech model, the device it runs on, the language, Whisper's
+  beam size and the optional LLM cleanup. Changing these reloads the model.
+- **Learning**: saving audio, automatic fixes, and retraining while you're away.
+
+`config.toml` can still be edited by hand (**Open data folder** in the
+settings); restart Speechify afterwards.
+
+## History
+
+**History…** in the menu, or **Ctrl+Alt+H**, lists every dictation, newest
+first. Search it, or show only the edited ones, the ones pasted as heard, or the
+ones excluded from training. Pick one to play its audio, fix its text (which
+also teaches the vocabulary and the automatic fixes), exclude it from
+training, or delete it. **Copy text** (or a double-click) puts it on the
+clipboard, to paste it again anywhere.
 
 ## Models
 
@@ -299,8 +338,11 @@ speechify where      print the config and data folder
 
 ## Why it should feel faster than Handy
 
-- The mic stream stays open all the time and keeps 300 ms of pre-roll, so
-  there's no startup delay and the first word isn't cut off.
+- The mic opens on a background thread the moment the key goes down, so the
+  keyboard never waits for it, and the pill's dot turns red as soon as audio
+  is arriving. If you start talking before the dot is red and lose the first
+  syllable, set `keep_mic_open = true`: the stream then stays open with 300 ms
+  of pre-roll, at the cost of the mic always showing as in use.
 - The model is loaded and warmed up once, then stays loaded. With Whisper
   large-v3-turbo each sentence is a single GPU pass of roughly 0.2–0.5 s on an
   RTX card. Parakeet is faster still.
@@ -309,7 +351,7 @@ speechify where      print the config and data folder
 - Text is pasted through the clipboard in one go instead of typed one character at a time.
   The clipboard is restored afterwards.
 
-The console prints the latency of every dictation (total, and model time). If
+The log (**Open log** in the menu) shows the latency of every dictation (total, and model time). If
 it's slower than you'd like, switch to Parakeet v3, or set `beam_size = 1` for
 roughly double Whisper's speed.
 
@@ -334,14 +376,18 @@ and ship a fix.
   should list your GPU. Set `device = "cpu"` to stop trying the GPU.
 - **Nothing pastes into an admin app**: Windows blocks input from normal apps
   into elevated windows. Run speechify as admin as well.
-- **Wrong mic**: run `speechify devices` and set `input_device`.
-- **A model fails to load**: the console shows the error from its worker.
+- **Wrong mic**: pick it under Settings > Microphone.
+- **A model fails to load**: the log shows the error from its worker.
   Delete its environment folder under `engines` in the data folder to
   reinstall it from scratch.
-- **Where's the console on Linux or macOS?** Started from the app menu,
-  Speechify logs to `~/.local/state/speechify/speechify.log` (Linux) or
-  `~/Library/Logs/Speechify.log` (macOS). Run `speechify` in a terminal to
-  watch it live.
+- **Where's the log?** **Open log** in the menu. Started from the Start menu,
+  app menu or Dock, Speechify logs to `%LOCALAPPDATA%\Speechify\speechify.log`
+  (Windows), `~/.local/state/speechify/speechify.log` (Linux) or
+  `~/Library/Logs/Speechify.log` (macOS). Quit it from the menu and run
+  `speechify` in a terminal to watch it live.
+- **No tray icon on Linux**: GNOME shows tray icons only with the AppIndicator
+  extension (Ubuntu has it; on Fedora install `gnome-shell-extension-appindicator`).
+  Without one, start Speechify again to open its settings.
 - **Mac: the talk key does nothing**: open System Settings > Privacy &
   Security, and allow Speechify under Accessibility. If
   you start it from a terminal, allow the terminal app instead.

@@ -78,6 +78,8 @@ EOF
 
 package_windows() {
     local iscc=${ISCC:-"C:/Program Files (x86)/Inno Setup 6/ISCC.exe"}
+    # See speechify.spec: `speechify` in a terminal finds .com before .exe.
+    mv -f "$build/dist/Speechify/speechify-console.exe" "$build/dist/Speechify/speechify.com"
     SPEECHIFY_VERSION=$version "$iscc" -Q packaging/windows/speechify.iss
 }
 

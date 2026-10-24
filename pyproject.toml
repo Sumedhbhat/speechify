@@ -11,6 +11,8 @@ dependencies = [
     "sounddevice>=0.5",
     "pynput>=1.7.7",
     "pyperclip>=1.9",
+    "pystray>=0.19.5",  # the tray / menu bar icon
+    "pillow>=13.0.0",  # draws pystray's icon
 ]
 
 [dependency-groups]
@@ -19,7 +21,6 @@ build = [
 ]
 dev = [
     "pytest>=8",
-    "pillow>=13.0.0",  # screenshots in `speechify selftest`
 ]
 
 [project.scripts]
