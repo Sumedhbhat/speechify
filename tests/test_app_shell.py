@@ -80,6 +80,77 @@ def test_autostart_command_from_source(monkeypatch):
     assert autostart.command() == [sys.executable, "-m", "speechify"]
 
 
+# --- tray ------------------------------------------------------------------------
+
+
+def test_tray_menu(monkeypatch):
+    pytest.importorskip("PIL")
+    made = {}
+
+    class MenuItem:
+        def __init__(self, text, action, enabled=True, default=False):
+            self.text, self.action, self.enabled, self.default = text, action, enabled, default
+
+    class Menu:
+        SEPARATOR = object()
+
+        def __init__(self, *items):
+            self.items = items
+
+    class Icon:
+        def __init__(self, name, image, title, menu):
+            made.update(icon=self, menu=menu)
+            self.icon = image
+
+        def run(self):
+            made["ran"] = True
+
+        def run_detached(self):
+            made["ran"] = True
+
+        def stop(self):
+            made["stopped"] = True
+
+    monkeypatch.setitem(sys.modules, "pystray", types.SimpleNamespace(MenuItem=MenuItem, Menu=Menu, Icon=Icon))
+    from speechify.tray import Tray
+
+    calls = []
+    hotkey = ["Ctrl+Alt+H"]
+    tray = Tray(lambda: "Parakeet on cpu", lambda: "Hold Right Ctrl to talk", [
+        ("Settings…", lambda: calls.append("settings")),
+        (lambda: f"History…  {hotkey[0]}", lambda: calls.append("history")),
+        None,
+        ("Quit", lambda: calls.append("quit")),
+    ])
+    assert tray.start()
+    items = made["menu"].items
+    texts = [i.text(i) if callable(i.text) else i.text for i in items if isinstance(i, MenuItem)]
+    assert texts == ["Parakeet on cpu", "Hold Right Ctrl to talk", "Settings…", "History…  Ctrl+Alt+H", "Quit"]
+    hotkey[0] = "Ctrl+Alt+J"
+    assert items[4].text(items[4]) == "History…  Ctrl+Alt+J"
+    assert items[3].default and not items[4].default
+    items[3].action("icon", "item")
+    assert calls == ["settings"]
+
+    normal = made["icon"].icon
+    tray.set_listening(True)
+    assert made["icon"].icon is not normal
+    tray.set_listening(False)
+    assert made["icon"].icon is normal
+    tray.stop()
+    assert made["stopped"]
+
+
+def test_tray_failure_is_not_fatal(monkeypatch):
+    monkeypatch.setitem(sys.modules, "pystray", None)  # import fails
+    from speechify.tray import Tray
+
+    tray = Tray(lambda: "", lambda: "", [("Quit", lambda: None)])
+    assert not tray.start()
+    tray.set_listening(True)
+    tray.stop()
+
+
 # --- hotkeys ---------------------------------------------------------------------
 
 

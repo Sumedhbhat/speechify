@@ -36,9 +36,10 @@ if sys.platform.startswith("linux"):
     binaries.append((str(build / "libportaudio.so.2"), "."))
     runtime_hooks.append(str(root / "packaging" / "rthook_portaudio.py"))
 
-# Keyboard, window and platform modules are imported lazily, and pynput picks
-# its backend at runtime.
-hiddenimports = collect_submodules("speechify", on_error="ignore") + collect_submodules("pynput", on_error="ignore")
+# Keyboard, window and platform modules are imported lazily, and pynput and
+# pystray pick their backend at runtime.
+hiddenimports = (collect_submodules("speechify", on_error="ignore") + collect_submodules("pynput", on_error="ignore")
+                 + collect_submodules("pystray", on_error="ignore"))
 
 a = Analysis(
     [str(root / "packaging" / "entry.py")],
@@ -48,7 +49,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     runtime_hooks=runtime_hooks,
     # pynput's uinput backend; Speechify has its own (linuxkeys.py).
-    excludes=["evdev", "pytest", "PIL"],
+    excludes=["evdev", "pytest"],
 )
 pyz = PYZ(a.pure)
 

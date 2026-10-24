@@ -69,6 +69,11 @@ To run from a source checkout instead, install
 
 ## Using it
 
+Speechify runs in the background. Its icon (in the tray on Windows and Linux,
+the menu bar on a Mac) opens the settings, the history of your dictations, the
+model picker and the log, and quits it. The icon turns red while you hold the
+talk key.
+
 A pill at the bottom of the screen shows what Speechify is doing: bars that
 move with your voice while you hold the key, a wave of dots while it
 transcribes, then a check mark with how long it took. The microphone is only
@@ -87,7 +92,23 @@ In the fix window, type the correction or hold Right Ctrl and say it. Then:
 - **Ctrl+Enter** saves the fix and also swaps the text in the app you pasted into
 - **Shift+Enter** just saves it
 
-All of these keys can be changed in `config.toml`.
+All of these keys can be changed in the settings.
+
+## Settings
+
+Open **Settings…** from the tray or menu bar icon. Everything there is saved to
+`config.toml` and applied straight away, without a restart:
+
+- **General**: the talk key (pick one, or press **Press a key…** and press it),
+  the shortest press that counts, and starting Speechify when you sign in.
+- **Microphone**: which microphone, and whether to keep it open all the time.
+- **Shortcuts**: the fix, history and model picker shortcuts.
+- **Model**: the speech model, the device it runs on, the language, Whisper's
+  beam size and the optional LLM cleanup. Changing these reloads the model.
+- **Learning**: saving audio, automatic fixes, and retraining while you're away.
+
+`config.toml` can still be edited by hand (**Open data folder** in the
+settings); restart Speechify afterwards.
 
 ## Models
 
@@ -318,7 +339,7 @@ speechify where      print the config and data folder
 - Text is pasted through the clipboard in one go instead of typed one character at a time.
   The clipboard is restored afterwards.
 
-The console prints the latency of every dictation (total, and model time). If
+The log (**Open log** in the menu) shows the latency of every dictation (total, and model time). If
 it's slower than you'd like, switch to Parakeet v3, or set `beam_size = 1` for
 roughly double Whisper's speed.
 
@@ -343,14 +364,18 @@ and ship a fix.
   should list your GPU. Set `device = "cpu"` to stop trying the GPU.
 - **Nothing pastes into an admin app**: Windows blocks input from normal apps
   into elevated windows. Run speechify as admin as well.
-- **Wrong mic**: run `speechify devices` and set `input_device`.
-- **A model fails to load**: the console shows the error from its worker.
+- **Wrong mic**: pick it under Settings > Microphone.
+- **A model fails to load**: the log shows the error from its worker.
   Delete its environment folder under `engines` in the data folder to
   reinstall it from scratch.
-- **Where's the console on Linux or macOS?** Started from the app menu,
-  Speechify logs to `~/.local/state/speechify/speechify.log` (Linux) or
-  `~/Library/Logs/Speechify.log` (macOS). Run `speechify` in a terminal to
-  watch it live.
+- **Where's the log?** **Open log** in the menu. Started from the Start menu,
+  app menu or Dock, Speechify logs to `%LOCALAPPDATA%\Speechify\speechify.log`
+  (Windows), `~/.local/state/speechify/speechify.log` (Linux) or
+  `~/Library/Logs/Speechify.log` (macOS). Quit it from the menu and run
+  `speechify` in a terminal to watch it live.
+- **No tray icon on Linux**: GNOME shows tray icons only with the AppIndicator
+  extension (Ubuntu has it; on Fedora install `gnome-shell-extension-appindicator`).
+  Without one, use the shortcuts, and quit with Ctrl+C in a terminal.
 - **Mac: the talk key does nothing**: open System Settings > Privacy &
   Security, and allow Speechify under Accessibility. If
   you start it from a terminal, allow the terminal app instead.

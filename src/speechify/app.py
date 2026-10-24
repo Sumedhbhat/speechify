@@ -9,21 +9,29 @@ import time
 import traceback
 from typing import Callable
 
-from . import __version__, config, keys, output, postprocess, versions
+from . import __version__, applog, config, keys, output, postprocess, settings, versions
 from .autolearn import AutoLearner
 from .audio import Recorder, is_silent
+from .combos import describe_combo, describe_key
 from .config import Config, data_dir
 from .engines import host
 from .engines.catalog import ModelSpec, resolve
 from .hotkeys import PushToTalk, global_hotkeys
 from .learning import Dictation, Learner
+from .tray import Tray
 from .ui import UI
+
+MAC = sys.platform == "darwin"
 
 
 class App:
-    def __init__(self, cfg: Config, recorder=None):
-        """`recorder` replaces the microphone (the self-test feeds a WAV file)."""
+    def __init__(self, cfg: Config, recorder=None, welcome: bool = False):
+        """`recorder` replaces the microphone (the self-test feeds a WAV file).
+        `welcome` opens the settings window with a short introduction, for the
+        first start."""
         self.cfg = cfg
+        self.welcome = welcome
+        self._own_recorder = recorder is None
         self.ui = UI()
         self.learner = Learner(data_dir(), cfg.autocorrect_after)
         self.recorder = recorder or Recorder(
@@ -45,11 +53,92 @@ class App:
         self.ptt = PushToTalk(
             cfg.ptt_key, cfg.min_hold_ms, self._on_start, self._on_stop, self._on_cancel
         )
-        self.hotkeys = global_hotkeys({
-            cfg.correct_hotkey: self._on_fix,
-            cfg.history_hotkey: lambda: self.ui.post(lambda: self.ui.open_history(self.learner)),
-            cfg.models_hotkey: lambda: self.ui.post(self._open_models),
-        })
+        self.hotkeys = global_hotkeys(self._hotkey_bindings())
+        self._loading: str | None = None  # the model being loaded, for the tray
+        self.tray = Tray(self._status_line, self._hint, [
+            ("Settings…", lambda: self.ui.post(self.open_settings)),
+            (lambda: self._menu_label("History…", self.cfg.history_hotkey), self.open_history),
+            (lambda: self._menu_label("Models…", self.cfg.models_hotkey), lambda: self.ui.post(self._open_models)),
+            (lambda: self._menu_label("Fix last dictation", self.cfg.correct_hotkey), self._on_fix),
+            None,
+            ("Open log", lambda: self._open(applog.log_path())),
+            ("Open data folder", lambda: self._open(data_dir())),
+            None,
+            ("Quit Speechify", self.quit),
+        ])
+
+    def _hotkey_bindings(self) -> dict[str, Callable[[], None]]:
+        return {
+            self.cfg.correct_hotkey: self._on_fix,
+            self.cfg.history_hotkey: self.open_history,
+            self.cfg.models_hotkey: lambda: self.ui.post(self._open_models),
+        }
+
+    # --- tray and settings ------------------------------------------------------
+
+    @staticmethod
+    def _menu_label(label: str, hotkey: str) -> str:
+        try:
+            return f"{label}    {describe_combo(hotkey, MAC)}"
+        except ValueError:
+            return label
+
+    def _status_line(self) -> str:
+        spec = self.engine.spec
+        if self._loading:
+            return f"Loading {self._loading}…"
+        if spec is not None and self.engine.ready.is_set():
+            return f"{spec.name} on {self.engine.info.get('device') or '?'}"
+        return "Starting…"
+
+    def _hint(self) -> str:
+        return f"Hold {describe_key(self.cfg.ptt_key, MAC)} to talk"
+
+    def _open(self, path) -> None:
+        if path.exists():
+            applog.open_in_os(path)
+        else:
+            self.ui.post(lambda: self.ui.show("info", "No log yet: started from a terminal, it prints there", 3000))
+
+    def open_history(self) -> None:
+        self.ui.post(lambda: self.ui.open_history(self.learner))
+
+    def open_settings(self, welcome: bool = False) -> None:
+        """Open the settings window (on the UI thread)."""
+        def model_name() -> str:
+            spec = self.engine.spec
+            return spec.name if spec else self._loading or self.cfg.model
+
+        self.ui.open_settings(self.cfg, self.apply_settings, self._open_models, model_name, welcome)
+
+    def apply_settings(self, changed: dict) -> None:
+        """Put saved settings into effect without a restart (on the UI thread)."""
+        print(f"Settings changed: {', '.join(sorted(changed))}")
+        if {"ptt_key", "min_hold_ms"} & changed.keys():
+            self.ptt.key = keys.check_key_name(self.cfg.ptt_key)
+            self.ptt.min_hold = self.cfg.min_hold_ms / 1000
+        if {"input_device", "keep_mic_open"} & changed.keys() and self._own_recorder:
+            try:
+                recorder = Recorder(self.cfg.input_device or None, self.cfg.keep_mic_open,
+                                    on_error=self._mic_failed)
+            except Exception as exc:
+                self._mic_failed(str(exc))
+            else:
+                old, self.recorder = self.recorder, recorder
+                self.ui.meter = recorder
+                old.close()
+        if set(settings.HOTKEYS) & changed.keys():
+            self.hotkeys.rebind(self._hotkey_bindings())
+        if "autocorrect_after" in changed:
+            self.learner.autocorrect_after = self.cfg.autocorrect_after
+        if settings.RELOADS_MODEL & changed.keys() and self.engine.spec is not None:
+            self.switch_model(self.engine.spec, reload=True)
+        else:
+            self.ui.show("ok", "Settings saved", 1500)
+        self.tray.refresh()
+
+    def quit(self) -> None:
+        self.ui.post(self.ui.quit)
 
     def run(self) -> None:
         problem = keys.permission_problem()
@@ -76,6 +165,10 @@ class App:
 
                 print(missing)
                 messagebox.showwarning("Speechify", missing)
+        if not self.tray.start() and not self.welcome:
+            self.ui.show("info", "Speechify is running. Start it again to open its settings", 5000)
+        if self.welcome:
+            self.open_settings(welcome=True)
         stats = self.learner.stats()
         print(
             f"Speechify {__version__}. Hold [{self.cfg.ptt_key}] to talk, "
@@ -97,6 +190,7 @@ class App:
             pass
         finally:
             self.autolearn.stop()
+            self.tray.stop()
             self.ptt.stop()
             self.hotkeys.stop()
             self.engine.stop()
@@ -130,11 +224,12 @@ class App:
 
         threading.Thread(target=run, daemon=True).start()
 
-    def switch_model(self, spec: ModelSpec) -> None:
-        """Install if needed, stop the current model, load the new one."""
+    def switch_model(self, spec: ModelSpec, reload: bool = False) -> None:
+        """Install if needed, stop the current model, load the new one.
+        `reload` loads it again even if it's the current one (new settings)."""
 
         current = self.engine.spec
-        if current is not None and current.id == spec.id and self.engine.ready.is_set():
+        if not reload and current is not None and current.id == spec.id and self.engine.ready.is_set():
             self.ui.post(lambda: self.ui.show("ok", f"Already using {spec.name}", 1500))
             return
 
@@ -142,6 +237,8 @@ class App:
             # A teacher or training run may be using the GPU the new model needs.
             self.autolearn.preempt("model switch", restore=False)
             with self._switch_lock:
+                self._loading = spec.name
+                self.ui.post(self.tray.refresh)
                 try:
                     if not host.is_ready(spec, self.cfg.resolved_device()):
                         self.ui.post(lambda: self.ui.show("working", f"Installing {spec.name}…"))
@@ -150,6 +247,7 @@ class App:
                     self._log(f"Loading {spec.name}...")
                     info = self.engine.start(spec, self.cfg.engine_opts())
                 except Exception as exc:
+                    self._loading = None
                     self._log(str(exc))
                     self.ui.post(lambda: self.ui.show("error", f"{spec.name} failed to load", 4000))
                     self.ui.post(self.ui.refresh_models)
@@ -159,6 +257,8 @@ class App:
                 if self.cfg.model != saved:
                     self.cfg.model = saved
                     config.set_value("model", saved)
+                self._loading = None
+                self.ui.post(self.tray.refresh)
                 msg = f"{spec.name} ready on {info.get('device')} ({info.get('load_s')}s)"
                 self._log(msg)
                 self.ui.post(lambda: self.ui.show("ok", msg, 2000))
@@ -208,7 +308,7 @@ class App:
         # Stops a background job that would slow dictation down, and gets
         # the dictation model loading again if it had been unloaded for it.
         self.autolearn.key_down()
-        self.ui.post(lambda: self.ui.show("listening", "Listening…"))
+        self.ui.post(lambda: (self.ui.show("listening", "Listening…"), self.tray.set_listening(True)))
 
     def _mic_failed(self, error: str) -> None:
         print(f"Can't open the microphone: {error}")
@@ -217,10 +317,11 @@ class App:
     def _on_cancel(self) -> None:
         self.recorder.stop()
         self.autolearn.dictation_done()
-        self.ui.post(self.ui.hide)
+        self.ui.post(lambda: (self.ui.hide(), self.tray.set_listening(False)))
 
     def _on_stop(self) -> None:
         audio = self.recorder.stop()
+        self.ui.post(lambda: self.tray.set_listening(False))
         if getattr(self.recorder, "error", None):  # _mic_failed already said so
             self.autolearn.dictation_done()
             return
