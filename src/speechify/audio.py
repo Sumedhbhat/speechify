@@ -204,3 +204,21 @@ def stop_playback() -> None:
         import sounddevice as sd
 
         sd.stop()
+
+
+def microphones() -> list[str]:
+    """Input device names, from the system's default audio API only (Windows
+    lists each microphone once per API: MME, DirectSound, WASAPI...)."""
+    import sounddevice as sd
+
+    try:
+        devices = sd.query_devices()
+        default = sd.default.device[0]
+        api = devices[default]["hostapi"] if default is not None and default >= 0 else None
+    except Exception:
+        return []
+    names = []
+    for d in devices:
+        if d["max_input_channels"] > 0 and (api is None or d["hostapi"] == api) and d["name"] not in names:
+            names.append(d["name"])
+    return names

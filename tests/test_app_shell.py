@@ -6,7 +6,14 @@ import types
 
 import pytest
 
-from speechify import autostart, combos
+from speechify import autostart, combos, settings
+from speechify.config import Config
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    monkeypatch.setenv("SPEECHIFY_HOME", str(tmp_path / "data"))
+    return tmp_path
 
 
 # --- names ---------------------------------------------------------------------
@@ -27,6 +34,29 @@ def test_keys_from_tk():
     assert combos.key_from_tk("F13") == "f13"
     assert combos.key_from_tk("a") is None  # would type while held
     assert combos.key_from_tk("Return") is None
+
+
+# --- settings ------------------------------------------------------------------
+
+
+def test_settings_changes_are_typed_and_saved(home):
+    cfg = Config.load()
+    values = {"min_hold_ms": "300", "keep_mic_open": True, "idle_minutes": "5", "language": " de "}
+    assert settings.problems(values) == []
+    changed = settings.changes(cfg, values)
+    assert changed == {"min_hold_ms": 300, "keep_mic_open": True, "language": "de"}
+    settings.save(cfg, changed)
+    again = Config.load()
+    assert (again.min_hold_ms, again.keep_mic_open, again.language) == (300, True, "de")
+
+
+def test_settings_problems():
+    assert settings.problems({"min_hold_ms": "soon"}) == ["min hold ms must be a number"]
+    assert settings.problems({"beam_size": "0"})
+    assert settings.problems({"device": "tpu"})
+    assert settings.problems({"correct_hotkey": "<hyper>+f"})
+    same = {"correct_hotkey": "<ctrl>+<alt>+f", "history_hotkey": "<alt>+<ctrl>+f"}
+    assert settings.problems(same) == ["two shortcuts are the same"]
 
 
 # --- start at login --------------------------------------------------------------

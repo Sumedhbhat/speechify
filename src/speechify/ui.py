@@ -173,6 +173,7 @@ class UI:
         self._correction: tk.Toplevel | None = None
         self._history = None
         self._models = None
+        self._settings = None
         self.meter = None  # anything with .level (RMS) and .live, e.g. the Recorder
         self._build_pill()
         self.root.after(16, self._drain)
@@ -348,6 +349,20 @@ class UI:
 
         self._models = ModelsWindow(self.root, active, use, install, rollback, device, on_close=closed)
         bring_to_front(self._models.win)
+
+    def open_settings(self, cfg, on_save, open_models, model_name, welcome: bool = False) -> None:
+        from .settings_ui import SettingsWindow
+
+        if self._settings is not None:
+            bring_to_front(self._settings.win)
+            return
+
+        def closed() -> None:
+            self._settings = None
+
+        self._settings = SettingsWindow(self.root, cfg, on_save, open_models, model_name,
+                                        welcome=welcome, on_close=closed)
+        bring_to_front(self._settings.win)
 
     def refresh_models(self) -> None:
         if self._models is not None:
