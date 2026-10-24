@@ -38,8 +38,9 @@ Settings > Privacy & Security, scroll down and click **Open Anyway**. To start
 it when you log in, add it under System Settings > General > Login Items.
 
 Push to talk on a Mac is **Right Option**, since Mac keyboards have no Right
-Ctrl. The first start asks for two permissions: Microphone and Accessibility
-(to see the talk key and to paste). Allow both, then start Speechify again.
+Ctrl. The first start asks for Accessibility (to see the talk key and to
+paste); allow it, then start Speechify again. The first time you hold the talk
+key, macOS asks for the Microphone too.
 Until the app is signed, macOS treats each update as a new app and asks for
 these again.
 
@@ -299,8 +300,10 @@ speechify where      print the config and data folder
 
 ## Why it should feel faster than Handy
 
-- The mic stream stays open all the time and keeps 300 ms of pre-roll, so
-  there's no startup delay and the first word isn't cut off.
+- The mic opens on a background thread the moment the key goes down, so the
+  keyboard never waits for it. If you lose the first syllable, set
+  `keep_mic_open = true`: the stream then stays open with 300 ms of pre-roll,
+  at the cost of the mic always showing as in use.
 - The model is loaded and warmed up once, then stays loaded. With Whisper
   large-v3-turbo each sentence is a single GPU pass of roughly 0.2–0.5 s on an
   RTX card. Parakeet is faster still.

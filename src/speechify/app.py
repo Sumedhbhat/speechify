@@ -26,7 +26,9 @@ class App:
         self.cfg = cfg
         self.ui = UI()
         self.learner = Learner(data_dir(), cfg.autocorrect_after)
-        self.recorder = recorder or Recorder(cfg.input_device or None)
+        self.recorder = recorder or Recorder(
+            cfg.input_device or None, cfg.keep_mic_open, on_error=self._mic_failed
+        )
         self.engine = host.EngineHost()
         self._switch_lock = threading.Lock()
         # Teacher labels and retraining while you're away (autolearn.py).
@@ -207,6 +209,10 @@ class App:
         self.autolearn.key_down()
         self.ui.post(lambda: self.ui.show("listening", "Listening…"))
 
+    def _mic_failed(self, error: str) -> None:
+        print(f"Can't open the microphone: {error}")
+        self.ui.post(lambda: self.ui.show("error", "Can't open the microphone", 4000))
+
     def _on_cancel(self) -> None:
         self.recorder.stop()
         self.autolearn.dictation_done()
@@ -214,6 +220,9 @@ class App:
 
     def _on_stop(self) -> None:
         audio = self.recorder.stop()
+        if getattr(self.recorder, "error", None):  # _mic_failed already said so
+            self.autolearn.dictation_done()
+            return
         self.ui.post(lambda: self.ui.show("working", "Transcribing…"))
         self._jobs.put(lambda: self._dictate_and_finish(audio))
 
