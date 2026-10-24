@@ -2,8 +2,8 @@
 ; after PyInstaller, with SPEECHIFY_VERSION set.
 ;
 ; Installs per user into %LOCALAPPDATA%\Programs\Speechify without asking for
-; admin, adds a Start menu shortcut and the `speechify` command, and updates
-; in place when a newer installer is run. Recordings, settings and models in
+; admin, adds a Start menu shortcut and the `speechify` command (speechify.com,
+; the console build), and updates in place when a newer installer is run. Recordings, settings and models in
 ; %APPDATA%\speechify are never touched, not even by uninstalling.
 
 #define Version GetEnv("SPEECHIFY_VERSION")
@@ -55,21 +55,26 @@ Type: files; Name: "{app}\pyproject.toml"
 Type: files; Name: "{app}\uv.lock"
 Type: files; Name: "{app}\README.md"
 Type: files; Name: "{app}\VERSION"
+; Starting at sign-in used to be a Startup folder shortcut; it's the Run key
+; now, which Speechify's settings window can switch too.
+Type: files; Name: "{userstartup}\Speechify.lnk"
 
 [Files]
 Source: "..\build\dist\Speechify\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-; Minimized: the console shows each dictation's latency, and closing it quits.
-Name: "{autoprograms}\Speechify"; Filename: "{app}\Speechify.exe"; WorkingDir: "{app}"; Flags: runminimized
-Name: "{userstartup}\Speechify"; Filename: "{app}\Speechify.exe"; WorkingDir: "{app}"; Flags: runminimized; Tasks: autostart
+Name: "{autoprograms}\Speechify"; Filename: "{app}\Speechify.exe"; WorkingDir: "{app}"
 
 [Registry]
+; The same value autostart.py reads and writes.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Speechify"; ValueData: """{app}\Speechify.exe"""; Flags: uninsdeletevalue; Tasks: autostart
+; Uninstalling also removes it when it was switched on in Speechify's settings.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "Speechify"; Flags: uninsdeletevalue
 ; The `speechify` command in new terminals.
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Check: NeedsAddPath(ExpandConstant('{app}'))
 
 [Run]
-Filename: "{app}\Speechify.exe"; Description: "Start Speechify"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent runminimized
+Filename: "{app}\Speechify.exe"; Description: "Start Speechify"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 function UserPath(): string;

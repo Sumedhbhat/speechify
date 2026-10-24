@@ -29,13 +29,14 @@ CUDA; each model's CUDA libraries come from pip. A recent NVIDIA driver is all
 you need.
 
 **On Windows**, Speechify is in the Start menu, and the installer can also start
-it when you sign in. It runs in a minimized console window that shows each
-dictation; close that window to quit. New terminals get a `speechify` command.
+it when you sign in. It runs in the background with an icon in the tray, next
+to the clock (Windows may tuck it under the ^ arrow; drag it out to keep it in
+sight). New terminals get a `speechify` command.
 
 **On a Mac**, the app isn't signed with an Apple Developer ID yet, so the
 first time you open it macOS says it can't check it for malware. Open System
-Settings > Privacy & Security, scroll down and click **Open Anyway**. To start
-it when you log in, add it under System Settings > General > Login Items.
+Settings > Privacy & Security, scroll down and click **Open Anyway**.
+Speechify has no Dock icon; it lives in the menu bar.
 
 Push to talk on a Mac is **Right Option**, since Mac keyboards have no Right
 Ctrl. The first start asks for Accessibility (to see the talk key and to

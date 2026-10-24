@@ -175,7 +175,9 @@ jobs:
         run: |
           $setup = Get-ChildItem dist/Speechify-*-windows-x64-setup.exe
           Start-Process $setup.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER" -Wait
-          "APP=$env:LOCALAPPDATA\Programs\Speechify\Speechify.exe" >> $env:GITHUB_ENV
+          # The console build; Speechify.exe has no console to print to.
+          "APP=$env:LOCALAPPDATA\Programs\Speechify\speechify.com" >> $env:GITHUB_ENV
+          if (-not (Test-Path "$env:LOCALAPPDATA\Programs\Speechify\Speechify.exe")) { throw "No Speechify.exe" }
           if (-not (Test-Path "$([Environment]::GetFolderPath('Programs'))\Speechify.lnk")) { throw "No Start menu shortcut" }
 
       - name: Install (macOS)

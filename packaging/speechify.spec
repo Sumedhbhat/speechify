@@ -55,19 +55,27 @@ pyz = PYZ(a.pure)
 
 name = "speechify" if sys.platform.startswith("linux") else "Speechify"
 icon = {"win32": "icon.ico", "darwin": "icon.icns"}.get(sys.platform)
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
-    name=name,
-    # Windows keeps a console (started minimized) for the per-dictation log and
-    # so closing it quits; the Mac app logs to a file instead.
-    console=sys.platform != "darwin",
-    icon=str(build / icon) if icon else None,
-    version=str(build / "version_info.txt") if sys.platform == "win32" else None,
-)
-coll = COLLECT(exe, a.binaries, a.datas, name=name)
+def executable(exe_name: str, console: bool):
+    return EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name=exe_name,
+        console=console,
+        icon=str(build / icon) if icon else None,
+        version=str(build / "version_info.txt") if sys.platform == "win32" else None,
+    )
+
+
+# The app has no console window: it lives in the tray (menu bar on a Mac) and
+# logs to a file (applog.py). Windows also gets a console build for the
+# `speechify` command in terminals; build.sh renames it to speechify.com,
+# which Windows runs before Speechify.exe when you type `speechify`.
+exes = [executable(name, console=sys.platform.startswith("linux"))]
+if sys.platform == "win32":
+    exes.append(executable("speechify-console", console=True))
+coll = COLLECT(*exes, a.binaries, a.datas, name=name)
 
 if sys.platform == "darwin":
     short_version = version.split("-")[0]
