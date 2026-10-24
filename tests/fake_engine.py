@@ -2,6 +2,9 @@
 
 import time
 
+# The worker warms up on the first 3 s of the self-test clip (worker.warmup_audio).
+WARMUP_SAMPLES = 3 * 16_000
+
 
 class Echo:
     device = "test"
@@ -31,7 +34,7 @@ class Teacher:
         return self.transcribe_scored(audio, prompt)[0]
 
     def transcribe_scored(self, audio, prompt):
-        if audio.size > 16_000:  # the warm-up clip is exactly one second
+        if audio.size != WARMUP_SAMPLES:
             time.sleep(float(self.cfg.get("clip", 0)))
         text = self.cfg.get("text", "the teacher heard this")
         logprob = self.cfg.get("logprob")
@@ -54,6 +57,6 @@ class GpuCrash:
     def transcribe(self, audio, prompt):
         import os
 
-        if self.crash == "run" and audio.size != 16_000:  # not the warm-up
+        if self.crash == "run" and audio.size != WARMUP_SAMPLES:
             os._exit(3)
         return f"{audio.size} samples on {self.device}"

@@ -203,7 +203,10 @@ Every fix you save does three things:
 
 1. **Vocabulary hint, which helps right away.** The words you corrected to
    (`kubectl`, `GitHub`, names) are passed to Whisper as a glossary on every
-   later dictation, so it's much more likely to hear them correctly.
+   later dictation, so it's much more likely to hear them correctly. In
+   English, a short punctuated sentence goes in front of it, glossary or not:
+   without one, Whisper sometimes picks an all-lowercase, unpunctuated style
+   for a whole dictation.
 2. **Auto-replace rules.** Once you've made the same fix twice
    (`cube control` → `kubectl`), it gets applied automatically. You can change
    the threshold with `autocorrect_after`.

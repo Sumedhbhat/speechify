@@ -63,6 +63,10 @@ class ModelSpec:
     prompt: bool = False
     finetune: bool = False
     gated: bool = False
+    # Whether its transcripts come with capital letters and punctuation. The
+    # self-test fails a model that should and doesn't (metrics.formatting);
+    # the model picker says so for one that doesn't reliably.
+    punctuates: bool = True
     notes: str = ""
     # The same model for transcribe.cpp, used on GPUs other than NVIDIA's (see placed()).
     gguf: Gguf | None = None
@@ -173,6 +177,11 @@ MODELS: dict[str, ModelSpec] = {
         ModelSpec(
             "distil-whisper-large-v3", "Distil-Whisper large-v3", "whisper", "distil-large-v3",
             "English", accuracy=3, speed=4.5, vram_gb=2, download_gb=1.5, prompt=True,
+            # Ignores the punctuated prompt that fixes this for the other
+            # Whisper models: its output was the same with or without it.
+            punctuates=False,
+            notes="Sometimes writes a whole dictation in lowercase without punctuation; "
+                  "Whisper large-v3-turbo is nearly as fast and doesn't.",
         ),
         # --- NVIDIA NeMo models, exported to ONNX: the fastest --------------
         ModelSpec(

@@ -104,3 +104,22 @@ def test_worker_load_failure(fake_worker):
     engine = host.EngineHost()
     with pytest.raises(host.EngineError, match="could not load"):
         engine.start(fake_worker("fail"), {"device": "cpu"})
+
+
+def test_whisper_prompt_always_has_punctuated_text_in_english():
+    assert backends.whisper_prompt(None, "en") == backends.WHISPER_STYLE
+    assert backends.whisper_prompt("", "en") == backends.WHISPER_STYLE
+    assert backends.whisper_prompt("Glossary: Sumedh.", "en") == f"{backends.WHISPER_STYLE} Glossary: Sumedh."
+    # Other languages and auto-detect: an English sentence could pull them towards English.
+    assert backends.whisper_prompt(None, None) is None
+    assert backends.whisper_prompt("Glossary: Sumedh.", "de") == "Glossary: Sumedh."
+
+
+def test_whisper_prompt_fits_with_the_longest_glossary(tmp_path):
+    from speechify.learning import MAX_PROMPT_CHARS, Learner
+
+    learner = Learner(tmp_path, autocorrect_after=1)
+    for i in range(200):
+        learner._db.execute("INSERT INTO vocab (term, count) VALUES (?, 1)", (f"Term{i:03d}",))
+    learner._reload()
+    assert len(backends.whisper_prompt(learner.prompt(), "en")) <= MAX_PROMPT_CHARS

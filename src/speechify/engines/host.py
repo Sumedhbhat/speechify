@@ -28,6 +28,8 @@ from ..config import data_dir, has_cuda
 from .catalog import BACKENDS, GGML_DEVICES, ModelSpec, placed
 
 PYTHON = "3.12"
+# Real speech for the worker's warm-up run (see worker.warmup_audio).
+WARMUP_WAV = Path(__file__).resolve().parent.parent / "selftest_data" / "librispeech-sample.wav"
 MIN_PACKAGE_AGE = "14 days"  # same rule as Dependabot's cooldown: never install brand-new releases
 
 Log = Callable[[str], None]
@@ -170,7 +172,7 @@ def _worker_env(spec: ModelSpec, opts: dict, download_only: bool, offline: bool)
     env = dict(os.environ)
     env["PYTHONPATH"] = str(_shim())
     env["PYTHONUNBUFFERED"] = "1"
-    opts = {**opts, "models_dir": str(_root() / "models")}
+    opts = {**opts, "models_dir": str(_root() / "models"), "warmup_wav": str(WARMUP_WAV)}
     if spec.gguf is not None and spec.backend == "ggml":
         opts["gguf"] = dataclasses.asdict(spec.gguf)
     elif opts.get("device") in GGML_DEVICES:

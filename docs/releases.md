@@ -165,7 +165,9 @@ passes in the installed app on Windows, Linux and macOS (`check-package`):
 the CPU packages and default model a machine without an NVIDIA GPU gets. It runs the real app with a recorded
 clip standing in for the microphone and checks, with a screenshot per step:
 
-- holding Right Ctrl transcribes the clip and pastes it into Notepad
+- holding Right Ctrl transcribes the clip and pastes it into Notepad, with
+  capital letters and punctuation (`metrics.formatting` against a punctuated
+  reference; word error rate can't see them)
 - the overlay never takes focus from the app you're dictating into
 - Ctrl+Alt+F opens the fix window, a pasted fix replaces the text, and
   Ctrl+Enter learns it and swaps it in Notepad
@@ -175,7 +177,8 @@ clip standing in for the microphone and checks, with a screenshot per step:
 The report and screenshots are attached to each run as the `selftest-report`
 artifact. The [Models workflow](../.github/workflows/models.yml) separately
 installs and runs every model on Windows, and one per backend on Linux and
-macOS, weekly and whenever engine code changes. CI also types through a real
+macOS, weekly and whenever engine code changes, and fails a model whose
+transcripts lose their capitals or punctuation. CI also types through a real
 uinput virtual keyboard and reads it back from `/dev/input`, the path
 Speechify takes on Wayland. What CI can't cover is a desktop session on
 Linux or macOS: grabbing the talk key and pasting into another app there have
