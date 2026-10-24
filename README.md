@@ -113,6 +113,15 @@ Open **Settings…** from the tray or menu bar icon. Everything there is saved t
 `config.toml` can still be edited by hand (**Open data folder** in the
 settings); restart Speechify afterwards.
 
+## History
+
+**History…** in the menu, or **Ctrl+Alt+H**, lists every dictation, newest
+first. Search it, or show only the edited ones, the ones pasted as heard, or the
+ones excluded from training. Pick one to play its audio, fix its text (which
+also teaches the vocabulary and the automatic fixes), exclude it from
+training, or delete it. **Copy text** (or a double-click) puts it on the
+clipboard, to paste it again anywhere.
+
 ## Models
 
 Open the model picker with **Ctrl+Alt+M**, or run `speechify models`. It lists
