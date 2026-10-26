@@ -1,0 +1,33 @@
+{
+  "model": "parakeet-tdt-0.6b-v3",
+  "sha256": "5859f77944efcd8eafa23a6350731960b2b55b2203df51f319665c807d802cc7",
+  "fixture": "/home/bhatsumedh/bench-speechify-vs-handy/audio/clips/short0.wav",
+  "fixtureSha256": "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+  "platform": "linux",
+  "arch": "x64",
+  "cpu": "AMD Ryzen 5 3500U with Radeon Vega Mobile Gfx",
+  "loadMs": 1691.15332,
+  "runs": [
+    {
+      "id": 2,
+      "text": "Mister Quilter is the apostle of the middle classes, and we are glad to welcome his gospel.",
+      "confidence": 0.9891690336705173,
+      "device": "CPU",
+      "ms": 1201.9468180000001
+    },
+    {
+      "id": 3,
+      "text": "Mister Quilter is the apostle of the middle classes, and we are glad to welcome his gospel.",
+      "confidence": 0.9891690336705173,
+      "device": "CPU",
+      "ms": 1191.3359680000003
+    },
+    {
+      "id": 4,
+      "text": "Mister Quilter is the apostle of the middle classes, and we are glad to welcome his gospel.",
+      "confidence": 0.9891690336705173,
+      "device": "CPU",
+      "ms": 1335.0634069999996
+    }
+  ]
+}

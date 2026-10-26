@@ -1,0 +1,31 @@
+✔ catalog preserves all fourteen models and eleven pins (6.089103ms)
+✔ hold key ignores repeats, taps and Ctrl+C (3.596616ms)
+✔ combination requires exact chord; unrelated held key suppresses capture (1.093239ms)
+✔ cancellation invalidates queued tasks and capacity is bounded (45.039082ms)
+✔ settings persist all baseline fields and reject invalid patches atomically (24.849796ms)
+✔ candidate path guard rejects traversal and symlinks (2.737791ms)
+✔ word rules preserve casing and reject long rewrites and insertions (7.373413ms)
+✔ training never uses pasted guesses; correction precedence beats teacher (1.135689ms)
+✔ SQLite history corrections, threshold, reversion, deletion and export (25.86179ms)
+✔ malicious audio reference cannot delete external file (6.809066ms)
+✔ SQLite-consistent import copies audio and does not change source (30.197555ms)
+✔ WAV reads samples exactly and refuses malformed/truncated fixtures (2.48341ms)
+✔ paste checks focus before changing clipboard (1.692673ms)
+✔ clipboard ownership token prevents clobbering even a newer identical copy (0.999211ms)
+✔ clipboard restores snapshot on successful paste when still owned (0.615224ms)
+✔ failed download and cancellation remove candidate partial files (84.326099ms)
+✔ read-only reuse rejects unverified models (22.022284ms)
+✔ teacher rejects hallucination on silence and clamps probabilities (33.771579ms)
+✔ adoption requires both gates and strict personal improvement (0.590918ms)
+✔ diagnostics rotate bounded files and do not include fixture transcript (25.377384ms)
+✔ failed import rolls back candidate rows and copied WAVs (31.598798ms)
+✔ history filters before applying the result limit (99.896874ms)
+✔ settings reject non-finite teacher confidence without writing (1.553831ms)
+ℹ tests 23
+ℹ suites 0
+ℹ pass 23
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 887.601343

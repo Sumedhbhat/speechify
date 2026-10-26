@@ -16,19 +16,16 @@ export class Store {
     );
   }
   rows(search = "", filter = "all") {
-    return this.db
-      .prepare(
-        "SELECT * FROM samples WHERE coalesce(corrected,pasted) LIKE ? ORDER BY ts DESC LIMIT 500",
-      )
-      .all("%" + search + "%")
-      .filter(
-        (r: any) =>
-          filter === "all" ||
-          (filter === "edited" && r.corrected !== null) ||
-          (filter === "unedited" && r.corrected === null) ||
-          (filter === "excluded" && r.excluded),
-      );
+    const predicate = {
+      all: "1", edited: "corrected IS NOT NULL",
+      unedited: "corrected IS NULL", excluded: "excluded != 0",
+    }[filter];
+    if (!predicate) throw Error("Unknown history filter");
+    return this.db.prepare(
+      `SELECT * FROM samples WHERE coalesce(corrected,pasted) LIKE ? AND ${predicate} ORDER BY ts DESC LIMIT 500`,
+    ).all("%" + search + "%");
   }
+
   add(wav: Buffer, raw: string, pasted: string, keep = true) {
     const name = keep ? randomUUID() + ".wav" : null;
     if (name) atomic(owned(this.audio, name), wav);

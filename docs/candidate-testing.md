@@ -143,3 +143,7 @@ Run one candidate at a time; quit the other before enabling hooks/microphone.
 4. Change the input, unplug it, rebind a shortcut, switch models, cancel a download, cancel an inference, then restart. Verify recovery and persistence. Check the indicator never takes focus.
 5. Play/correct/revert/exclude/delete/export recordings. Confirm repeated corrections become rules and hints. If testing optional learning, use human/teacher-labeled audio and verify both gates before adoption; then roll back. Save-and-replace is explicitly unavailable in this candidate.
 6. Enable and disable candidate startup only if desired, confirm the original Speechify entry remains unchanged, then quit. Confirm worker/helper processes are gone and the microphone indicator clears. Report unsupported Wayland global hooks/paste separately rather than attempting privilege escalation.
+
+## Independent lead review
+
+The lead reran the packaged Parakeet CPU fixture (see `electron-evidence/lead-packaged-fixture.json`) and the unit suite. Review found and fixed filtering after the history result cap, which hid old matching entries, and acceptance of non-finite teacher confidence. The expanded suite passes 23 tests. Fixture timings are not desktop latency measurements or controlled candidate rankings. Linux desktop integration is still unverified: this host currently has only a GDM greeter session, not an accessible logged-in user desktop.

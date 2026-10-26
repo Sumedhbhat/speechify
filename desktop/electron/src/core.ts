@@ -83,6 +83,7 @@ export class Settings {
       next.keep_versions < 1 ||
       next.autocorrect_after < 1 ||
       next.beam_size < 1 ||
+      !Number.isFinite(next.teacher_min_confidence) ||
       next.teacher_min_confidence < 0 ||
       next.teacher_min_confidence > 1
     )

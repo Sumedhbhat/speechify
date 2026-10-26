@@ -342,3 +342,20 @@ test("failed import rolls back candidate rows and copied WAVs", async () => {
   source.close();
   dest.close();
 });
+
+test("history filters before applying the result limit", () => {
+  const s = new Store(temp());
+  const old = s.add(pcmWav(Buffer.alloc(2)), "old", "old", false);
+  s.correct(old, "corrected old");
+  s.db.prepare("UPDATE samples SET ts=0 WHERE id=?").run(old);
+  for (let i = 0; i < 501; i++) s.add(pcmWav(Buffer.alloc(2)), "new", "new", false);
+  assert.equal(s.rows("", "edited").length, 1);
+  assert.equal(s.rows("", "edited")[0].id, old);
+  assert.throws(() => s.rows("", "invalid"), /Unknown history filter/);
+  s.close();
+});
+test("settings reject non-finite teacher confidence without writing", () => {
+  const s = new Settings(temp());
+  assert.throws(() => s.save({teacher_min_confidence: NaN}), /Invalid setting range/);
+  assert.equal(s.value.teacher_min_confidence, 0.7);
+});
