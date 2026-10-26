@@ -1,0 +1,14 @@
+{
+  "platform": "linux-x64",
+  "modelWeightsIncluded": false,
+  "artifacts": [
+    {
+      "path": "/home/bhatsumedh/workspaces/worktrees/speechify/t3-dfc8c477/desktop/electron/artifacts/speechify-electron-candidate-linux-x64.tar.gz",
+      "bytes": 146814776
+    },
+    {
+      "path": "/home/bhatsumedh/workspaces/worktrees/speechify/t3-dfc8c477/desktop/electron/artifacts/speechify-electron-candidate-linux-x64.deb",
+      "bytes": 105920518
+    }
+  ]
+}

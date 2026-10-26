@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; media-src 'self' blob: data:; connect-src 'none'"
+    />
+    <title>Speechify Electron Candidate</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <aside>
+      <div class="brand">Speechify<span>Electron Candidate</span></div>
+      <nav aria-label="Main">
+        <button data-page="Dictation">Dictation</button
+        ><button data-page="History">History</button
+        ><button data-page="Models">Models</button
+        ><button data-page="Learning">Learning</button
+        ><button data-page="Settings">Settings</button>
+      </nav>
+      <div class="readiness" role="status">
+        <span id="status">Starting background service…</span
+        ><small id="runtime"></small>
+      </div>
+    </aside>
+    <main>
+      <header>
+        <h1 id="heading">Dictation</h1>
+        <button id="cancel">Cancel current work</button>
+      </header>
+      <p id="error" role="alert" hidden></p>
+      <div id="content"></div>
+    </main>
+    <script src="../dist/renderer.js"></script>
+  </body>
+</html>

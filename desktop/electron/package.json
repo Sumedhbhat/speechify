@@ -1,0 +1,32 @@
+{
+  "name": "speechify-electron-candidate",
+  "productName": "Speechify Electron Candidate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Isolated Speechify Electron comparison candidate",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test dist/test/*.js",
+    "start": "npm run build && electron .",
+    "package": "npm run build && node scripts/package.mjs",
+    "fixture": "node dist/fixture.js",
+    "native": "node scripts/fetch-native.mjs"
+  },
+  "dependencies": {
+    "koffi": "3.3.3",
+    "smol-toml": "1.9.1",
+    "uiohook-napi": "1.5.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "electron": "44.9.3",
+    "prettier": "3.9.10",
+    "typescript": "7.0.2"
+  },
+  "allowScripts": {
+    "koffi@3.3.3": true,
+    "uiohook-napi@1.5.5": true,
+    "electron@44.9.3": true
+  }
+}

@@ -1,0 +1,15 @@
+body {
+  margin: 0;
+  background: #202735;
+  color: #f3f6fc;
+  font:
+    15px/1.5 -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  padding: 16px;
+}
+#indicator {
+  border-left: 4px solid #8db7ff;
+  padding-left: 12px;
+}

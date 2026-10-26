@@ -1,0 +1,10 @@
+numpy==2.5.4
+torch==2.14.1
+transformers==5.19.0
+faster-whisper==1.2.1
+ctranslate2==4.8.2
+accelerate==1.15.0
+soundfile==0.14.0
+librosa==1.0.0
+sentencepiece==0.2.2
+protobuf==7.36.2

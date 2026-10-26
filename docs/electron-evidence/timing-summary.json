@@ -1,0 +1,7 @@
+{
+  "sampleCount": 3,
+  "modelLoadMs": 3556.9135929999998,
+  "medianInferenceMs": 2573.9196950000005,
+  "p95NearestRankInferenceMs": 3025.983555,
+  "qualification": "Development fixture verification only. Not a controlled device benchmark, not cold filesystem cache, not UI or paste latency."
+}
