@@ -60,8 +60,11 @@ impl Store {
         Ok(self.db.last_insert_rowid())
     }
     pub fn history(&self, search: &str, filter: &str) -> Result<Vec<Value>> {
-        let mut st=self.db.prepare("SELECT id,ts,audio,raw,pasted,corrected,excluded,teacher_text,teacher_confidence,teacher_note,teacher_model FROM samples WHERE coalesce(corrected,pasted) LIKE ? AND (? != 'edited' OR corrected IS NOT NULL) AND (? != 'unedited' OR corrected IS NULL) AND (? != 'excluded' OR excluded=1) ORDER BY ts DESC LIMIT 1000").map_err(err)?;
-        let rows=st.query_map(params![format!("%{search}%"),filter,filter,filter],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"ts":r.get::<_,f64>(1)?,"audio":r.get::<_,Option<String>>(2)?,"raw":r.get::<_,String>(3)?,"pasted":r.get::<_,String>(4)?,"corrected":r.get::<_,Option<String>>(5)?,"excluded":r.get::<_,i32>(6)?,"teacher_text":r.get::<_,Option<String>>(7)?,"teacher_confidence":r.get::<_,Option<f64>>(8)?,"teacher_note":r.get::<_,Option<String>>(9)?,"teacher_model":r.get::<_,Option<String>>(10)?}))).map_err(err)?;
+        self.history_rows(search, filter, 1000)
+    }
+    fn history_rows(&self, search: &str, filter: &str, limit: i64) -> Result<Vec<Value>> {
+        let mut st=self.db.prepare("SELECT id,ts,audio,raw,pasted,corrected,excluded,teacher_text,teacher_confidence,teacher_note,teacher_model FROM samples WHERE coalesce(corrected,pasted) LIKE ? AND (? != 'edited' OR corrected IS NOT NULL) AND (? != 'unedited' OR corrected IS NULL) AND (? != 'excluded' OR excluded=1) ORDER BY ts DESC LIMIT ?").map_err(err)?;
+        let rows=st.query_map(params![format!("%{search}%"),filter,filter,filter,limit],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"ts":r.get::<_,f64>(1)?,"audio":r.get::<_,Option<String>>(2)?,"raw":r.get::<_,String>(3)?,"pasted":r.get::<_,String>(4)?,"corrected":r.get::<_,Option<String>>(5)?,"excluded":r.get::<_,i32>(6)?,"teacher_text":r.get::<_,Option<String>>(7)?,"teacher_confidence":r.get::<_,Option<f64>>(8)?,"teacher_note":r.get::<_,Option<String>>(9)?,"teacher_model":r.get::<_,Option<String>>(10)?}))).map_err(err)?;
         rows.collect::<std::result::Result<_, _>>().map_err(err)
     }
     pub fn edit(&mut self, id: i64, text: &str) -> Result<()> {
@@ -234,7 +237,7 @@ impl Store {
             .join(format!("dataset-{}", (now() * 1e6) as u64));
         std::fs::create_dir_all(&out).map_err(err)?;
         let mut csv = "file_name,transcription,source\n".to_string();
-        for r in self.history("", "")? {
+        for r in self.history_rows("", "", -1)? {
             if let Some((text, source)) = label(&r, threshold) {
                 let src = self.audio_path(r["id"].as_i64().unwrap())?;
                 if src.exists() {
@@ -437,6 +440,21 @@ mod persistence_tests {
         )
         .unwrap();
         assert!(s.audio_path(id2).is_err());
+        drop(s);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn export_includes_labels_older_than_history_limit() {
+        let root = std::env::temp_dir().join(format!("speechify-export-limit-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("audio")).unwrap();
+        let mut s = Store::open(&root).unwrap();
+        let id = s.record(&[0.1; 16], "old", "old", true).unwrap();
+        s.edit(id, "corrected oldest").unwrap();
+        s.db.execute("UPDATE samples SET ts=0 WHERE id=?", [id]).unwrap();
+        for _ in 0..1001 { s.record(&[], "new", "new", false).unwrap(); }
+        assert_eq!(s.history("", "").unwrap().len(), 1000);
+        let out = s.export(0.7).unwrap();
+        assert!(std::fs::read_to_string(out.join("metadata.csv")).unwrap().contains("corrected oldest"));
         drop(s);
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -214,15 +214,14 @@ impl Service {
             .unwrap()
             .apply(&raw, cfg["autocorrect_after"].as_u64().unwrap_or(2))?;
         if !cfg["llm_url"].as_str().unwrap_or("").is_empty() && !text.is_empty() {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .map_err(|e| e.to_string())?;
-            let response:Value=client.post(cfg["llm_url"].as_str().unwrap()).json(&json!({"model":cfg["llm_model"],"temperature":0,"messages":[{"role":"system","content":"Clean dictation punctuation and grammar. Return only the corrected text. Preserve meaning."},{"role":"user","content":text}]})).send().and_then(|r|r.error_for_status()).and_then(|r|r.json()).map_err(|e|e.to_string())?;
-            text = response["choices"][0]["message"]["content"]
-                .as_str()
-                .ok_or("LLM returned no text")?
-                .to_owned();
+            match cleanup_text(cfg["llm_url"].as_str().unwrap(), &cfg["llm_model"], &text) {
+                Ok(cleaned) => text = cleaned,
+                Err(_) => {
+                    // Optional remote cleanup must not discard a valid local dictation.
+                    result["cleanup_warning"] = json!("Cleanup unavailable; using local transcription");
+                    self.log("cleanup_unavailable", json!({}));
+                }
+            }
         }
         if self.generation.load(Ordering::SeqCst) != generation {
             return Err("Cancelled".into());
@@ -242,7 +241,7 @@ impl Service {
             state["recent"] = result["text"].clone();
             state["device"] = result["device"].clone();
             state["stage"] = json!("Ready");
-            state["error"] = Value::Null;
+            state["error"] = result["cleanup_warning"].clone();
         }
         self.log("inference",json!({"model":cfg["model"],"device":result["device"],"inference_ms":result["inference_ms"]}));
         *self.last_activity.lock().unwrap() = Instant::now();
@@ -296,4 +295,23 @@ pub fn diagnostics() -> Value {
     let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
         || std::env::var("XDG_SESSION_TYPE").is_ok_and(|s| s == "wayland");
     json!({"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"session":if cfg!(target_os="linux"){if wayland{"Wayland"}else{"X11"}}else{"native"},"guidance":if cfg!(target_os="macos"){ "Grant Microphone, Accessibility and Input Monitoring to Speechify Tauri Candidate in System Settings. Restart after grants. Use a stable signing identity." }else if cfg!(windows){ "Enable microphone access for desktop applications. Windows UIPI blocks pasting into elevated applications from a non-elevated candidate." }else if wayland{ "Wayland recording requires explicitly granted read access to /dev/input/by-id/*-event-kbd. Safe target discovery/paste is unavailable: transcripts are saved for manual copy (wl-clipboard required). No input privileges or uinput devices are created automatically. Use X11 for automatic paste." }else{ "X11 requires DISPLAY, libX11, xclip and xdotool. Microphone permission is controlled by PipeWire/PulseAudio/ALSA. Clipboard restoration preserves text only, not images or rich formats." }})
+}
+
+fn cleanup_text(url: &str, model: &Value, text: &str) -> Result<String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(15)).build().map_err(|e|e.to_string())?;
+    let response: Value = client.post(url).json(&json!({"model":model,"temperature":0,
+        "messages":[{"role":"system","content":"Clean dictation punctuation and grammar. Return only the corrected text. Preserve meaning."},
+                    {"role":"user","content":text}]}))
+        .send().and_then(|r|r.error_for_status()).and_then(|r|r.json()).map_err(|e|e.to_string())?;
+    response["choices"][0]["message"]["content"].as_str()
+        .filter(|s| !s.trim().is_empty()).map(str::to_owned).ok_or("LLM returned no text".into())
+}
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+    #[test]
+    fn unavailable_cleanup_is_an_error_not_empty_output() {
+        assert!(cleanup_text("invalid://cleanup", &json!("model"), "Keep my words.").is_err());
+    }
 }

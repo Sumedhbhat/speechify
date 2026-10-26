@@ -94,3 +94,11 @@ Artifacts are local build outputs, not published releases. Paths below are relat
 | `desktop/tauri/artifacts/speechify-tauri-candidate-linux-x86_64.tar.gz` | 29,190,538 |
 
 The portable directory is `desktop/tauri/artifacts/speechify-tauri-candidate-linux-x86_64/`. Extract the archive, enter that directory, and run `./speechify-tauri-candidate` to launch the tray/settings application during authorized device testing. Running with the `fixture` subcommand only performs ASR. Packages exclude downloaded ASR models and optional Python environments. No macOS or Windows artifacts were built; native build/launch instructions, permissions and a manual checklist are in `desktop/tauri/README.md`.
+
+## Independent lead review
+
+The lead fixed full-dataset export silently inheriting the 1,000-row UI cap, and optional cleanup failures discarding valid local transcription. `cargo test --release --locked` passed 19 tests, including an older eligible recording beyond the history limit. Evidence: `tauri-evidence/lead-tests.txt`.
+
+The packaged baseline window opened on an isolated Xvfb display with `GDK_BACKEND=x11`; `tauri-evidence/lead-window.png` shows its real initial missing-model state. This is window-rendering evidence only, not a microphone, focus, tray, hook or paste pass. The test app and virtual display subsequently terminated before interaction checks. No desktop acceptance pass is inferred.
+
+The earlier Parakeet reference directory is no longer present; an interrupted partial candidate copy failed SHA-256 verification as intended. Matched comparison will use the still-available checksum-pinned Moonshine model and JFK fixture instead.
