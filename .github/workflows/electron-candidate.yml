@@ -1,0 +1,54 @@
+name: Electron candidate packages
+
+on:
+  push:
+    branches: [sb/electron-desktop-candidate]
+    paths: ['desktop/electron/**', '.github/workflows/electron-candidate.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mac:
+    name: macOS candidate package (no release)
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: desktop/electron
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0, released 2026-10-08
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: desktop/electron/package-lock.json
+      - name: Record build host
+        run: |
+          uname -a
+          sw_vers
+          xcrun swiftc --version
+      - name: Install locked dependencies and pinned native runtime
+        run: |
+          npm ci
+          node node_modules/electron/install.js
+          npm run native
+      - name: Compile and test
+        run: npm test
+      - name: Package local candidate
+        run: npm run package
+      - name: Verify package and signing
+        run: |
+          shasum -a 256 -c artifacts/SHA256SUMS
+          codesign --verify --deep --strict "artifacts/speechify-electron-candidate-darwin-$(node -p process.arch)/Speechify Electron Candidate.app"
+          printf '%s\n' "$GITHUB_SHA" > artifacts/SOURCE-COMMIT.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2, released 2026-10-07
+        with:
+          name: speechify-electron-macos-candidate
+          path: |
+            desktop/electron/artifacts/*.dmg
+            desktop/electron/artifacts/SHA256SUMS
+            desktop/electron/artifacts/SOURCE-COMMIT.txt
+          if-no-files-found: error
+          retention-days: 14
