@@ -59,6 +59,9 @@ let settings: Settings,
   target = "",
   recording = false,
   activeId = "";
+let latestPastedId: number | undefined;
+let replacing = false;
+let captureReady = false;
 let pendingLoad: Promise<void> | undefined;
 let workGeneration = 0;
 const dictations = new BoundedQueue(4);
@@ -116,9 +119,11 @@ function state() {
     session: process.env.XDG_SESSION_TYPE || "",
     root,
     permissions: permissions(),
+    replaceableId: output.replaceable ? latestPastedId : undefined,
   };
 }
 function broadcast() {
+  if (quitting) return;
   if (window && !window.isDestroyed())
     window.webContents.send("state", state());
   if (indicator && !indicator.isDestroyed()) {
@@ -134,6 +139,7 @@ function broadcast() {
   }
 }
 function fail(e: unknown) {
+  if (quitting) return;
   error = String(e);
   status = "Needs attention";
   logs.log("error", { kind: e instanceof Error ? e.name : "Error" });
@@ -235,6 +241,7 @@ async function loadModel(id: string, install = false) {
   broadcast();
   engine.stop();
   pythonEngine.stop();
+  activeId = "";
   try {
     const spec = models.list().find((m) => m.id === id);
     if (!spec) throw Error("Unknown model");
@@ -254,11 +261,15 @@ async function loadModel(id: string, install = false) {
           "Set inference Python executable in Settings for this model",
         );
       inference = pythonEngine;
+      const repo = id.startsWith("ft:")
+        ? spec.repo
+        : await models.optionalFile(id);
+      if (generation !== workGeneration) throw Error("Cancelled");
       await pythonEngine.load({
         python: settings.value.inference_python,
         model: id,
-        repo: spec.repo,
-        install,
+        repo,
+        install: false,
         opts: {
           device: ["auto", "vulkan", "metal"].includes(settings.value.device)
             ? "cpu"
@@ -269,6 +280,10 @@ async function loadModel(id: string, install = false) {
           onnx_threads: settings.value.onnx_threads,
         },
       });
+    }
+    if (generation !== workGeneration) {
+      inference.stop();
+      throw Error("Cancelled");
     }
     settings.save({ model: id });
     activeId = id;
@@ -388,7 +403,13 @@ function bind() {
   }
 }
 function startRecording() {
-  if (recording) return;
+  if (recording || replacing) return;
+  if (!captureReady) {
+    fail(Error("Audio service is not ready; try again shortly"));
+    return;
+  }
+  latestPastedId = undefined;
+  output.replaceable = false;
   learning?.preempt();
   recording = true;
   status = "Recording";
@@ -407,12 +428,14 @@ function startRecording() {
   broadcast();
 }
 let captureGeneration = 0;
+let dictationsBusy = 0;
 const targets = new Map<number, string>();
 async function transcribe(
   samples: number[],
   focus: string,
   generation: number,
 ) {
+  dictationsBusy++;
   const started = performance.now();
   const pcm = Float32Array.from(samples);
   const wav = Buffer.alloc(pcm.length * 2);
@@ -423,7 +446,9 @@ async function transcribe(
     ),
   );
   try {
+    if (generation !== workGeneration) throw Error("Cancelled");
     if (pendingLoad) await pendingLoad;
+    if (generation !== workGeneration) throw Error("Cancelled");
     if (!activeId) throw Error("Install and select a model first");
     if (inference.device === "unloaded") await use(settings.value.model);
     const prompt = store
@@ -467,15 +492,26 @@ async function transcribe(
       return;
     }
     if (generation !== workGeneration) throw Error("Cancelled");
-    store.add(pcmWav(wav), result.text, text, settings.value.keep_all_audio);
+    const sampleId = store.add(
+      pcmWav(wav),
+      result.text,
+      text,
+      settings.value.keep_all_audio,
+    );
+    latestPastedId = undefined;
     recent = text;
     await guardedPaste(
       text,
       focus,
-      () => output.focus(),
-      () => output.key(focus),
+      () =>
+        generation === workGeneration ? output.focus() : Promise.resolve(""),
+      () => {
+        if (generation !== workGeneration) throw Error("Cancelled");
+        return output.key(focus, text);
+      },
       clip,
     );
+    latestPastedId = sampleId;
     logs.log("dictation_complete", { ms: performance.now() - started });
     status = "Pasted";
     setTimeout(() => {
@@ -487,6 +523,7 @@ async function transcribe(
   } catch (e) {
     fail(e);
   } finally {
+    dictationsBusy--;
     broadcast();
   }
 }
@@ -497,12 +534,13 @@ async function call(method: string, args: any) {
     case "history":
       return store.rows(args?.search, args?.filter);
     case "use":
+      if (dictationsBusy || recording)
+        throw Error("Finish or cancel dictation before switching models");
+      learning.preempt();
       await use(String(args));
       break;
     case "install":
-      if (models.list().find((m) => m.id === args)?.gguf)
-        void models.install(String(args)).catch(fail);
-      else void use(String(args), true).catch(fail);
+      void models.install(String(args)).catch(fail);
       break;
     case "cancelDownload":
       models.cancel(String(args));
@@ -521,6 +559,10 @@ async function call(method: string, args: any) {
       break;
     case "cancel":
       workGeneration++;
+      captureGeneration++;
+      targets.clear();
+      latestPastedId = undefined;
+      output.replaceable = false;
       recording = false;
       captureWindow.webContents.send("capture", {
         type: "stop",
@@ -537,6 +579,38 @@ async function call(method: string, args: any) {
     case "copy":
       await clipboard.writeText(String(args));
       break;
+    case "replace": {
+      store.correct(args.id, String(args.text)); // Save survives a refused replacement.
+      if (
+        args.id !== latestPastedId ||
+        !output.replaceable ||
+        recording ||
+        dictationsBusy ||
+        replacing
+      )
+        throw Error(
+          "Only the latest verified insertion can be replaced; correction saved only",
+        );
+      replacing = true;
+      const generation = workGeneration;
+      try {
+        window?.hide();
+        // Hiding Settings lets the OS reveal the previous app; never activate a remembered target.
+        await new Promise((r) => setTimeout(r, 350));
+        if (generation !== workGeneration)
+          throw Error("Cancelled; correction saved only");
+        await output.replace(String(args.text).trim());
+        latestPastedId = undefined;
+        status = "Correction replaced";
+      } catch (e) {
+        fail(e);
+        throw e;
+      } finally {
+        replacing = false;
+        broadcast();
+      }
+      break;
+    }
     case "correct":
       store.correct(args.id, String(args.text));
       break;
@@ -557,6 +631,20 @@ async function call(method: string, args: any) {
       store.forget(String(args));
       break;
     case "settings": {
+      if (
+        (dictationsBusy || recording) &&
+        [
+          "model",
+          "device",
+          "language",
+          "onnx_threads",
+          "compute_type",
+          "beam_size",
+        ].some((k) => k in args)
+      )
+        throw Error(
+          "Finish or cancel dictation before changing inference settings",
+        );
       const before = settings.value;
       settings.validate(args);
       settings.save(args);
@@ -680,6 +768,10 @@ else {
   app.on("window-all-closed", () => {});
   app.on("before-quit", () => {
     quitting = true;
+    workGeneration++;
+    targets.clear();
+    dictations.cancel();
+    output.stop();
     hold?.cancel();
     killTree(hook);
     globalShortcut.unregisterAll();
@@ -710,6 +802,9 @@ else {
       broadcast,
       () =>
         !recording &&
+        !dictationsBusy &&
+        !pendingLoad &&
+        !replacing &&
         !powerMonitor.isOnBatteryPower() &&
         Date.now() - lastKey >= settings.value.idle_minutes * 60000 &&
         powerMonitor.getSystemIdleTime() >= settings.value.idle_minutes * 60,
@@ -739,15 +834,19 @@ else {
       },
     });
     void captureWindow.loadFile(path.join(__dirname, "../ui/capture.html"));
-    captureWindow.webContents.on("did-finish-load", () =>
+    captureWindow.webContents.on("did-finish-load", () => {
+      captureReady = true;
       captureWindow.webContents.send("capture", {
         type: "configure",
         device: settings.value.input_device,
         keep: settings.value.keep_mic_open,
-      }),
-    );
+      });
+    });
     let audioCrashes = 0;
     captureWindow.webContents.on("render-process-gone", () => {
+      captureReady = false;
+      targets.clear();
+      captureGeneration++;
       recording = false;
       hold?.cancel();
       fail(Error("Audio service crashed; restarting without changing focus"));
@@ -767,9 +866,18 @@ else {
       return call(m, a);
     });
     ipcMain.on("capture-event", (e, event, data) => {
-      if (e.sender !== captureWindow.webContents) return;
+      if (quitting || e.sender !== captureWindow.webContents) return;
       if (event === "audio") {
-        if (!Array.isArray(data.pcm) || data.pcm.length > 16000 * 120) return;
+        if (
+          !Array.isArray(data.pcm) ||
+          !data.pcm.length ||
+          data.pcm.length > 16000 * 120 ||
+          !data.pcm.every(
+            (n: unknown) => typeof n === "number" && Number.isFinite(n),
+          ) ||
+          !targets.has(data.id)
+        )
+          return;
         const focus = targets.get(data.id) || "";
         targets.delete(data.id);
         const generation = workGeneration;
@@ -786,7 +894,12 @@ else {
           indicator.webContents.send("level", level);
         return;
       }
-      if (event === "error") fail(Error(data));
+      if (event === "error") {
+        recording = false;
+        hold?.cancel();
+        targets.delete(captureGeneration);
+        fail(Error(data));
+      }
       if (event === "missing-device") {
         settings.save({ input_device: "" });
         error = "Selected microphone missing; using system default";

@@ -296,3 +296,29 @@ export class Timings {
     );
   }
 }
+
+// Respect native family/session limits, cutting near silence without dropping samples.
+export function splitAudio(pcm: Float32Array, limit: number): Float32Array[] {
+  if (!Number.isSafeInteger(limit) || limit <= 0 || pcm.length <= limit)
+    return [pcm];
+  const pieces: Float32Array[] = [];
+  let start = 0;
+  while (pcm.length - start > limit) {
+    const lo = Math.floor(limit * 0.8),
+      window = Math.min(1600, limit - lo);
+    let cut = limit,
+      best = Infinity;
+    for (let i = lo; i + window <= limit; i += window) {
+      let energy = 0;
+      for (let j = 0; j < window; j++) energy += pcm[start + i + j] ** 2;
+      if (energy < best) {
+        best = energy;
+        cut = Math.max(1, i + Math.floor(window / 2));
+      }
+    }
+    pieces.push(pcm.subarray(start, start + cut));
+    start += cut;
+  }
+  pieces.push(pcm.subarray(start));
+  return pieces;
+}

@@ -1,0 +1,45 @@
+npm notice run speechify-electron-candidate@0.1.0 test
+npm notice run npm run build && node --test dist/test/*.js
+npm notice run speechify-electron-candidate@0.1.0 build
+npm notice run node scripts/build.mjs
+✔ latest private audio is memory-only until correction, then exportable (9.654479ms)
+✔ private retention holds only latest clip and clears on delete, close and TTL (2.808415ms)
+✔ saving unchanged private transcript does not persist its audio (1.924321ms)
+✔ native long-audio splitting stays within limit and preserves every sample (11.503218ms)
+✔ optional install pins URL, validates SHA and Git blobs, writes atomic receipt, detects tampering (55.007552ms)
+✔ optional install failure/cancellation cleans staging and never advertises installed (4.238852ms)
+✔ capture cancellation while opening closes late microphone without submitting audio (7.410002ms)
+✔ capture cancellation during resampling suppresses stale audio and closes idle mic first (4.003245ms)
+✔ capture normal release submits matching recording ID after resampling (3.533967ms)
+✔ non-finite teacher confidence is rejected rather than stored as a label (6.914654ms)
+✔ catalog preserves all fourteen models and eleven pins (2.581996ms)
+✔ hold key ignores repeats, taps and Ctrl+C (1.525768ms)
+✔ combination requires exact chord; unrelated held key suppresses capture (0.365432ms)
+✔ cancellation invalidates queued tasks and capacity is bounded (10.595931ms)
+✔ settings persist all baseline fields and reject invalid patches atomically (6.297346ms)
+✔ candidate path guard rejects traversal and symlinks (0.723449ms)
+✔ word rules preserve casing and reject long rewrites and insertions (2.682997ms)
+✔ training never uses pasted guesses; correction precedence beats teacher (0.374929ms)
+✔ SQLite history corrections, threshold, reversion, deletion and export (8.824278ms)
+✔ malicious audio reference cannot delete external file (4.103055ms)
+✔ SQLite-consistent import copies audio and does not change source (11.646418ms)
+✔ WAV reads samples exactly and refuses malformed/truncated fixtures (1.246599ms)
+✔ paste checks focus before changing clipboard (0.841532ms)
+✔ clipboard ownership token prevents clobbering even a newer identical copy (0.492021ms)
+✔ clipboard restores snapshot on successful paste when still owned (0.291943ms)
+✔ failed download and cancellation remove candidate partial files (37.693298ms)
+✔ read-only reuse rejects unverified models (12.87794ms)
+✔ teacher rejects hallucination on silence and clamps probabilities (6.049688ms)
+✔ adoption requires both gates and strict personal improvement (0.47552ms)
+✔ diagnostics rotate bounded files and do not include fixture transcript (7.598689ms)
+✔ failed import rolls back candidate rows and copied WAVs (7.255069ms)
+✔ history filters before applying the result limit (32.297036ms)
+✔ settings reject non-finite teacher confidence without writing (2.366799ms)
+ℹ tests 33
+ℹ suites 0
+ℹ pass 33
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 299.814045

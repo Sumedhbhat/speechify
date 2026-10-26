@@ -50,8 +50,8 @@ export class PythonEngine {
       this.child!.stdin!.write(JSON.stringify({ ...msg, id }) + "\n");
     });
   }
-  async load(options: any) {
-    this.stop();
+  async load(options: any, preserveQueue = false) {
+    this.stop(preserveQueue);
     this.options = options;
     const c = (this.child = spawn(
       options.python,
@@ -63,7 +63,8 @@ export class PythonEngine {
         env: {
           ...process.env,
           HF_HOME: path.join(this.root, "hf-cache"),
-          HF_HUB_OFFLINE: options.install ? "0" : "1",
+          HF_HUB_OFFLINE: "1",
+          TRANSFORMERS_OFFLINE: "1",
           SPEECHIFY_HOME: this.root,
           PYTHONNOUSERSITE: "1",
         },
@@ -91,6 +92,7 @@ export class PythonEngine {
         this.pending.clear();
       }
     };
+    c.stdin!.on("error", fail);
     c.on("exit", fail);
     c.on("error", fail);
     const r = await this.request({ type: "load", ...options });
@@ -99,7 +101,7 @@ export class PythonEngine {
   }
   run(pcm: Float32Array, prompt = "") {
     return this.queue.run(async () => {
-      if (!this.child) await this.load(this.options);
+      if (!this.child) await this.load(this.options, true);
       const generation = this.generation;
       try {
         return await this.request({
@@ -110,20 +112,25 @@ export class PythonEngine {
       } catch (e) {
         if (
           generation !== this.generation ||
-          this.options.opts.device === "cpu"
+          (this.child && this.options.opts.device === "cpu")
         )
           throw e;
-        await this.load({
-          ...this.options,
-          opts: { ...this.options.opts, device: "cpu", compute_type: "int8" },
-        });
+        await this.load(
+          {
+            ...this.options,
+            opts: { ...this.options.opts, device: "cpu", compute_type: "int8" },
+          },
+          true,
+        );
         return this.request({ type: "run", pcm: Array.from(pcm), prompt });
       }
     });
   }
-  stop() {
-    this.generation++;
-    this.queue.cancel();
+  stop(preserveQueue = false) {
+    if (!preserveQueue) {
+      this.generation++;
+      this.queue.cancel();
+    }
     killTree(this.child);
     this.child = undefined;
     for (const p of this.pending.values()) {

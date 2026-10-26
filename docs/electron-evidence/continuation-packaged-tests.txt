@@ -1,0 +1,41 @@
+✔ latest private audio is memory-only until correction, then exportable (12.39119ms)
+✔ private retention holds only latest clip and clears on delete, close and TTL (3.127717ms)
+✔ saving unchanged private transcript does not persist its audio (1.90806ms)
+✔ native long-audio splitting stays within limit and preserves every sample (9.45706ms)
+✔ optional install pins URL, validates SHA and Git blobs, writes atomic receipt, detects tampering (48.509156ms)
+✔ optional install failure/cancellation cleans staging and never advertises installed (3.137014ms)
+✔ capture cancellation while opening closes late microphone without submitting audio (5.272033ms)
+✔ capture cancellation during resampling suppresses stale audio and closes idle mic first (2.848909ms)
+✔ capture normal release submits matching recording ID after resampling (4.430111ms)
+✔ non-finite teacher confidence is rejected rather than stored as a label (3.006007ms)
+✔ catalog preserves all fourteen models and eleven pins (1.393075ms)
+✔ hold key ignores repeats, taps and Ctrl+C (1.075004ms)
+✔ combination requires exact chord; unrelated held key suppresses capture (0.231107ms)
+✔ cancellation invalidates queued tasks and capacity is bounded (10.47747ms)
+✔ settings persist all baseline fields and reject invalid patches atomically (3.918142ms)
+✔ candidate path guard rejects traversal and symlinks (0.517238ms)
+✔ word rules preserve casing and reject long rewrites and insertions (1.102025ms)
+✔ training never uses pasted guesses; correction precedence beats teacher (0.196672ms)
+✔ SQLite history corrections, threshold, reversion, deletion and export (6.166595ms)
+✔ malicious audio reference cannot delete external file (1.849769ms)
+✔ SQLite-consistent import copies audio and does not change source (9.905538ms)
+✔ WAV reads samples exactly and refuses malformed/truncated fixtures (1.044106ms)
+✔ paste checks focus before changing clipboard (0.349461ms)
+✔ clipboard ownership token prevents clobbering even a newer identical copy (0.215627ms)
+✔ clipboard restores snapshot on successful paste when still owned (0.18498ms)
+✔ failed download and cancellation remove candidate partial files (23.420375ms)
+✔ read-only reuse rejects unverified models (4.707084ms)
+✔ teacher rejects hallucination on silence and clamps probabilities (4.850335ms)
+✔ adoption requires both gates and strict personal improvement (0.352958ms)
+✔ diagnostics rotate bounded files and do not include fixture transcript (6.171906ms)
+✔ failed import rolls back candidate rows and copied WAVs (6.67131ms)
+✔ history filters before applying the result limit (27.385356ms)
+✔ settings reject non-finite teacher confidence without writing (0.604714ms)
+ℹ tests 33
+ℹ suites 0
+ℹ pass 33
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 273.366504

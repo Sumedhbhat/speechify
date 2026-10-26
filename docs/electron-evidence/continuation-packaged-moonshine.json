@@ -1,0 +1,19 @@
+{
+  "model": "moonshine-base",
+  "sha256": "7f0027dfd857d310b63a85ef57cadf183da712cc374f85a648f8bc18aaa2efc8",
+  "fixture": "/home/bhatsumedh/.cache/speechify-gpu/main/src/speechify/selftest_data/librispeech-sample.wav",
+  "fixtureSha256": "a7a1b5c9815084cc71f52260186f8144610e73b61a94482ee995535cd0e7bdb3",
+  "platform": "linux",
+  "arch": "x64",
+  "cpu": "AMD Ryzen 5 3500U with Radeon Vega Mobile Gfx",
+  "loadMs": 383.96302099999997,
+  "runs": [
+    {
+      "id": 2,
+      "text": "He hoped there would be stew for dinner, turnips and carrots and bruised potatoes and fat mutton pieces to be ladled out in thick peppered flower-fat and sauce.",
+      "confidence": null,
+      "device": "CPU",
+      "ms": 1465.0838200000003
+    }
+  ]
+}

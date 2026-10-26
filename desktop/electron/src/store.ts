@@ -6,6 +6,13 @@ import { atomic, owned, edits, label } from "./core";
 export class Store {
   db: DatabaseSync;
   audio: string;
+  private latest?: { id: number; wav: Buffer; expires: number };
+  private expiry?: NodeJS.Timeout;
+  private clearLatest() {
+    this.latest?.wav.fill(0);
+    this.latest = undefined;
+    clearTimeout(this.expiry);
+  }
   constructor(public root: string) {
     fs.mkdirSync(root, { recursive: true });
     this.audio = path.join(root, "audio");
@@ -17,23 +24,35 @@ export class Store {
   }
   rows(search = "", filter = "all") {
     const predicate = {
-      all: "1", edited: "corrected IS NOT NULL",
-      unedited: "corrected IS NULL", excluded: "excluded != 0",
+      all: "1",
+      edited: "corrected IS NOT NULL",
+      unedited: "corrected IS NULL",
+      excluded: "excluded != 0",
     }[filter];
     if (!predicate) throw Error("Unknown history filter");
-    return this.db.prepare(
-      `SELECT * FROM samples WHERE coalesce(corrected,pasted) LIKE ? AND ${predicate} ORDER BY ts DESC LIMIT 500`,
-    ).all("%" + search + "%");
+    return this.db
+      .prepare(
+        `SELECT * FROM samples WHERE coalesce(corrected,pasted) LIKE ? AND ${predicate} ORDER BY ts DESC LIMIT 500`,
+      )
+      .all("%" + search + "%");
   }
 
   add(wav: Buffer, raw: string, pasted: string, keep = true) {
     const name = keep ? randomUUID() + ".wav" : null;
     if (name) atomic(owned(this.audio, name), wav);
-    return Number(
+    this.clearLatest();
+    const id = Number(
       this.db
         .prepare("INSERT INTO samples(ts,audio,raw,pasted) VALUES(?,?,?,?)")
         .run(Date.now() / 1000, name, raw, pasted).lastInsertRowid,
     );
+    // One 120-second PCM16 clip at most, ten-minute TTL; never written until corrected.
+    if (!keep && wav.length <= 44 + 16000 * 2 * 120) {
+      this.latest = { id, wav: Buffer.from(wav), expires: Date.now() + 600000 };
+      this.expiry = setTimeout(() => this.clearLatest(), 600000);
+      this.expiry.unref();
+    }
+    return id;
   }
   get(id: number) {
     const r = this.db.prepare("SELECT * FROM samples WHERE id=?").get(id);
@@ -45,8 +64,22 @@ export class Store {
     if (!text) throw Error("Correction cannot be empty");
     const row = this.get(id);
     const before = row.corrected ?? row.pasted;
+    let retained: string | undefined;
+    if (
+      text !== row.pasted &&
+      !row.audio &&
+      this.latest?.id === id &&
+      this.latest.expires > Date.now()
+    ) {
+      retained = randomUUID() + ".wav";
+      atomic(owned(this.audio, retained), this.latest.wav);
+    }
     this.db.exec("BEGIN");
     try {
+      if (retained)
+        this.db
+          .prepare("UPDATE samples SET audio=? WHERE id=?")
+          .run(retained, id);
       this.db
         .prepare("UPDATE samples SET corrected=? WHERE id=?")
         .run(text === row.pasted ? null : text, id);
@@ -64,8 +97,10 @@ export class Store {
             .run(right);
         }
       this.db.exec("COMMIT");
+      if (retained) this.clearLatest();
     } catch (e) {
       this.db.exec("ROLLBACK");
+      if (retained) fs.rmSync(owned(this.audio, retained), { force: true });
       throw e;
     }
   }
@@ -98,6 +133,7 @@ export class Store {
     this.db.prepare("UPDATE samples SET excluded=? WHERE id=?").run(+value, id);
   }
   remove(id: number) {
+    if (this.latest?.id === id) this.clearLatest();
     const row = this.get(id);
     if (row.audio) fs.rmSync(owned(this.audio, row.audio), { force: true });
     this.db.prepare("DELETE FROM samples WHERE id=?").run(id);
@@ -235,6 +271,7 @@ export class Store {
     }
   }
   close() {
+    this.clearLatest();
     this.db.close();
   }
 }

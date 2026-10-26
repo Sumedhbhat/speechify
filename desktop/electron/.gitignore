@@ -4,3 +4,5 @@ artifacts/
 resources/native/*
 !resources/native/.gitkeep
 __pycache__/
+
+resources/macos/focus-helper

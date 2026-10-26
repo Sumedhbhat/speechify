@@ -20,6 +20,8 @@ export function judge(
     if (Math.sqrt(power / 480) > 0.004) voiced += 0.03;
   }
   let note: string | null = null;
+  if (confidence !== null && !Number.isFinite(confidence))
+    return { confidence: 0, note: "invalid confidence" };
   if (!words.length) note = "empty";
   else if (words.length > voiced * 7 + 3) note = "too long for clip";
   else if (voiced >= 3 && words.length < voiced * 0.3)
@@ -108,6 +110,8 @@ export class Learning {
     const file = spec.gguf ? await this.models.file(id) : undefined;
     if (!file && !cfg.inference_python)
       throw Error("Optional teacher requires inference Python executable");
+    if (this.running || !this.idle())
+      throw Error("Learning preempted before model load");
     this.running = true;
     this.cancelled = false;
     this.release();
@@ -121,6 +125,12 @@ export class Learning {
     this.store.setState("teacher_status", "Loading " + id);
     this.update();
     try {
+      const optionalRepo = file
+        ? undefined
+        : id.startsWith("ft:")
+          ? spec.repo
+          : await this.models.optionalFile(id);
+      if (this.cancelled || !this.idle()) throw Error("Teacher preempted");
       await this.teacher.load(
         file
           ? {
@@ -132,7 +142,7 @@ export class Learning {
           : {
               python: cfg.inference_python,
               model: id,
-              repo: spec.repo,
+              repo: optionalRepo,
               install: false,
               opts: {
                 device: ["auto", "vulkan", "metal"].includes(cfg.device)

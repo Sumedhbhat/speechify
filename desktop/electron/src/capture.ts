@@ -9,7 +9,7 @@ let stream: MediaStream | null = null,
   processor: ScriptProcessorNode | null = null,
   recording = false,
   keep = false,
-  selected = "",
+  selectedDevice = "",
   chunks: Float32Array[] = [],
   pre: Float32Array[] = [],
   preCount = 0,
@@ -30,23 +30,34 @@ async function devices() {
   );
 }
 async function closeMic() {
-  stream?.getTracks().forEach((t) => t.stop());
-  processor?.disconnect();
-  source?.disconnect();
-  await ctx?.close();
+  // Detach shared state before awaiting close; callbacks cannot use a stale context.
+  const oldStream = stream,
+    oldContext = ctx,
+    oldProcessor = processor,
+    oldSource = source;
   stream = null;
+  ctx = null;
   processor = null;
   source = null;
-  ctx = null;
   pre = [];
   preCount = 0;
+  if (oldProcessor) {
+    oldProcessor.onaudioprocess = null;
+    oldProcessor.disconnect();
+  }
+  oldSource?.disconnect();
+  oldStream?.getTracks().forEach((t) => {
+    t.onended = null;
+    t.stop();
+  });
+  if (oldContext && oldContext.state !== "closed") await oldContext.close();
 }
 async function openMic() {
   if (stream) return;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: {
-        deviceId: selected ? { exact: selected } : undefined,
+        deviceId: selectedDevice ? { exact: selectedDevice } : undefined,
         channelCount: 1,
         echoCancellation: false,
         noiseSuppression: false,
@@ -55,8 +66,8 @@ async function openMic() {
       video: false,
     });
   } catch (e) {
-    if (selected && (e as DOMException).name === "OverconstrainedError") {
-      selected = "";
+    if (selectedDevice && (e as DOMException).name === "OverconstrainedError") {
+      selectedDevice = "";
       capture.send("missing-device", null);
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } else throw e;
@@ -67,6 +78,7 @@ async function openMic() {
   source.connect(processor);
   processor.connect(ctx.destination);
   processor.onaudioprocess = (e) => {
+    if (!ctx || !stream) return;
     const a = e.inputBuffer.getChannelData(0).slice();
     let rms = 0;
     for (const n of a) rms += n * n;
@@ -78,7 +90,8 @@ async function openMic() {
         recording = false;
         capture.send("error", "Recording limit is 120 seconds");
         chunks = [];
-        if (!keep) void closeMic();
+        total = 0;
+        if (!keep) serial = serial.then(closeMic).catch(reportError);
       }
     } else if (keep) {
       pre.push(a);
@@ -93,13 +106,18 @@ async function openMic() {
   stream.getAudioTracks()[0].onended = () => {
     capture.send("error", "Microphone disconnected; choose an available input");
     recording = false;
-    void closeMic();
+    chunks = [];
+    total = 0;
+    generation++;
+    serial = serial.then(closeMic).catch(reportError);
   };
   await ctx.resume();
   capture.send("mic-ready", null);
   await devices();
 }
 async function end(accept: boolean) {
+  const token = generation,
+    id = recordingId;
   if (!recording) {
     if (accept)
       capture.send(
@@ -129,15 +147,29 @@ async function end(accept: boolean) {
     s.buffer = buffer;
     s.connect(offline.destination);
     s.start();
+    // Close idle microphone before potentially expensive resampling.
+    if (!keep) await closeMic();
     const rendered = await offline.startRendering();
-    capture.send("audio", {
-      id: recordingId,
-      pcm: Array.from(rendered.getChannelData(0)),
-    });
+    if (token === generation)
+      capture.send("audio", {
+        id,
+        pcm: Array.from(rendered.getChannelData(0)),
+      });
   }
   chunks = [];
   total = 0;
   if (!keep) await closeMic();
+}
+async function reportError(e: unknown) {
+  recording = false;
+  chunks = [];
+  total = 0;
+  try {
+    await closeMic();
+  } catch {
+    /* Already detached; original error is actionable. */
+  }
+  capture.send("error", String(e));
 }
 capture.on((msg) => {
   if (msg.type === "stop" || msg.type === "configure") generation++;
@@ -147,13 +179,14 @@ capture.on((msg) => {
       if (msg.type === "configure") {
         await end(false);
         keep = msg.keep;
-        selected = msg.device;
+        selectedDevice = msg.device;
         await closeMic();
         if (keep) await openMic();
         await devices();
       }
       if (msg.type === "start") {
         recordingId = msg.id;
+        if (token !== generation) return;
         await openMic();
         if (token !== generation) {
           if (!keep) await closeMic();
@@ -172,7 +205,9 @@ capture.on((msg) => {
       if (msg.type === "stop") await end(msg.accept);
       if (msg.type === "devices") await devices();
     })
-    .catch((e) => capture.send("error", String(e)));
+    .catch(reportError);
 });
-navigator.mediaDevices.addEventListener("devicechange", () => void devices());
-void devices();
+navigator.mediaDevices.addEventListener("devicechange", () => {
+  void devices().catch(reportError);
+});
+void devices().catch(reportError);

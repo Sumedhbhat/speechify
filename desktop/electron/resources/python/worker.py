@@ -9,21 +9,28 @@ sys.stdout = sys.stderr
 import numpy as np
 from speechify.engines.backends import TransformersEngine, WhisperEngine
 engine = None
+msg = {}
 for line in sys.stdin:
     try:
         msg = json.loads(line)
         if msg['type'] == 'load':
             if msg['model'] not in ('kyutai-stt-1b', 'kyutai-stt-2.6b', 'distil-whisper-large-v3') and not msg['model'].startswith('ft:'):
                 raise ValueError('Python is restricted to unsupported native families and trained models')
+            if not os.path.isdir(msg['repo']) or not os.path.isabs(msg['repo']):
+                raise ValueError('Only verified local model directories are allowed; install in Models first')
             start = time.perf_counter()
             cls = TransformersEngine if msg['model'].startswith('kyutai') else WhisperEngine
+            import torch
+            if msg['opts'].get('onnx_threads', 0) > 0:
+                torch.set_num_threads(msg['opts']['onnx_threads'])
             engine = cls(msg['repo'], msg['opts'])
             out = {'ready': True, 'device': getattr(engine, 'device', msg['opts']['device']), 'ms': (time.perf_counter()-start)*1000}
         elif msg['type'] == 'run':
             start = time.perf_counter()
             audio = np.array(msg['pcm'], dtype=np.float32)
             text, lp = engine.transcribe_scored(audio, msg.get('prompt'))
-            out = {'text': text, 'confidence': float(np.exp(lp)) if lp is not None else None, 'device': getattr(engine, 'device', '?'), 'ms': (time.perf_counter()-start)*1000}
+            confidence = float(np.exp(min(0.0, lp))) if lp is not None and np.isfinite(lp) else None
+            out = {'text': text, 'confidence': confidence, 'device': getattr(engine, 'device', '?'), 'ms': (time.perf_counter()-start)*1000}
         else:
             raise ValueError('Unknown worker operation')
         proto.write(json.dumps({'id': msg['id'], **out})+'\n')

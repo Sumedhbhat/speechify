@@ -1,6 +1,7 @@
 // This process owns native pointers. Terminating it cancels a blocked native call.
 import koffi from "koffi";
 import path from "node:path";
+import { splitAudio } from "./core";
 const dir = process.env.SPEECHIFY_NATIVE!;
 const lib = koffi.load(
   path.join(
@@ -93,6 +94,42 @@ const tokenGet = fn("transcribe_get_token", "int", [
   koffi.inout(koffi.pointer(tokenType)),
 ]);
 const countTokens = fn("transcribe_n_tokens", "int", ["void *"]);
+const capsType = koffi.struct("Capabilities", {
+  struct_size: "uint64",
+  native_sample_rate: "int32",
+  n_languages: "int",
+  languages: "void *",
+  max_timestamp_kind: "int",
+  supports_language_detect: "bool",
+  supports_translate: "bool",
+  supports_streaming: "bool",
+  supports_spec_decode: "bool",
+  max_audio_ms: "int64",
+  n_translate_target_languages: "int",
+  translate_target_languages: "void *",
+});
+const limitsType = koffi.struct("Limits", {
+  struct_size: "uint64",
+  effective_n_ctx: "int32",
+  effective_max_audio_ms: "int64",
+  max_kv_bytes: "int64",
+});
+const capsInit = fn("transcribe_capabilities_init", "void", [
+  koffi.out(koffi.pointer(capsType)),
+]);
+const capsGet = fn("transcribe_model_get_capabilities", "int", [
+  "void *",
+  koffi.inout(koffi.pointer(capsType)),
+]);
+const limitsInit = fn("transcribe_session_limits_init", "void", [
+  koffi.out(koffi.pointer(limitsType)),
+]);
+const limitsGet = fn("transcribe_session_get_limits", "int", [
+  "void *",
+  koffi.inout(koffi.pointer(limitsType)),
+]);
+let maxSamples = 0,
+  languages: string[] = [];
 let model: any = null,
   session: any = null,
   options: any;
@@ -119,11 +156,26 @@ function open(device: string) {
   const s: any[] = [null];
   check(sessionInit(model, sp, s));
   session = s[0];
+  const caps: any = {},
+    limits: any = {};
+  capsInit(caps);
+  check(capsGet(model, caps));
+  limitsInit(limits);
+  check(limitsGet(session, limits));
+  const ceilings = [
+    Number(caps.max_audio_ms),
+    Number(limits.effective_max_audio_ms),
+  ].filter((n) => n > 0);
+  maxSamples = ceilings.length ? Math.floor(Math.min(...ceilings) * 16) : 0;
+  languages =
+    caps.n_languages > 0
+      ? (koffi.decode(caps.languages, "str", caps.n_languages) as string[])
+      : [];
 }
-function transcribe(pcm: Float32Array, prompt: string) {
+function transcribePiece(pcm: Float32Array, prompt: string) {
   const rp: any = {};
   initRun(rp);
-  rp.language = options.language || null;
+  rp.language = languages.includes(options.language) ? options.language : null;
   if (supports(model, 4)) rp.pnc = 1;
   // Generic context is honored only on families advertising it. Whisper extension
   // is initialized into oversized aligned storage, so ABI defaults remain intact.
@@ -176,6 +228,24 @@ function transcribe(pcm: Float32Array, prompt: string) {
   return {
     text,
     confidence: n ? Math.exp(sum / n) : null,
+    device: backend(model),
+  };
+}
+function transcribe(pcm: Float32Array, prompt: string) {
+  const pieces = splitAudio(pcm, maxSamples);
+  const results = pieces.map((piece) => transcribePiece(piece, prompt));
+  const scored = results.filter((r) => r.confidence !== null);
+  return {
+    text: results
+      .map((r) => r.text)
+      .filter(Boolean)
+      .join(" "),
+    confidence: scored.length
+      ? Math.exp(
+          scored.reduce((n, r) => n + Math.log(r.confidence!), 0) /
+            scored.length,
+        )
+      : null,
     device: backend(model),
   };
 }

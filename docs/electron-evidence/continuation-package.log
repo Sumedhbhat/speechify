@@ -1,0 +1,6 @@
+npm notice run speechify-electron-candidate@0.1.0 package
+npm notice run npm run build && node scripts/package.mjs
+npm notice run speechify-electron-candidate@0.1.0 build
+npm notice run node scripts/build.mjs
+dpkg-deb: building package 'speechify-electron-candidate' in '/home/bhatsumedh/workspaces/worktrees/speechify/t3-dfc8c477/desktop/electron/artifacts/speechify-electron-candidate-linux-x64.deb'.
+/home/bhatsumedh/workspaces/worktrees/speechify/t3-dfc8c477/desktop/electron/artifacts/speechify-electron-candidate-linux-x64

@@ -1,0 +1,145 @@
+{
+  "distil-whisper-large-v3": {
+    "repo": "Systran/faster-distil-whisper-large-v3",
+    "revision": "c3058b475261292e64a0412df1d2681c06260fab",
+    "lastModified": "2024-03-25T15:39:39.000Z",
+    "files": [
+      {
+        "file": "config.json",
+        "size": 2690,
+        "gitBlob": "499468d516090aee836412556ca759be4e9e73f7",
+        "sha256": "90c55f775cc4e0bb17293d0bf12f96557a486f20dea886fabd8e6075a3588b21"
+      },
+      {
+        "file": "model.bin",
+        "size": 1512927867,
+        "sha256": "b79368e19b6623813609431a6e5ee309a71506701ebc49fd7820e692dec7c5f5"
+      },
+      {
+        "file": "preprocessor_config.json",
+        "size": 340,
+        "gitBlob": "931c77a740890c46365c7ae0c9d350ba3cca908f",
+        "sha256": "7ccc62c6f2765af1f3b46c00c9b5894426835a05021c8b9c01eecb6dfb542711"
+      },
+      {
+        "file": "tokenizer.json",
+        "size": 2480617,
+        "gitBlob": "3a5e2ba63acdcac9a19ba56cf9bd27f185bfff61",
+        "sha256": "6d8cbd7cd0d8d5815e478dac67b85a26bbe77c1f5e0c6d76d1ce2abc0e5f21ca"
+      },
+      {
+        "file": "vocabulary.json",
+        "size": 1068114,
+        "gitBlob": "0adcd01e7c237205d593b707e66dd5d7bc785d2d",
+        "sha256": "c69260f2ab26d659b7c398f9a2b2b48ed0df16c3b47d7326782fd9cba71690c1"
+      }
+    ]
+  },
+  "kyutai-stt-2.6b": {
+    "repo": "kyutai/stt-2.6b-en-trfs",
+    "revision": "005de8e7800698a4c9963a5ac000e185b410c2f5",
+    "lastModified": "2025-06-26T16:41:20.000Z",
+    "files": [
+      {
+        "file": "config.json",
+        "size": 1955,
+        "gitBlob": "6ac149f2bf8ee130db61af5af947482afe7f9e0b",
+        "sha256": "4ed7357f2841a52898a5e968de3a151eea342e09f7cfc961348e5805585b9368"
+      },
+      {
+        "file": "generation_config.json",
+        "size": 237,
+        "gitBlob": "d950216dff83ff29a74279c0574466ce8ba1ccde",
+        "sha256": "9b9225836a0e56538acc9e780e9a47ac3262208f6914ba55723fb49761538b4b"
+      },
+      {
+        "file": "model-00001-of-00002.safetensors",
+        "size": 4372392344,
+        "sha256": "d10da996924f8718e69ad188d65e4334f6c82a12bcaf8c5df83e80c9f5fca98b"
+      },
+      {
+        "file": "model-00002-of-00002.safetensors",
+        "size": 1547899924,
+        "sha256": "fe01b3882f795cc9198c6e7f1fa4f08000e14f59ac8b181a294535ddb41cc33b"
+      },
+      {
+        "file": "model.safetensors.index.json",
+        "size": 71651,
+        "gitBlob": "7966833f3d21d204e037207753d08423b249f1b9",
+        "sha256": "25c24636a4fbc6c68b66102be7970f555d97d6345292a8e8006cae9df18d4187"
+      },
+      {
+        "file": "preprocessor_config.json",
+        "size": 366,
+        "gitBlob": "9558f99779adc0cb4113da6e78d1c1b3d69f30cf",
+        "sha256": "78c6c2f5a210bc192e803bbdf4ba69739c2f15444f7435f90b29fac04c2129f2"
+      },
+      {
+        "file": "special_tokens_map.json",
+        "size": 27,
+        "gitBlob": "0d29076b142c433a70cc1fc7e63d6a15fe5b2a67",
+        "sha256": "c982c025453afc73c93ec1fab4598763bef21cfbf22cd6008d03711d4e6210e1"
+      },
+      {
+        "file": "tokenizer.json",
+        "size": 245050,
+        "gitBlob": "937f2807612efbbb7f6681d600a210111c72b3ca",
+        "sha256": "3bbd225e8e4042e0bff6c3ed162dfb7e58e4b5abe71f93266088c870f661c961"
+      },
+      {
+        "file": "tokenizer_config.json",
+        "size": 1115,
+        "gitBlob": "b261a91e4c5868bfb7c9fb0f959967b28ba7d40d",
+        "sha256": "f344e82089600538e675015f5060223e9ed1242a3f66d109cc8a103d34c3e729"
+      }
+    ]
+  },
+  "kyutai-stt-1b": {
+    "repo": "kyutai/stt-1b-en_fr-trfs",
+    "revision": "98aadd47649e7ccb89d1e73a6b62bcb31d38170f",
+    "lastModified": "2025-06-26T16:42:12.000Z",
+    "files": [
+      {
+        "file": "config.json",
+        "size": 1956,
+        "gitBlob": "6776ceadc93c121d4746994b6fa6d97d5de5156b",
+        "sha256": "57c99d8fc2d566cffe6573123b1d0692964f6ff32754da1cd7de1c72c569eb8b"
+      },
+      {
+        "file": "generation_config.json",
+        "size": 237,
+        "gitBlob": "d950216dff83ff29a74279c0574466ce8ba1ccde",
+        "sha256": "9b9225836a0e56538acc9e780e9a47ac3262208f6914ba55723fb49761538b4b"
+      },
+      {
+        "file": "model.safetensors",
+        "size": 2697201444,
+        "sha256": "59a6da960020ea4e1436118c63d7cd73f013e0c62466de12d7ad4b64454fd035"
+      },
+      {
+        "file": "preprocessor_config.json",
+        "size": 366,
+        "gitBlob": "bcb21ed74c600969c6de0dd7e0f1d3fe4fe3822f",
+        "sha256": "995081f5aaeae178ad82a8924f3519879cfd44a44a286c067f94ccf466d043f8"
+      },
+      {
+        "file": "special_tokens_map.json",
+        "size": 27,
+        "gitBlob": "0d29076b142c433a70cc1fc7e63d6a15fe5b2a67",
+        "sha256": "c982c025453afc73c93ec1fab4598763bef21cfbf22cd6008d03711d4e6210e1"
+      },
+      {
+        "file": "tokenizer.json",
+        "size": 496919,
+        "gitBlob": "88129e7d2d0a3d265d652e1515ef3ce7bf7f5666",
+        "sha256": "651954f97192a44bd664d5bc8942262d49a7eb59c066fd8d04eb43e0179bb2d3"
+      },
+      {
+        "file": "tokenizer_config.json",
+        "size": 1115,
+        "gitBlob": "b261a91e4c5868bfb7c9fb0f959967b28ba7d40d",
+        "sha256": "f344e82089600538e675015f5060223e9ed1242a3f66d109cc8a103d34c3e729"
+      }
+    ]
+  }
+}

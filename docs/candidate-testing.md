@@ -42,7 +42,7 @@ Wayland uses the same Linux package but has **no implemented global hold-key or 
 
 ## macOS: user-run build and launch
 
-No Mac artifact was built on Linux. Use a local Mac with macOS 14+ and Node 24, Apple Command Line Tools (`xcode-select --install` if absent), and matching arm64 or x64 Node. `unzip`, `codesign`, `hdiutil`, and `iconutil` where desired come from macOS/tooling. The script supports the baseline native wheel for Apple Silicon or Intel and rejects resource/host architecture mismatches.
+No Mac artifact was built on Linux. Use a local Mac with macOS 14+ and Node 24, Apple Command Line Tools (`xcode-select --install` if absent), and matching arm64 or x64 Node. `unzip`, `codesign`, `hdiutil`, and `xcrun swiftc` come from macOS/Command Line Tools. The build compiles the persistent Accessibility helper for the local architecture; no helper binary built on Linux is supplied. The script supports the baseline native wheel for Apple Silicon or Intel and rejects resource/host architecture mismatches.
 
 Run the common build commands above **on the Mac**. `npm run package` produces:
 
@@ -51,7 +51,7 @@ artifacts/speechify-electron-candidate-darwin-arm64/Speechify Electron Candidate
 artifacts/speechify-electron-candidate-mac-arm64.dmg
 ```
 
-For Intel, replace `arm64` with `x64`. The package rewrites the app identifier and helper bundle IDs, bundles native libraries/N-API helpers, sets microphone and Apple Events usage descriptions, and includes `resources/entitlements.mac.plist`. Default signing is local ad-hoc signing, not distribution notarization. A Developer ID identity already installed in the user's keychain can be used explicitly:
+For Intel, replace `arm64` with `x64`. The package uses PlistBuddy (including binary plist support) to rewrite the app identifier and helper bundle IDs, bundles native libraries/N-API helpers, sets microphone and Apple Events usage descriptions, and includes `resources/entitlements.mac.plist`. Nested Mach-O libraries, Node addons, the Accessibility helper and bundles are signed inside-out; `codesign --verify --deep --strict` must pass before a DMG is built. Default signing is local ad-hoc signing, not distribution notarization. A Developer ID identity already installed in the user's keychain can be used explicitly:
 
 ```sh
 SPEECHIFY_SIGN_IDENTITY='Developer ID Application: YOUR EXISTING IDENTITY' npm run package
@@ -65,9 +65,9 @@ Launch the built candidate directly, or copy **only this distinctly named app** 
 open 'artifacts/speechify-electron-candidate-darwin-arm64/Speechify Electron Candidate.app'
 ```
 
-In System Settings → Privacy & Security, grant this candidate Microphone, Accessibility and Input Monitoring access. System Events automation may also be requested for focus checks/paste. Restart after changing Input Monitoring. Initial default key is **Right Option**, minimum hold 250 ms. Models start uninstalled; choose a pinned native model. All data stays in `~/Library/Application Support/speechify-electron-candidate`. Python is unnecessary for the eleven native models. Local CUDA fine-tuning is unavailable on macOS; trained Whisper inference uses the optional CTranslate2 environment.
+In System Settings → Privacy & Security, grant this candidate Microphone, Accessibility and Input Monitoring access. The compiled child helper uses Accessibility objects and CoreGraphics events for focus checks/paste. If macOS attributes permission to the helper separately, grant access only to the helper inside this candidate app; denial must leave text in History. Restart after changing Input Monitoring. Initial default key is **Right Option**, minimum hold 250 ms. Models start uninstalled; choose a pinned native model. All data stays in `~/Library/Application Support/speechify-electron-candidate`. Python is unnecessary for the eleven native models. Local CUDA fine-tuning is unavailable on macOS; trained Whisper inference uses the optional CTranslate2 environment.
 
-macOS runtime, focus, permissions, signing behavior and packaging commands are **not tested here, user-deferred**. In particular, see the current Mac focus-target limitation in R05; do not trust automatic paste with multiple windows of one app until that is resolved and tested.
+macOS runtime, focus, permissions, signing behavior and packaging commands are **not tested here, user-deferred**. The new AX helper compares actual focused window/control references, selected range and accessible text, but requires local build and runtime verification. Test two windows and two text fields in the same app, caret moves, intervening text edits, secure fields and unsupported controls. Refusal must retain History text without a wrong-target write.
 
 ## Windows: user-run build and launch
 
@@ -92,7 +92,7 @@ node scripts/setup-python.mjs training
 
 These create separate candidate-owned environments and synchronize the committed, universal, hashed lockfiles. Enter the printed executable paths in Settings → Optional Python workers. The training environment requires supported NVIDIA hardware/driver and a CUDA-enabled PyTorch installation from the lock's supported platform distribution. Windows/macOS wheel availability and actual CUDA usability have not been verified. Ordinary native dictation is unaffected if optional setup is unavailable.
 
-On the Models page, **Install optional model** permits the Python worker to fetch to the candidate HF cache; **Use offline** forbids network via `HF_HUB_OFFLINE=1`. The three exception models retain their authoritative source IDs. Their model-install flow has documented parity gaps (no immutable HF revision receipts/byte progress). Candidate-trained `whisper-ft-*` directories containing `model.bin` are discovered automatically in the candidate `models/` directory. Do not move/delete original Speechify models.
+On the Models page, **Install optional model** streams pinned files into a candidate-owned staging directory, reports cumulative bytes, verifies every SHA-256, and publishes the directory and receipt atomically. Cancel removes staging. **Use model / Use offline** validates the receipt and rehashes files before loading; the Python worker receives an absolute local path with `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`. Install does not switch models. The three exception models retain their authoritative catalog IDs; the Distil install pin resolves the baseline faster-whisper alias to its CTranslate2 repository. Candidate-trained `whisper-ft-*` directories containing `model.bin` are discovered automatically in the candidate `models/` directory. Do not move/delete original Speechify models.
 
 ## Reproduce fixture and failure-path checks without devices
 
@@ -141,7 +141,7 @@ Run one candidate at a time; quit the other before enabling hooks/microphone.
 2. Dictate into a plain editor. Verify hold/release, Unicode/multiline text, focus preservation and clipboard restoration. Try short taps, Ctrl+C and another key during hold: no history/transcript/paste should appear. Switch target apps during inference: the result must be retained without a wrong-target paste. Treat any wrong-target paste as a release blocker.
 3. Reopen/close Settings 20 times and perform at least 20 dictations. Record ready/window/mic/release/transcript/paste timestamps, process-tree idle CPU/RSS/PSS, and median/p95 separately for X11/Wayland/macOS/Windows. Do not enable always-open mode until idle-close behavior is verified.
 4. Change the input, unplug it, rebind a shortcut, switch models, cancel a download, cancel an inference, then restart. Verify recovery and persistence. Check the indicator never takes focus.
-5. Play/correct/revert/exclude/delete/export recordings. Confirm repeated corrections become rules and hints. If testing optional learning, use human/teacher-labeled audio and verify both gates before adoption; then roll back. Save-and-replace is explicitly unavailable in this candidate.
+5. Play/correct/revert/exclude/delete/export recordings. Confirm repeated corrections become rules and hints. If testing optional learning, use human/teacher-labeled audio and verify both gates before adoption; then roll back. On macOS, test Ctrl+Enter on the latest acknowledged insertion: History hides, the current target/caret/value must still match, and only that owned span may change. Try another window/control, a moved caret and an intervening edit: save must succeed but replacement must refuse. Shift+Enter saves only. On other platforms replacement remains unavailable. With keep-all-audio disabled, correct the latest clip within ten minutes and verify its WAV becomes playable/exportable; older/expired clips remain audio-free.
 6. Enable and disable candidate startup only if desired, confirm the original Speechify entry remains unchanged, then quit. Confirm worker/helper processes are gone and the microphone indicator clears. Report unsupported Wayland global hooks/paste separately rather than attempting privilege escalation.
 
 ## Independent lead review
@@ -149,3 +149,26 @@ Run one candidate at a time; quit the other before enabling hooks/microphone.
 The lead reran the packaged Parakeet CPU fixture (see `electron-evidence/lead-packaged-fixture.json`) and the unit suite. Review found and fixed filtering after the history result cap, which hid old matching entries, and acceptance of non-finite teacher confidence. The expanded suite passes 23 tests. Fixture timings are not desktop latency measurements or controlled candidate rankings. Linux desktop integration is still unverified: this host currently has only a GDM greeter session, not an accessible logged-in user desktop.
 
 The lead attempted the corrected packaged GUI on an isolated Xvfb display. Chromium aborted before any window opened because the portable sandbox helper is not root-owned/setuid and the host restricts unprivileged user namespaces. No GUI, tray, microphone, keyboard-hook, focus, or paste pass is claimed from that attempt. Existing services and the GDM greeter were not changed. Checksums were regenerated after the lead fixes and both packages passed `sha256sum -c SHA256SUMS`.
+
+## Continuation evidence and reproducible fixture inputs
+
+The old `/home/bhatsumedh/bench-speechify-vs-handy/...` paths were no longer available during this continuation. The original evidence above is historical, not silently rerun. Current runs use read-only cached, catalog-hash-verified GGUFs under `/home/bhatsumedh/.cache/speechify-gpu/engines/models/gguf/` and this different fixture:
+
+```text
+/home/bhatsumedh/.cache/speechify-gpu/main/src/speechify/selftest_data/librispeech-sample.wav
+SHA-256 a7a1b5c9815084cc71f52260186f8144610e73b61a94482ee995535cd0e7bdb3
+```
+
+Reproduce the packaged integration check (no UI, hooks or microphone):
+
+```sh
+cd desktop/electron
+ELECTRON_RUN_AS_NODE=1 artifacts/speechify-electron-candidate-linux-x64/speechify-electron-candidate \
+  scripts/native-integration.cjs artifacts/speechify-electron-candidate-linux-x64/resources/app \
+  /home/bhatsumedh/.cache/speechify-gpu/engines/models/gguf/parakeet-tdt-0.6b-v3-gguf/parakeet-tdt-0.6b-v3-Q8_0.gguf \
+  /home/bhatsumedh/.cache/speechify-gpu/main/src/speechify/selftest_data/librispeech-sample.wav "stew for dinner"
+```
+
+`docs/electron-evidence/continuation-*` contains the 33-test runs under host Node and the packaged Electron runtime, Linux build log, native Parakeet fixture, packaged Moonshine/Qwen fixtures and packaged fallback/crash/cancellation check. Each fixture JSON records its model and audio hash, CPU, platform, ready and inference timings. These single-fixture development checks are not accuracy evaluations, 20-dictation desktop benchmarks or cross-candidate speed rankings. Optional-download tests use tiny fixture payloads; full optional model installation/inference is not claimed verified. Swift/Apple frameworks and Windows packaging tools are unavailable here, so no Mac/Windows binary or compilation pass is claimed.
+
+The rebuilt portable Linux app still requires working Chromium sandbox support. The lead's Xvfb/AppArmor abort remains the desktop launch blocker; the continuation does not launch a GUI or disable sandboxing. All available device/clipboard/focus/tray/permission checks remain with the lead/user.

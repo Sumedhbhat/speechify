@@ -150,7 +150,7 @@ function render() {
       )
       .join(
         "",
-      )}<div class="toolbar">${button("Export TOML", "exportConfig")}${button("Import TOML", "importConfig")}${button("Copy original data…", "importData")}${button("Open diagnostic logs", "logs")}</div><p>Candidate storage: ${esc(data.root)}</p><p>${esc(data.permissions.guidance)}</p><p>Clipboard restoration supports formats exposed by Electron. Private application formats may not round-trip. Focus changes prevent paste; save-and-replace is unavailable until cursor identity can be established safely.</p>`;
+      )}<div class="toolbar">${button("Export TOML", "exportConfig")}${button("Import TOML", "importConfig")}${button("Copy original data…", "importData")}${button("Open diagnostic logs", "logs")}</div><p>Candidate storage: ${esc(data.root)}</p><p>${esc(data.permissions.guidance)}</p><p>Clipboard restoration supports formats exposed by Electron. Private application formats may not round-trip. Focus changes prevent paste. macOS replacement requires the latest verified insertion and an unchanged accessible caret and text value; other targets support save-only.</p>`;
     content.querySelectorAll("[data-setting]").forEach((el) =>
       el.addEventListener("change", () => {
         const e = el as HTMLInputElement;
@@ -199,7 +199,7 @@ function field(k: string) {
 function detail(row: any) {
   const el = document.getElementById("detail");
   if (!el || !row) return;
-  el.innerHTML = `<h2>Correction</h2>${row.audio ? '<audio controls id="playback"></audio>' : "<p>Audio not retained.</p>"}<label for="correction">What you said</label><textarea id="correction">${esc(row.corrected ?? row.pasted)}</textarea><small>Originally heard: ${esc(row.raw)}</small><div class="toolbar"><button id="save" class="primary">Save only · Shift+Enter</button><button id="copy">Copy text</button><button id="revert">Revert</button><button id="exclude">${row.excluded ? "Include in training" : "Exclude from training"}</button><button id="delete">Delete recording</button></div><small>Save-and-replace is disabled: the original cursor position cannot be verified safely.</small>`;
+  el.innerHTML = `<h2>Correction</h2>${row.audio ? '<audio controls id="playback"></audio>' : "<p>Audio not retained.</p>"}<label for="correction">What you said</label><textarea id="correction">${esc(row.corrected ?? row.pasted)}</textarea><small>Originally heard: ${esc(row.raw)}</small><div class="toolbar"><button id="save" class="primary">Save only · Shift+Enter</button>${data.replaceableId === row.id ? '<button id="replace">Save and replace · Ctrl+Enter</button>' : ""}<button id="copy">Copy text</button><button id="revert">Revert</button><button id="exclude">${row.excluded ? "Include in training" : "Exclude from training"}</button><button id="delete">Delete recording</button></div><small>Save-and-replace closes History and checks the original target, caret and text before writing. If any check fails, the correction is saved only. Audio for the latest recording is recoverable for ten minutes when keep-all-audio is off.</small>`;
   const editor = document.getElementById("correction") as HTMLTextAreaElement;
   editor.onfocus = () => (editing = true);
   editor.onblur = () => (editing = false);
@@ -207,7 +207,17 @@ function detail(row: any) {
     editing = false;
     void action("correct", { id: row.id, text: editor.value });
   };
+  const replace = () => {
+    editing = false;
+    void action("replace", { id: row.id, text: editor.value });
+  };
+  document.getElementById("replace")?.addEventListener("click", replace);
   editor.onkeydown = (e) => {
+    if (e.key === "Enter" && e.ctrlKey && !e.shiftKey) {
+      e.preventDefault();
+      replace();
+      return;
+    }
     if (e.key === "Enter" && e.shiftKey) {
       e.preventDefault();
       save();

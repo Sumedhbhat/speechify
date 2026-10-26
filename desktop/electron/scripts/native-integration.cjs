@@ -5,7 +5,8 @@ const path = require("node:path"),
   assert = require("node:assert/strict");
 const root = path.resolve(process.argv[2] || ".");
 const model = process.argv[3],
-  wav = process.argv[4];
+  wav = process.argv[4],
+  expectedPhrase = process.argv[5] || "Quilter";
 const { Engine } = require(path.join(root, "dist/engine.js"));
 const { readWav, hash, Timings } = require(path.join(root, "dist/core.js"));
 const { catalog } = require(path.join(root, "dist/models.js"));
@@ -25,7 +26,10 @@ const { catalog } = require(path.join(root, "dist/models.js"));
     await e.load({ file: model, device: "cuda", threads: 4, language: "en" });
     assert.equal(e.device.toLowerCase(), "cpu");
     const a = await e.run(pcm);
-    assert.match(a.text, /Quilter/i);
+    assert.ok(
+      a.text.toLowerCase().includes(expectedPhrase.toLowerCase()),
+      "Fixture must contain expected phrase: " + expectedPhrase,
+    );
     const b = await e.run(pcm);
     assert.equal(a.text, b.text);
     const run = e.run(pcm);
@@ -41,6 +45,9 @@ const { catalog } = require(path.join(root, "dist/models.js"));
     await assert.rejects(cancelled, /Cancelled/);
     console.log(
       JSON.stringify({
+        modelSha256: await hash(model),
+        fixtureSha256: await hash(wav),
+        expectedPhrase,
         checks: [
           "packaged native module load",
           "CUDA-unavailable CPU fallback",

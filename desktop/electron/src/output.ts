@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 const exec = promisify(execFile);
+import { MacFocus } from "./mac-focus";
 export interface ClipboardPort {
   read(): Promise<{
     text: string;
@@ -43,14 +44,23 @@ export async function guardedPaste(
   }
 }
 export class Output {
+  private mac = new MacFocus();
+  replaceable = false;
+  stop() {
+    this.replaceable = false;
+    this.mac.stop();
+  }
+  async replace(text: string) {
+    if (process.platform !== "darwin" || !this.replaceable)
+      throw Error(
+        "Safe replacement unavailable for this target; correction saved only",
+      );
+    this.replaceable = false;
+    await this.mac.request("replace", { text });
+  }
   async focus(): Promise<string> {
     if (process.platform === "darwin")
-      return (
-        await exec("/usr/bin/osascript", [
-          "-e",
-          'tell application "System Events" to get unix id of first application process whose frontmost is true',
-        ])
-      ).stdout.trim();
+      return (await this.mac.request("focus")).target;
     if (process.platform === "win32")
       return (
         await exec(
@@ -70,17 +80,14 @@ export class Output {
       );
     return (await exec("xdotool", ["getactivewindow"])).stdout.trim();
   }
-  async key(target: string) {
-    if (!/^\d+$/.test(target)) throw Error("Invalid focus target");
+  async key(target: string, text = "") {
+    this.replaceable = false;
     if (process.platform === "darwin") {
-      await exec("/usr/bin/osascript", [
-        "-e",
-        `tell application "System Events"
-if (unix id of first application process whose frontmost is true) is not ${target} then error "Focus changed"
-key up {control, option, shift, command}
-keystroke "v" using command down
-end tell`,
-      ]);
+      this.replaceable = (
+        await this.mac.request("paste", { target, text })
+      ).replaceable;
+    } else if (!/^\d+$/.test(target)) {
+      throw Error("Invalid focus target");
     } else if (process.platform === "win32") {
       await exec(
         "powershell.exe",

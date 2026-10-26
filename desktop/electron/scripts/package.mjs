@@ -31,40 +31,62 @@ if (process.platform === "darwin") {
     path.join(contents, "MacOS/Electron"),
     path.join(contents, "MacOS", slug),
   );
-  let plist = fs.readFileSync(path.join(contents, "Info.plist"), "utf8");
+  // Electron distributes binary plists on some versions: use Apple's plist tooling.
+  const plist = path.join(contents, "Info.plist");
   const set = (key, value) => {
-    const re = new RegExp(
-      "(<key>" + key + "</key>\\s*<string>)[^<]*(</string>)",
-    );
-    if (re.test(plist)) plist = plist.replace(re, (_, a, b) => a + value + b);
-    else
-      plist = plist.replace(
-        "</dict>",
-        `<key>${key}</key><string>${value}</string></dict>`,
-      );
+    spawnSync("/usr/libexec/PlistBuddy", ["-c", `Delete :${key}`, plist], {
+      stdio: "ignore",
+    });
+    run("/usr/libexec/PlistBuddy", [
+      "-c",
+      `Add :${key} string ${value}`,
+      plist,
+    ]);
   };
+  const add = (key, value) =>
+    run("/usr/libexec/PlistBuddy", [
+      "-c",
+      `Add :${key} string ${value}`,
+      plist,
+    ]);
   set("CFBundleIdentifier", id);
   set("CFBundleName", product);
   set("CFBundleDisplayName", product);
   set("CFBundleExecutable", slug);
   set("CFBundleShortVersionString", "0.1.0");
   set("CFBundleVersion", "1");
-  set(
-    "NSMicrophoneUsageDescription",
-    "Hold your configured talk key to dictate into the focused application.",
-  );
-  set(
-    "NSAppleEventsUsageDescription",
-    "Speechify checks the focused application and pastes your dictation using System Events.",
-  );
-  fs.writeFileSync(path.join(contents, "Info.plist"), plist);
+  // Delete existing usage strings if supplied by a later Electron build, then add.
+  for (const [key, value] of Object.entries({
+    NSMicrophoneUsageDescription:
+      "Hold your configured talk key to dictate into the focused application.",
+    NSAppleEventsUsageDescription:
+      "Speechify checks the focused text control before inserting dictation.",
+  })) {
+    spawnSync("/usr/libexec/PlistBuddy", ["-c", `Delete :${key}`, plist], {
+      stdio: "ignore",
+    });
+    add(key, value);
+  }
   const rewriteHelpers = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const f = path.join(dir, entry.name);
       if (entry.isDirectory()) rewriteHelpers(f);
       else if (entry.name === "Info.plist") {
-        const original = fs.readFileSync(f, "utf8");
-        fs.writeFileSync(f, original.replaceAll("com.github.Electron", id));
+        const result = spawnSync(
+          "/usr/libexec/PlistBuddy",
+          ["-c", "Print :CFBundleIdentifier", f],
+          { encoding: "utf8" },
+        );
+        if (
+          result.status === 0 &&
+          result.stdout.trim().startsWith("com.github.Electron")
+        )
+          run("/usr/libexec/PlistBuddy", [
+            "-c",
+            "Set :CFBundleIdentifier " +
+              result.stdout.trim().replace("com.github.Electron", id),
+            f,
+          ]);
       }
     }
   };
@@ -130,16 +152,52 @@ if (process.platform === "linux") {
 if (process.platform === "darwin") {
   const bundle = path.join(dest, product + ".app");
   const identity = process.env.SPEECHIFY_SIGN_IDENTITY || "-";
-  run("codesign", [
-    "--force",
-    "--deep",
-    "--sign",
-    identity,
-    "--entitlements",
-    "resources/entitlements.mac.plist",
-    ...(identity === "-" ? [] : ["--options", "runtime", "--timestamp"]),
-    bundle,
-  ]);
+  const sign = (file, entitlements = false) =>
+    run("codesign", [
+      "--force",
+      "--sign",
+      identity,
+      ...(entitlements
+        ? ["--entitlements", "resources/entitlements.mac.plist"]
+        : []),
+      ...(identity === "-" ? [] : ["--options", "runtime", "--timestamp"]),
+      file,
+    ]);
+  // Sign nested Mach-O resources inside-out. --deep alone can miss Node addons
+  // and libraries stored in Resources rather than standard bundle code folders.
+  const signNested = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) continue;
+      const f = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        signNested(f);
+        if (/\.(app|framework|xpc)$/.test(entry.name))
+          sign(f, entry.name.endsWith(".app"));
+      } else {
+        const fd = fs.openSync(f, "r"),
+          magic = Buffer.alloc(4);
+        try {
+          fs.readSync(fd, magic, 0, 4, 0);
+        } finally {
+          fs.closeSync(fd);
+        }
+        if (
+          [
+            "cffaedfe",
+            "cefaedfe",
+            "cafebabe",
+            "bebafeca",
+            "feedfacf",
+            "feedface",
+          ].includes(magic.toString("hex"))
+        )
+          sign(f, f.endsWith("focus-helper"));
+      }
+    }
+  };
+  signNested(path.join(bundle, "Contents"));
+  sign(bundle, true);
+  run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", bundle]);
   const dmg = path.resolve("artifacts", slug + "-mac-" + process.arch + ".dmg");
   fs.rmSync(dmg, { force: true });
   run("hdiutil", [
