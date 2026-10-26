@@ -102,3 +102,5 @@ The lead fixed full-dataset export silently inheriting the 1,000-row UI cap, and
 The packaged baseline window opened on an isolated Xvfb display with `GDK_BACKEND=x11`; `tauri-evidence/lead-window.png` shows its real initial missing-model state. This is window-rendering evidence only, not a microphone, focus, tray, hook or paste pass. The test app and virtual display subsequently terminated before interaction checks. No desktop acceptance pass is inferred.
 
 The earlier Parakeet reference directory is no longer present; an interrupted partial candidate copy failed SHA-256 verification as intended. Matched comparison will use the still-available checksum-pinned Moonshine model and JFK fixture instead.
+
+The corrected Linux Debian and portable builds completed successfully after commit `26157b2`. All portable manifest entries passed checksum verification. Updated distributable hashes are in `tauri-evidence/lead-SHA256SUMS`; earlier evidence describes earlier builds.
