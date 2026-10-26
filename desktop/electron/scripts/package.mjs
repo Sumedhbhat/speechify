@@ -21,7 +21,8 @@ const dest = path.resolve(
 );
 fs.rmSync(dest, { recursive: true, force: true });
 fs.mkdirSync(dest, { recursive: true });
-fs.cpSync("node_modules/electron/dist", dest, { recursive: true });
+// Preserve framework-relative links for macOS bundle sealing.
+fs.cpSync("node_modules/electron/dist", dest, { recursive: true, verbatimSymlinks: true });
 let appRoot;
 if (process.platform === "darwin") {
   const bundle = path.join(dest, product + ".app");
