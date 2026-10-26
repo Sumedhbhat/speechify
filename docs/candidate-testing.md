@@ -147,3 +147,5 @@ Run one candidate at a time; quit the other before enabling hooks/microphone.
 ## Independent lead review
 
 The lead reran the packaged Parakeet CPU fixture (see `electron-evidence/lead-packaged-fixture.json`) and the unit suite. Review found and fixed filtering after the history result cap, which hid old matching entries, and acceptance of non-finite teacher confidence. The expanded suite passes 23 tests. Fixture timings are not desktop latency measurements or controlled candidate rankings. Linux desktop integration is still unverified: this host currently has only a GDM greeter session, not an accessible logged-in user desktop.
+
+The lead attempted the corrected packaged GUI on an isolated Xvfb display. Chromium aborted before any window opened because the portable sandbox helper is not root-owned/setuid and the host restricts unprivileged user namespaces. No GUI, tray, microphone, keyboard-hook, focus, or paste pass is claimed from that attempt. Existing services and the GDM greeter were not changed. Checksums were regenerated after the lead fixes and both packages passed `sha256sum -c SHA256SUMS`.
