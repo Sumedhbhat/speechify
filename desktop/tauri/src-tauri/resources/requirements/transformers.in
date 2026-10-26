@@ -1,0 +1,10 @@
+numpy
+scipy
+torch
+transformers>=5.4
+accelerate
+soundfile
+librosa
+sentencepiece
+protobuf
+huggingface-hub

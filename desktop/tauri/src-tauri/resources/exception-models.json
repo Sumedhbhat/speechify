@@ -1,0 +1,146 @@
+{
+  "distil-whisper-large-v3": {
+    "repo": "Systran/faster-distil-whisper-large-v3",
+    "revision": "c3058b475261292e64a0412df1d2681c06260fab",
+    "files": [
+      {
+        "path": "config.json",
+        "size": 2690,
+        "sha256": null,
+        "git_blob": "499468d516090aee836412556ca759be4e9e73f7"
+      },
+      {
+        "path": "model.bin",
+        "size": 1512927867,
+        "sha256": "b79368e19b6623813609431a6e5ee309a71506701ebc49fd7820e692dec7c5f5",
+        "git_blob": "64f5c58aaa5f9e7b841a6b3e763fc3abb8d2ba49"
+      },
+      {
+        "path": "preprocessor_config.json",
+        "size": 340,
+        "sha256": null,
+        "git_blob": "931c77a740890c46365c7ae0c9d350ba3cca908f"
+      },
+      {
+        "path": "tokenizer.json",
+        "size": 2480617,
+        "sha256": null,
+        "git_blob": "3a5e2ba63acdcac9a19ba56cf9bd27f185bfff61"
+      },
+      {
+        "path": "vocabulary.json",
+        "size": 1068114,
+        "sha256": null,
+        "git_blob": "0adcd01e7c237205d593b707e66dd5d7bc785d2d"
+      }
+    ]
+  },
+  "kyutai-stt-2.6b": {
+    "repo": "kyutai/stt-2.6b-en-trfs",
+    "revision": "005de8e7800698a4c9963a5ac000e185b410c2f5",
+    "files": [
+      {
+        "path": "config.json",
+        "size": 1955,
+        "sha256": null,
+        "git_blob": "6ac149f2bf8ee130db61af5af947482afe7f9e0b"
+      },
+      {
+        "path": "generation_config.json",
+        "size": 237,
+        "sha256": null,
+        "git_blob": "d950216dff83ff29a74279c0574466ce8ba1ccde"
+      },
+      {
+        "path": "model-00001-of-00002.safetensors",
+        "size": 4372392344,
+        "sha256": "d10da996924f8718e69ad188d65e4334f6c82a12bcaf8c5df83e80c9f5fca98b",
+        "git_blob": "e6666e6b503dfa29a9887413e477ef7a12ac926f"
+      },
+      {
+        "path": "model-00002-of-00002.safetensors",
+        "size": 1547899924,
+        "sha256": "fe01b3882f795cc9198c6e7f1fa4f08000e14f59ac8b181a294535ddb41cc33b",
+        "git_blob": "c7d969fc8b5f710da08b4bf68ed4a6586954a92c"
+      },
+      {
+        "path": "model.safetensors.index.json",
+        "size": 71651,
+        "sha256": null,
+        "git_blob": "7966833f3d21d204e037207753d08423b249f1b9"
+      },
+      {
+        "path": "preprocessor_config.json",
+        "size": 366,
+        "sha256": null,
+        "git_blob": "9558f99779adc0cb4113da6e78d1c1b3d69f30cf"
+      },
+      {
+        "path": "special_tokens_map.json",
+        "size": 27,
+        "sha256": null,
+        "git_blob": "0d29076b142c433a70cc1fc7e63d6a15fe5b2a67"
+      },
+      {
+        "path": "tokenizer.json",
+        "size": 245050,
+        "sha256": null,
+        "git_blob": "937f2807612efbbb7f6681d600a210111c72b3ca"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "size": 1115,
+        "sha256": null,
+        "git_blob": "b261a91e4c5868bfb7c9fb0f959967b28ba7d40d"
+      }
+    ]
+  },
+  "kyutai-stt-1b": {
+    "repo": "kyutai/stt-1b-en_fr-trfs",
+    "revision": "98aadd47649e7ccb89d1e73a6b62bcb31d38170f",
+    "files": [
+      {
+        "path": "config.json",
+        "size": 1956,
+        "sha256": null,
+        "git_blob": "6776ceadc93c121d4746994b6fa6d97d5de5156b"
+      },
+      {
+        "path": "generation_config.json",
+        "size": 237,
+        "sha256": null,
+        "git_blob": "d950216dff83ff29a74279c0574466ce8ba1ccde"
+      },
+      {
+        "path": "model.safetensors",
+        "size": 2697201444,
+        "sha256": "59a6da960020ea4e1436118c63d7cd73f013e0c62466de12d7ad4b64454fd035",
+        "git_blob": "f95831297000b181034968646a826978954d4c3c"
+      },
+      {
+        "path": "preprocessor_config.json",
+        "size": 366,
+        "sha256": null,
+        "git_blob": "bcb21ed74c600969c6de0dd7e0f1d3fe4fe3822f"
+      },
+      {
+        "path": "special_tokens_map.json",
+        "size": 27,
+        "sha256": null,
+        "git_blob": "0d29076b142c433a70cc1fc7e63d6a15fe5b2a67"
+      },
+      {
+        "path": "tokenizer.json",
+        "size": 496919,
+        "sha256": null,
+        "git_blob": "88129e7d2d0a3d265d652e1515ef3ce7bf7f5666"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "size": 1115,
+        "sha256": null,
+        "git_blob": "b261a91e4c5868bfb7c9fb0f959967b28ba7d40d"
+      }
+    ]
+  }
+}
