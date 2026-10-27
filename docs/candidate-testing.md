@@ -172,3 +172,12 @@ ELECTRON_RUN_AS_NODE=1 artifacts/speechify-electron-candidate-linux-x64/speechif
 `docs/electron-evidence/continuation-*` contains the 33-test runs under host Node and the packaged Electron runtime, Linux build log, native Parakeet fixture, packaged Moonshine/Qwen fixtures and packaged fallback/crash/cancellation check. Each fixture JSON records its model and audio hash, CPU, platform, ready and inference timings. These single-fixture development checks are not accuracy evaluations, 20-dictation desktop benchmarks or cross-candidate speed rankings. Optional-download tests use tiny fixture payloads; full optional model installation/inference is not claimed verified. Swift/Apple frameworks and Windows packaging tools are unavailable here, so no Mac/Windows binary or compilation pass is claimed.
 
 The rebuilt portable Linux app still requires working Chromium sandbox support. The lead's Xvfb/AppArmor abort remains the desktop launch blocker; the continuation does not launch a GUI or disable sandboxing. All available device/clipboard/focus/tray/permission checks remain with the lead/user.
+
+
+## Lead Mac packaging verification — 2026-10-27
+
+Apple Silicon macOS candidate packaging passed on the native macos-15 GitHub runner. Compilation, tests, ad-hoc app signing verification, DMG creation and checksum verification passed. This does not establish microphone, focus, paste, permissions or tray runtime correctness. Mac and Windows runtime testing remains user-deferred. No release was published.
+
+Build evidence: https://github.com/Sumedhbhat/speechify/actions/runs/40442099175
+
+The authoritative comparison, downloads and unresolved acceptance gaps are at https://bhatsumedh.tail429e81.ts.net/pages/speechify-candidate-comparison/ . These personal test DMGs are not Developer-ID notarized. Use Finder and the app-specific Open Anyway control if needed; grant permissions to each distinct candidate.
