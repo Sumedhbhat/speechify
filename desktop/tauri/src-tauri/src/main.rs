@@ -3,21 +3,29 @@
     windows_subsystem = "windows"
 )]
 mod audio;
+mod child_owner;
 mod config;
 #[cfg(feature = "desktop")]
 mod desktop;
 #[cfg(target_os = "linux")]
 mod evdev;
 mod ffi;
+mod installer;
 mod keys;
 mod learning;
+#[cfg(all(feature = "desktop", target_os = "macos"))]
+mod mac_clipboard;
 mod models;
 mod native;
 #[cfg(feature = "desktop")]
 mod platform;
+#[cfg(feature = "desktop")]
+mod replacement;
 mod service;
 mod store;
 mod worker;
+#[cfg(all(feature = "desktop", target_os = "linux"))]
+mod xclipboard;
 fn main() {
     if let Err(e) = run() {
         eprintln!("{e}");
@@ -26,6 +34,10 @@ fn main() {
 }
 fn run() -> config::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    if args.get(1).is_some_and(|s| s == "--clipboard-worker") {
+        return xclipboard::worker();
+    }
     if args.get(1).is_some_and(|s| s == "--native-worker") {
         if args.len() != 6 {
             return Err("native-worker requires native-dir model device threads".into());

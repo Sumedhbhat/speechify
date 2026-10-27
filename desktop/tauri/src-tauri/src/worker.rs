@@ -89,6 +89,7 @@ pub fn terminate(pid: u32) {
 }
 pub struct Worker {
     child: Child,
+    _owner: crate::child_owner::Owner,
     input: std::process::ChildStdin,
     output: std::sync::mpsc::Receiver<Result<String>>,
     pub key: String,
@@ -126,24 +127,7 @@ impl Worker {
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            cmd.process_group(0);
-            unsafe {
-                cmd.pre_exec(|| {
-                    #[cfg(target_os = "linux")]
-                    {
-                        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
-                        if libc::getppid() == 1 {
-                            return Err(std::io::Error::other("Parent exited"));
-                        }
-                    }
-                    Ok(())
-                });
-            }
-        }
-        let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+        let (mut child, owner) = crate::child_owner::spawn(&mut cmd)?;
         pid.store(child.id(), Ordering::SeqCst);
         let input = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
@@ -169,6 +153,7 @@ impl Worker {
         });
         let mut worker = Self {
             child,
+            _owner: owner,
             input,
             output,
             key,

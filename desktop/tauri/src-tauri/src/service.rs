@@ -22,6 +22,12 @@ pub struct Service {
     pub store: Mutex<Store>,
     pub state: Mutex<Value>,
     pub worker: WorkerSlot,
+    #[cfg(feature = "desktop")]
+    pub capture_tx: Mutex<Option<std::sync::mpsc::SyncSender<(crate::keys::Action, u64, u64)>>>,
+    #[cfg(feature = "desktop")]
+    pub manual_started: Mutex<Option<Instant>>,
+    #[cfg(feature = "desktop")]
+    pub replacement: Mutex<Option<(i64, crate::replacement::Receipt)>>,
     pub pid: Arc<AtomicU32>,
     pub cancel: Arc<AtomicBool>,
     pub stopping: AtomicBool,
@@ -30,6 +36,7 @@ pub struct Service {
     pub last_activity: Mutex<Instant>,
     pub downloading: AtomicBool,
     pub training_pid: AtomicU32,
+    pub install_pid: AtomicU32,
     pub learning_busy: AtomicBool,
 }
 impl Service {
@@ -61,6 +68,12 @@ impl Service {
                 json!({"stage":"Idle","ready":false,"level":0,"recent":"","device":"Not loaded","error":null,"download":null}),
             ),
             worker: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "desktop")]
+            capture_tx: Mutex::new(None),
+            #[cfg(feature = "desktop")]
+            manual_started: Mutex::new(None),
+            #[cfg(feature = "desktop")]
+            replacement: Mutex::new(None),
             pid: Arc::new(AtomicU32::new(0)),
             cancel: Arc::new(AtomicBool::new(false)),
             stopping: AtomicBool::new(false),
@@ -69,6 +82,7 @@ impl Service {
             last_activity: Mutex::new(Instant::now()),
             downloading: AtomicBool::new(false),
             training_pid: AtomicU32::new(0),
+            install_pid: AtomicU32::new(0),
             learning_busy: AtomicBool::new(false),
         }))
     }
@@ -104,10 +118,7 @@ impl Service {
             return Err("Service is stopping".into());
         }
         let id = cfg["model"].as_str().ok_or("Model missing")?;
-        let key = format!(
-            "{}:{}:{}:{}",
-            id, cfg["device"], cfg["onnx_threads"], cfg["compute_type"]
-        );
+        let key = model_key(cfg);
         if slot.as_mut().is_none_or(|w| w.key != key || !w.alive()) {
             slot.take();
             self.set_stage("Loading model");
@@ -218,7 +229,8 @@ impl Service {
                 Ok(cleaned) => text = cleaned,
                 Err(_) => {
                     // Optional remote cleanup must not discard a valid local dictation.
-                    result["cleanup_warning"] = json!("Cleanup unavailable; using local transcription");
+                    result["cleanup_warning"] =
+                        json!("Cleanup unavailable; using local transcription");
                     self.log("cleanup_unavailable", json!({}));
                 }
             }
@@ -248,10 +260,19 @@ impl Service {
         Ok(result)
     }
     pub fn cancel_work(&self) {
+        #[cfg(feature = "desktop")]
+        {
+            self.manual_started.lock().unwrap().take();
+            self.recording.store(false, Ordering::SeqCst);
+            if let Some(tx) = self.capture_tx.lock().unwrap().as_ref() {
+                let _ = tx.try_send((crate::keys::Action::Cancel, 0, 0));
+            }
+        }
         self.generation.fetch_add(1, Ordering::SeqCst);
         self.cancel.store(true, Ordering::SeqCst);
         crate::worker::terminate(self.pid.load(Ordering::SeqCst));
         crate::worker::terminate(self.training_pid.load(Ordering::SeqCst));
+        crate::worker::terminate(self.install_pid.load(Ordering::SeqCst));
         self.state.lock().unwrap()["ready"] = json!(false);
         self.set_stage("Cancelled");
     }
@@ -261,14 +282,15 @@ impl Service {
     }
     pub fn update(&self, cfg: Value) -> Result<()> {
         config::validate(&cfg)?;
+        if self.downloading.load(Ordering::SeqCst) {
+            return Err("Wait for installation or cancel it before changing settings".into());
+        }
         if self.recording.load(Ordering::SeqCst) {
             return Err("Finish recording before applying settings".into());
         }
         let old = self.config.lock().unwrap().clone();
         config::save(&self.root, &cfg)?;
-        let reload = ["model", "device", "onnx_threads", "compute_type"]
-            .iter()
-            .any(|k| old[*k] != cfg[*k]);
+        let reload = model_key(&old) != model_key(&cfg);
         *self.config.lock().unwrap() = cfg;
         if reload {
             self.cancel_work();
@@ -283,7 +305,12 @@ impl Service {
         Ok(())
     }
     pub fn snapshot(&self) -> Value {
-        json!({"state":self.state.lock().unwrap().clone(),"config":self.config.lock().unwrap().clone(),"models":models::list(&self.root),"data_dir":self.root,"diagnostics":diagnostics()})
+        let mut snapshot = json!({"state":self.state.lock().unwrap().clone(),"config":self.config.lock().unwrap().clone(),"models":models::list(&self.root),"data_dir":self.root,"diagnostics":diagnostics()});
+        #[cfg(feature = "desktop")]
+        {
+            snapshot["manual_recording"] = json!(self.manual_started.lock().unwrap().is_some());
+        }
+        snapshot
     }
 }
 impl Drop for Service {
@@ -294,18 +321,23 @@ impl Drop for Service {
 pub fn diagnostics() -> Value {
     let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
         || std::env::var("XDG_SESSION_TYPE").is_ok_and(|s| s == "wayland");
-    json!({"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"session":if cfg!(target_os="linux"){if wayland{"Wayland"}else{"X11"}}else{"native"},"guidance":if cfg!(target_os="macos"){ "Grant Microphone, Accessibility and Input Monitoring to Speechify Tauri Candidate in System Settings. Restart after grants. Use a stable signing identity." }else if cfg!(windows){ "Enable microphone access for desktop applications. Windows UIPI blocks pasting into elevated applications from a non-elevated candidate." }else if wayland{ "Wayland recording requires explicitly granted read access to /dev/input/by-id/*-event-kbd. Safe target discovery/paste is unavailable: transcripts are saved for manual copy (wl-clipboard required). No input privileges or uinput devices are created automatically. Use X11 for automatic paste." }else{ "X11 requires DISPLAY, libX11, xclip and xdotool. Microphone permission is controlled by PipeWire/PulseAudio/ALSA. Clipboard restoration preserves text only, not images or rich formats." }})
+    json!({"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"session":if cfg!(target_os="linux"){if wayland{"Wayland"}else{"X11"}}else{"native"},"guidance":if cfg!(target_os="macos"){ "Grant Microphone, Accessibility and Input Monitoring to Speechify Tauri Candidate in System Settings. Restart after grants. Use a stable signing identity." }else if cfg!(windows){ "Enable microphone access for desktop applications. Windows UIPI blocks pasting into elevated applications from a non-elevated candidate." }else if wayland{ "Record in app works without global-key grants; use Copy text afterward. Global hold-to-talk requires explicitly granted read access to /dev/input/by-id/*-event-kbd. Safe target discovery/paste is unavailable: transcripts are saved for manual copy (wl-clipboard required). No input privileges or uinput devices are created automatically. Use X11 for automatic paste." }else{ "X11 requires DISPLAY, libX11, xclip and xdotool. Microphone permission is controlled by PipeWire/PulseAudio/ALSA. Clipboard snapshots retain supported MIME formats up to 128 KiB each; unsupported formats refuse automatic paste." }})
 }
 
 fn cleanup_text(url: &str, model: &Value, text: &str) -> Result<String> {
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(15)).build().map_err(|e|e.to_string())?;
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
     let response: Value = client.post(url).json(&json!({"model":model,"temperature":0,
         "messages":[{"role":"system","content":"Clean dictation punctuation and grammar. Return only the corrected text. Preserve meaning."},
                     {"role":"user","content":text}]}))
         .send().and_then(|r|r.error_for_status()).and_then(|r|r.json()).map_err(|e|e.to_string())?;
-    response["choices"][0]["message"]["content"].as_str()
-        .filter(|s| !s.trim().is_empty()).map(str::to_owned).ok_or("LLM returned no text".into())
+    response["choices"][0]["message"]["content"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or("LLM returned no text".into())
 }
 #[cfg(test)]
 mod cleanup_tests {
@@ -313,5 +345,42 @@ mod cleanup_tests {
     #[test]
     fn unavailable_cleanup_is_an_error_not_empty_output() {
         assert!(cleanup_text("invalid://cleanup", &json!("model"), "Keep my words.").is_err());
+    }
+}
+
+fn model_key(cfg: &Value) -> String {
+    json!([
+        cfg["model"],
+        cfg["device"],
+        cfg["onnx_threads"],
+        cfg["compute_type"],
+        cfg["language"],
+        cfg["beam_size"]
+    ])
+    .to_string()
+}
+#[cfg(test)]
+mod reload_tests {
+    use super::*;
+    #[test]
+    fn every_worker_captured_setting_invalidates_loaded_model() {
+        let original = config::defaults();
+        for (key, value) in [
+            ("model", json!("moonshine-base")),
+            ("device", json!("cpu")),
+            ("onnx_threads", json!(7)),
+            ("compute_type", json!("int8")),
+            ("language", json!("fr")),
+            ("beam_size", json!(7)),
+        ] {
+            let mut changed = original.clone();
+            changed[key] = value;
+            if changed[key] != original[key] {
+                assert_ne!(model_key(&changed), model_key(&original), "{key}");
+            }
+        }
+        let mut changed = original.clone();
+        changed["theme"] = json!("light");
+        assert_eq!(model_key(&changed), model_key(&original));
     }
 }

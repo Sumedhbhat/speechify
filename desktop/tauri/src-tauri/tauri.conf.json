@@ -32,6 +32,7 @@
     "resources": [
       "resources/native/**/*",
       "resources/exception-worker.py",
+      "resources/install-exception.py",
       "resources/training/**/*",
       "resources/requirements/*",
       "resources/exception-models.json"

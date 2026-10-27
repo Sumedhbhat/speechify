@@ -27,6 +27,57 @@ async fn request(
 fn dispatch(s: &Arc<Service>, op: &str, args: &Value) -> Result<Value> {
     match op {
         "snapshot" => Ok(s.snapshot()),
+        "manual_start" => {
+            if s.learning_busy.load(Ordering::SeqCst) {
+                s.cancel_work();
+            }
+            let mut started = s.manual_started.lock().unwrap();
+            if s.recording.swap(true, Ordering::SeqCst) {
+                return Err("A recording is already active".into());
+            }
+            let result = s
+                .capture_tx
+                .lock()
+                .unwrap()
+                .as_ref()
+                .ok_or("Recorder unavailable")
+                .and_then(|tx| {
+                    tx.try_send((Action::Start, 0, s.generation.load(Ordering::SeqCst)))
+                        .map_err(|_| "Recorder busy")
+                });
+            if let Err(e) = result {
+                s.recording.store(false, Ordering::SeqCst);
+                return Err(e.into());
+            }
+            *started = Some(Instant::now());
+            *s.last_activity.lock().unwrap() = Instant::now();
+            Ok(json!(true))
+        }
+        "manual_stop" => {
+            let start = s
+                .manual_started
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or("No app recording is active")?;
+            let minimum = s.config.lock().unwrap()["min_hold_ms"]
+                .as_u64()
+                .unwrap_or(250);
+            let action = if start.elapsed().as_millis() < minimum as u128 {
+                Action::Cancel
+            } else {
+                Action::Submit
+            };
+            s.recording.store(false, Ordering::SeqCst);
+            s.capture_tx
+                .lock()
+                .unwrap()
+                .as_ref()
+                .ok_or("Recorder unavailable")?
+                .try_send((action, 0, s.generation.load(Ordering::SeqCst)))
+                .map_err(|_| "Recorder busy")?;
+            Ok(json!(true))
+        }
         "devices" => Ok(json!(crate::audio::capture::devices()?)),
         "settings" => {
             s.update(args.clone())?;
@@ -37,13 +88,18 @@ fn dispatch(s: &Arc<Service>, op: &str, args: &Value) -> Result<Value> {
             args["filter"].as_str().unwrap_or("")
         )?)),
         "correct" => {
+            let sample = id(args)?;
+            let text = args["text"].as_str().ok_or("Missing correction")?;
+            // Learning is saved even when OS replacement is refused.
+            s.store.lock().unwrap().edit(sample, text)?;
             if args["replace"] == true {
-                return Err("Save-and-replace is unavailable: cursor position cannot be proven unchanged. Use Save only and copy the correction.".into());
+                let receipt = s.replacement.lock().unwrap().take();
+                let Some((saved, receipt)) = receipt.filter(|(saved, _)| *saved == sample) else {
+                    return Err("Correction saved. Replacement unavailable: no proven original text range/caret for this sample. Copy it manually.".into());
+                };
+                let _ = saved;
+                crate::replacement::replace(&receipt, text)?;
             }
-            s.store.lock().unwrap().edit(
-                id(args)?,
-                args["text"].as_str().ok_or("Missing correction")?,
-            )?;
             Ok(json!(true))
         }
         "revert" => {
@@ -109,19 +165,30 @@ fn dispatch(s: &Arc<Service>, op: &str, args: &Value) -> Result<Value> {
             Ok(json!(true))
         }
         "install" => {
+            if s.learning_busy.load(Ordering::SeqCst) {
+                return Err("Pause learning before installing models".into());
+            }
+            let id = args["id"].as_str().ok_or("Model ID required")?.to_owned();
+            if id != "training" {
+                crate::models::spec(&id)?;
+            }
             if s.downloading.swap(true, Ordering::SeqCst) {
                 return Err(
                     "One model download at a time; cancel or wait for the current download".into(),
                 );
             }
-            let id = args["id"].as_str().ok_or("Model ID required")?.to_owned();
             s.cancel.store(false, Ordering::SeqCst);
             let service = s.clone();
             std::thread::spawn(move || {
-                let result =
+                let optional =
+                    id == "training" || crate::models::spec(&id).is_ok_and(|m| m["gguf"].is_null());
+                let result = if optional {
+                    crate::installer::install(&service, &id)
+                } else {
                     crate::models::install(&service.root, &id, service.cancel.clone(), |p| {
                         service.state.lock().unwrap()["download"] = p
-                    });
+                    })
+                };
                 service.downloading.store(false, Ordering::SeqCst);
                 match result {
                     Ok(()) => {
@@ -208,12 +275,12 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                 let text = result["text"].as_str().unwrap_or("");
                 if !text.is_empty() {
                     if target == 0 {
-                        return Err(
-                            "Transcript saved without paste: no safe focused target is available"
-                                .into(),
-                        );
+                        infer.state.lock().unwrap()["error"] = json!("Transcript ready. Use Copy text to insert it; no safe external target was established.");
+                        return Ok(());
                     }
-                    platform::paste(target, text)?;
+                    let receipt = platform::paste(target, text)?;
+                    *infer.replacement.lock().unwrap() =
+                        receipt.and_then(|r| result["sample_id"].as_i64().map(|id| (id, r)));
                     infer.set_stage("Pasted");
                     infer.log("paste_ack", json!({"clock_ms":crate::store::now()*1000.}));
                 }
@@ -226,6 +293,7 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
         }
     });
     let (capture_tx, capture_rx) = mpsc::sync_channel::<(Action, u64, u64)>(32);
+    *s.capture_tx.lock().unwrap() = Some(capture_tx.clone());
     let recorder = s.clone();
     let indicator = app.clone();
     std::thread::spawn(move || {
@@ -289,6 +357,9 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                         }
                     }
                     Action::Submit => {
+                        if !active_capture {
+                            continue;
+                        }
                         active_capture = false;
                         if let Some(c) = &capture {
                             match c.take() {
@@ -414,6 +485,9 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                     {
                         show(&app, ["History", "History", "Models"][i]);
                     }
+                }
+                if s.manual_started.lock().unwrap().is_some() {
+                    continue;
                 }
                 if let Some(action) = hold.event(&key, pressed, clock.elapsed().as_millis() as u64)
                 {
@@ -626,4 +700,72 @@ fn autostart(enabled: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+    fn service() -> Arc<Service> {
+        let root = std::env::temp_dir().join(format!(
+            "speechify-dispatch-{}-{}",
+            std::process::id(),
+            (crate::store::now() * 1e9) as u64
+        ));
+        for sub in ["audio", "models", "logs", "exports"] {
+            std::fs::create_dir_all(root.join(sub)).unwrap();
+        }
+        Service::new(root, std::path::PathBuf::from("unused-fixture-native")).unwrap()
+    }
+    #[test]
+    fn refused_replacement_still_saves_correction_and_latest_audio() {
+        let s = service();
+        let sample = s
+            .store
+            .lock()
+            .unwrap()
+            .record(&[0.1; 160], "old", "old", false)
+            .unwrap();
+        let error = dispatch(
+            &s,
+            "correct",
+            &json!({"id":sample,"text":"human correction","replace":true}),
+        )
+        .unwrap_err();
+        assert!(error.contains("Correction saved"));
+        let rows = dispatch(&s, "history", &json!({})).unwrap();
+        assert_eq!(rows[0]["corrected"], "human correction");
+        assert!(s
+            .store
+            .lock()
+            .unwrap()
+            .audio_path(sample)
+            .unwrap()
+            .is_file());
+        let root = s.root.clone();
+        drop(s);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn invalid_install_does_not_latch_download_and_manual_tap_cancels() {
+        let s = service();
+        assert!(dispatch(&s, "install", &json!({"id":"not-a-model"})).is_err());
+        assert!(!s.downloading.load(Ordering::SeqCst));
+        assert!(dispatch(&s, "manual_start", &json!({})).is_err());
+        assert!(!s.recording.load(Ordering::SeqCst));
+        let (tx, rx) = mpsc::sync_channel(4);
+        *s.capture_tx.lock().unwrap() = Some(tx);
+        dispatch(&s, "manual_start", &json!({})).unwrap();
+        assert_eq!(rx.recv().unwrap().0, Action::Start);
+        dispatch(&s, "manual_stop", &json!({})).unwrap();
+        assert_eq!(rx.recv().unwrap().0, Action::Cancel);
+        assert!(!s.recording.load(Ordering::SeqCst));
+        dispatch(&s, "manual_start", &json!({})).unwrap();
+        rx.recv().unwrap();
+        dispatch(&s, "cancel", &json!({})).unwrap();
+        assert_eq!(rx.recv().unwrap().0, Action::Cancel);
+        assert!(s.manual_started.lock().unwrap().is_none());
+        let root = s.root.clone();
+        drop(s);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

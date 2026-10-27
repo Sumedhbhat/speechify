@@ -7,7 +7,7 @@ The Rust process owns recording, keyboard polling, the bounded dictation queue, 
 
 ## Build on Linux
 
-Prerequisites: Rust stable (tested with 1.99.0), Node 22.12+ or 24+, npm, Python 3 (build-time resource preparation only), a C/C++ compiler, pkg-config, GTK 3, WebKitGTK 4.1, ALSA and Ayatana appindicator development packages. Runtime global dictation on X11 additionally requires xclip and xdotool. Wayland global recording is available only with explicitly granted read access to `/dev/input/by-id/*-event-kbd`. Automatic paste is refused because safe target discovery is unavailable; use Copy in History (requires wl-clipboard). No permissions are changed automatically.
+Prerequisites: Rust stable (tested with 1.99.0), Node 22.12+ or 24+, npm, Python 3 (build-time resource preparation only), a C/C++ compiler, pkg-config, GTK 3, WebKitGTK 4.1, ALSA and Ayatana appindicator development packages. Runtime global dictation on X11 additionally requires xclip, xdotool, libXfixes and coreutils timeout. Wayland global recording is available only with explicitly granted read access to `/dev/input/by-id/*-event-kbd`. Record in app/Stop and transcribe works without global input grants. Automatic Wayland paste is refused because safe target discovery is unavailable; use Copy text or Copy in History (requires wl-clipboard). No permissions are changed automatically.
 
 From `desktop/tauri`:
 
@@ -74,7 +74,7 @@ Each fixture result prints JSON with actual text, device and inference milliseco
 
 ## Optional Python exceptions
 
-Install `uv` separately and use the checked-in, hashed, date-constrained lockfiles. These commands only create candidate environments and model directories:
+Install Python 3 and `uv` explicitly on PATH. In Models choose **Install optional model**; in Learning choose **Install training environment**. Stages and byte progress appear in the app. Cancel stops the owned process tree; Retry repairs incomplete environments and restarts unverified model files. Completion is atomic for model directories; dependency installation uses a ready marker. These operations only use candidate-owned data. The checked-in hash/date-constrained lockfiles are unchanged. The existing CLI remains available:
 
 ```sh
 python3 scripts/setup-exception.py whisper --model distil-whisper-large-v3
@@ -93,9 +93,18 @@ These optional multi-gigabyte environments/models were not installed or executed
 2. Grant the platform permissions. Select the microphone; hold Right Option on Mac or Right Ctrl on Windows/X11 for at least 250 ms. Verify Unicode/multiline output in a plain text editor.
 3. Tap the key briefly, hold it with Ctrl+C/other keys, and rebind it. No cancelled clip should reach history or paste. Unplug the selected microphone and inspect recovery/error guidance.
 4. Close/reopen Settings 20 times and dictate 20 clips. Verify recording and inference persist independently of the settings window. Check the tray's Settings/History/Models/Quit actions and second-instance behavior.
-5. Change focus while transcription runs: the transcript should be saved without pasting into the new target. Copy new text during clipboard restoration. Check indicator visibility without focus activation.
-6. Correct, revert, exclude/include, play, search and export history; repeat a word correction twice and inspect its rule. Save-and-replace is intentionally refused because cursor continuity is not yet proven.
+5. Change focus while transcription runs: the transcript should be saved without pasting into the new target. Copy both different and identical text during clipboard restoration; verify newer copies survive. Test HTML/RTF and unsupported-format refusal. Check indicator visibility without focus activation.
+6. Correct, revert, exclude/include, play, search and export history; repeat a word correction twice and inspect its rule. With audio retention off, correct the latest clip before another dictation/restart and verify its WAV is then saved. Save-and-replace supports only a standard Windows Edit control with unchanged text/caret; other targets save the correction and report refusal.
 7. Cancel a download, retry, select a different installed model, restart, and quit during inference. Confirm no worker remains. Check CPU fallback with an unavailable GPU choice.
 8. If testing learning, opt in to a teacher/CPU as needed, verify mains/idle scheduling and dictation preemption; train only after enough labels. Review both gate reports and test rollback.
 
 See repository `docs/candidate-parity.md` and `docs/candidate-testing.md` for exact verified evidence and remaining gaps. No live-device, tray, microphone, permission or focus verification is implied by compilation or fixture inference.
+
+
+## Clipboard and correction limits
+
+X11 restoration uses unique selection ownership and retains supported MIME data, up to 128 KiB per target. Large/unknown formats refuse automatic paste; there is no INCR or clipboard-manager handoff yet. Windows snapshots memory-backed formats under the clipboard lock; handle formats refuse automatic paste. Mac snapshots NSPasteboard item types and guards by change count, but AppKit has no atomic compare-and-restore operation. Native runtime checks are still required.
+
+Windows replacement is limited to standard Edit controls, an unchanged UTF-16 document/caret and a two-minute receipt. Replacement uses bounded synchronous messages and is undoable. It does not move focus back to the original app. Concurrent programmatic mutation between separate Win32 messages remains a limitation; other control types and platforms save only and explain the refusal.
+
+The lead owns native macOS packaging via GitHub Actions after this handoff. No CI workflow, branch push, installed-app replacement or release is part of this implementation commit.

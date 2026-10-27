@@ -104,3 +104,52 @@ The packaged baseline window opened on an isolated Xvfb display with `GDK_BACKEN
 The earlier Parakeet reference directory is no longer present; an interrupted partial candidate copy failed SHA-256 verification as intended. Matched comparison will use the still-available checksum-pinned Moonshine model and JFK fixture instead.
 
 The corrected Linux Debian and portable builds completed successfully after commit `26157b2`. All portable manifest entries passed checksum verification. Updated distributable hashes are in `tauri-evidence/lead-SHA256SUMS`; earlier evidence describes earlier builds.
+
+
+## Implementation continuation (2026-10-27)
+
+Continuation started from lead evidence commit `a38e6da` on the same `sb/tauri-candidate-implementation` worktree. No reset, new checkout, PR, CI workflow, push, release, remote access or installed-app/system-policy change was made. The original pinned fixtures remain byte-for-byte intact. The host is still Ubuntu 26.04.1, kernel 7.0.0-38, Ryzen 5 3500U (4 cores/8 threads), Rust 1.99.0 and Node 24.21.0. The worktree now resolves through the `/workspaces/bhatsumedh/` mount; `/home/bhatsumedh/` is an alias.
+
+`followup-release-tests.log` records **25 passing release tests** with desktop features. Added regressions exercise retention-off audio recovery/eviction/restart, saving a correction even when replacement is refused, manual-recording short-tap/cancel command routing without opening a microphone, invalid-install recovery, worker reload settings, teacher memory/CPU consent, UTF-16 replacement ranges and supported X11 snapshot formats. Both lead regressions still pass.
+
+`followup-optional-tests.log` records **4 passing offline installer tests**: interrupted partial recovery, hash mismatch and retry, dependency failure without completion marker, and oversized file rejection. Subprocess/network operations are substituted only in these installer tests; they do not prove optional inference or real multi-gigabyte installation.
+
+`followup-adapter-typecheck.log` records Windows and Mac adapter Rust metadata type checks on Linux, with only cfg/link annotations adapted. This catches Rust type errors but **does not validate native linking, ABI correctness, permissions or runtime behavior**. Windows child Job Object startup still requires native compilation. The lead will add a branch-only native Mac packaging workflow after handoff; this implementation does not add CI or push. Native resource preparation uses pinned architecture-specific wheels and retains the existing app/dmg configuration.
+
+Reproduce these additional checks from the worktree root:
+
+```sh
+source desktop/tauri/scripts/local-env.sh
+cargo test --release --locked --manifest-path desktop/tauri/src-tauri/Cargo.toml
+python3 desktop/tauri/scripts/test-optional-installer.py
+python3 desktop/tauri/scripts/check-platform-adapters.py
+```
+
+`followup-frontend-build.log` records TypeScript checking and Vite production output. `followup-linux-build.log` records the actual Debian rebuild. Current artifact and fixture results are recorded in the follow-up manifests below; earlier baseline and lead logs/hashes are preserved as historical evidence and refer to their earlier binaries.
+
+New manual acceptance cases for the lead/user:
+
+- X11: copy identical text again during restoration; test an owner copying again during snapshot. Verify XFixes generation refusal, HTML/RTF/small PNG restoration, unsupported-format/large-data refusal, and failure with missing xclip/timeout/XFixes. No INCR or clipboard-manager-on-quit support is claimed.
+- Mac: test multiple pasteboard item/type snapshots, same-text changeCount protection, Accessibility focus guard and explicit save-only correction behavior. AppKit's count-check/write race is documented in parity limits.
+- Windows: test focused child-control changes within the same top-level window, clipboard sequence protection, handle-format refusal, Job Object cleanup after parent crash, and standard Edit replacement with unchanged/changed text, caret, document and expired receipt. Browser/rich-edit targets must save only. Win32 cross-process edit messages are not atomic against concurrent target mutation.
+- Wayland: Record in app → Stop and transcribe → Copy text without evdev grants; global hold reports its explicit evdev requirement. Automatic target/paste is unavailable and no elevation occurs.
+- Optional models: explicitly install Python 3/uv, use Models/Learning progress actions, cancel during dependency/model stages, retry offline/network/disk failure, and ensure only complete model directories are selectable. Training/inference remain native-runtime acceptance work.
+
+
+### Final continuation packages and fixture evidence
+
+The final Linux package executable completed **20/20 real fixture transcriptions** with English, CPU, four threads and exactly **one persistent model load**. Median inference: **718.034 ms**; p95: **742.434 ms**; native load: **118.300 ms**; process wall time: **14745.361 ms**. These are shared-host, warm-filesystem measurements, not desktop latency. Exact samples and hashes: `tauri-evidence/followup-fixture-release.json`.
+
+All **54 portable manifest entries** pass. The extracted Debian executable matches the measured portable binary, the optional installer matches current source, and the native library matches the portable resources. Both packages exclude Python bytecode caches. The no-display clipboard-helper command refuses cleanly without starting desktop services. Evidence: `followup-package-verification.json`, `followup-portable-verify.log`, `followup-debian-inventory.txt` and `followup-headless-clipboard.json`.
+
+After `tauri build`, the Debian archive was regenerated with `npm run tauri -- bundle --ci --bundles deb --no-binary-patching` so both distributions contain the exact measured binary rather than differing in Tauri updater bundle metadata. No updater is configured. This supported bundle step is recorded in `followup-resource-rebundle.log`.
+
+Current artifacts (relative to worktree root):
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `desktop/tauri/src-tauri/target/release/speechify-tauri-candidate` | 19,295,768 | `e97225a416d911fdd9a06415f2acfbff6bf227563800f0f182cf9dcc20f2ceea` |
+| `desktop/tauri/src-tauri/target/release/bundle/deb/Speechify Tauri Candidate_0.1.0_amd64.deb` | 29,825,800 | `53a6eb8215e33b3d0d3fad70e29512156cab7c90d240949215f37f77355cd236` |
+| `desktop/tauri/artifacts/speechify-tauri-candidate-linux-x86_64.tar.gz` | 29,239,288 | `f242dda83d8e17590ba6db193f911dd258491a9f82aef7a8568d5a7a7d0b1f64` |
+
+Verify current outputs with `sha256sum -c docs/tauri-evidence/followup-SHA256SUMS`. Baseline and lead manifests are retained as historical records. There is no claim of full parity or post-change desktop acceptance: the explicit remaining platform/runtime blockers are in `candidate-parity.md`.

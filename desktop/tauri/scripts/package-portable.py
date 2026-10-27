@@ -8,9 +8,9 @@ if stage.exists():shutil.rmtree(stage)
 stage.mkdir(parents=True,exist_ok=True)
 binary='speechify-tauri-candidate'+('.exe' if platform.system()=='Windows' else '')
 shutil.copy2(root/'src-tauri/target/release'/binary,stage/binary)
-shutil.copytree(root/'src-tauri/resources',stage/'resources',dirs_exist_ok=True)
+shutil.copytree(root/'src-tauri/resources',stage/'resources',dirs_exist_ok=True,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
 shutil.copy2(root/'README.md',stage/'README.md')
-shutil.copytree(root/'scripts',stage/'scripts',dirs_exist_ok=True)
+shutil.copytree(root/'scripts',stage/'scripts',dirs_exist_ok=True,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
 manifest=[]
 for p in sorted(stage.rglob('*')):
  if p.is_file():manifest.append(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+str(p.relative_to(stage)))

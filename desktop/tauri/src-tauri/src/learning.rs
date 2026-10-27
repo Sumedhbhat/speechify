@@ -83,7 +83,8 @@ pub fn scheduler(s: Arc<Service>) {
                 }
                 continue;
             }
-            if !idle
+            if s.downloading.load(Ordering::SeqCst)
+                || !idle
                 || s.recording.load(Ordering::SeqCst)
                 || cfg["learn_auto"] != true
                 || Instant::now() < retry
@@ -135,12 +136,13 @@ fn teacher(s: &Arc<Service>, cfg: &Value) -> Result<()> {
     if teacher == "off" {
         return Ok(());
     }
-    if cfg["teacher_on_cpu"] != true && cfg["device"] == "cpu" {
-        return Ok(());
-    }
-    if teacher == "auto" {
-        teacher = "granite-speech-4.1-2b".into();
-    }
+    let memory = if cfg["device"] == "cpu" {
+        None
+    } else {
+        gpu_memory()
+    };
+    let (selected, device) = choose_teacher(&teacher, memory, cfg["teacher_on_cpu"] == true)?;
+    teacher = selected;
     if !crate::models::path(&s.root, &teacher)?.exists() {
         return Err(format!(
             "Install teacher {teacher} in Models; no automatic large download"
@@ -164,6 +166,8 @@ fn teacher(s: &Arc<Service>, cfg: &Value) -> Result<()> {
         let path = s.store.lock().unwrap().audio_path(id)?;
         let mut teacher_cfg = cfg.clone();
         teacher_cfg["model"] = json!(teacher);
+        teacher_cfg["device"] = json!(device);
+        teacher_cfg["beam_size"] = json!(5);
         let generation = s.generation.load(Ordering::SeqCst);
         let mut slot = s.worker.lock().unwrap();
         let w = s.ensure(&mut slot, &teacher_cfg)?;
@@ -217,6 +221,9 @@ pub fn judge(text: &str, seconds: f64) -> (f64, Option<String>) {
     (confidence, None)
 }
 pub fn start_training(s: Arc<Service>) -> Result<()> {
+    if s.downloading.load(Ordering::SeqCst) || s.recording.load(Ordering::SeqCst) {
+        return Err("Finish installation and recording before training".into());
+    }
     if s.learning_busy.swap(true, Ordering::SeqCst) {
         return Err("Learning job already running".into());
     }
@@ -290,19 +297,7 @@ pub fn start_training(s: Arc<Service>) -> Result<()> {
             .env("SPEECHIFY_TAURI_TRAINING_HOME", &s.root)
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::CommandExt;
-                cmd.process_group(0);
-                unsafe {
-                    cmd.pre_exec(|| {
-                        #[cfg(target_os = "linux")]
-                        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
-                        Ok(())
-                    });
-                }
-            }
-            let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+            let (mut child, _owner) = crate::child_owner::spawn(&mut cmd)?;
             s.training_pid.store(child.id(), Ordering::SeqCst);
             let status = child.wait().map_err(|e| e.to_string())?;
             s.training_pid.store(0, Ordering::SeqCst);
@@ -439,5 +434,72 @@ mod tests {
     #[test]
     fn hallucination_rejected() {
         assert_eq!(judge("yes yes yes yes yes", 3.).0, 0.);
+    }
+}
+
+// Match the reference's NVIDIA memory/headroom policy; unknown hardware never implies permission for CPU.
+fn gpu_memory() -> Option<f64> {
+    let output = Command::new("nvidia-smi")
+        .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()?
+        .lines()
+        .next()?
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .map(|m| m / 1024.)
+}
+fn choose_teacher(setting: &str, memory: Option<f64>, cpu: bool) -> Result<(String, &'static str)> {
+    let ids = if setting == "auto" {
+        vec!["granite-speech-4.1-2b", "qwen3-asr-1.7b"]
+    } else {
+        vec![setting]
+    };
+    let candidates = ids
+        .iter()
+        .map(|id| crate::models::spec(id))
+        .collect::<Result<Vec<_>>>()?;
+    if let Some(gb) = memory {
+        for model in &candidates {
+            if model["vram_gb"].as_f64().unwrap_or(f64::INFINITY) + 1. <= gb {
+                return Ok((model["id"].as_str().unwrap().into(), "cuda"));
+            }
+        }
+    }
+    if cpu {
+        let smallest = candidates
+            .iter()
+            .min_by(|a, b| {
+                a["vram_gb"]
+                    .as_f64()
+                    .unwrap_or(f64::INFINITY)
+                    .total_cmp(&b["vram_gb"].as_f64().unwrap_or(f64::INFINITY))
+            })
+            .ok_or("No teacher")?;
+        return Ok((smallest["id"].as_str().unwrap().into(), "cpu"));
+    }
+    Err("Teacher paused: no suitable NVIDIA GPU with 1 GB headroom; enable teacher_on_cpu to opt in".into())
+}
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+    #[test]
+    fn auto_selection_respects_memory_and_cpu_consent() {
+        assert!(choose_teacher("auto", None, false).is_err());
+        assert_eq!(
+            choose_teacher("auto", Some(100.), false).unwrap().0,
+            "granite-speech-4.1-2b"
+        );
+        assert_eq!(
+            choose_teacher("auto", None, true).unwrap(),
+            ("qwen3-asr-1.7b".into(), "cpu")
+        );
+        assert!(choose_teacher("auto", Some(0.1), false).is_err());
     }
 }

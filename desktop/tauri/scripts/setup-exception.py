@@ -8,7 +8,7 @@ if not source.exists():source=candidate/'resources'
 base=args.data_parent or (pathlib.Path(os.environ['APPDATA']) if os.name=='nt' else pathlib.Path.home()/('Library/Application Support' if __import__('sys').platform=='darwin' else '.local/share'))
 root=base/'speechify-tauri-candidate';root.mkdir(parents=True,exist_ok=True)
 env=root/'environments'/args.family
-uv_env={**os.environ,'UV_CACHE_DIR':str(root/'cache/uv')}
+uv_env={**os.environ,'UV_CACHE_DIR':str(root/'cache/uv'),'UV_PYTHON_INSTALL_DIR':str(root/'environments/python')}
 subprocess.run(['uv','venv','--python','3.12',str(env)],env=uv_env,check=True)
 python=env/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
 subprocess.run(['uv','pip','sync','--python',str(python),'--require-hashes',str(source/'requirements'/f'{args.family}.lock')],env=uv_env,check=True)

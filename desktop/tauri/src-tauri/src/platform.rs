@@ -5,9 +5,6 @@ use std::{
     io::Write,
     process::{Command, Stdio},
 };
-pub fn clipboard_restore_allowed(current: &str, inserted: &str) -> bool {
-    current == inserted
-}
 #[cfg(target_os = "linux")]
 mod os {
     use super::*;
@@ -167,6 +164,7 @@ mod os {
         }
         v
     }
+    #[allow(dead_code)]
     pub fn read_clipboard() -> Result<String> {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
             let o = Command::new("wl-paste")
@@ -232,6 +230,7 @@ mod os {
 #[cfg(target_os = "macos")]
 mod os {
     use super::*;
+    pub use crate::mac_clipboard::snapshot_and_write;
     use std::ffi::c_void;
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
@@ -392,6 +391,7 @@ mod os {
         ];
         letters.into_iter().map(|(s, k)| (s.into(), k)).collect()
     }
+    #[allow(dead_code)]
     pub fn read_clipboard() -> Result<String> {
         let o = Command::new("/usr/bin/pbpaste")
             .output()
@@ -441,12 +441,31 @@ mod os {
     extern "system" {
         fn GetAsyncKeyState(key: i32) -> i16;
         fn GetForegroundWindow() -> *mut c_void;
+        fn GetWindowThreadProcessId(hwnd: *mut c_void, pid: *mut u32) -> u32;
+        fn GetGUIThreadInfo(thread: u32, info: *mut GuiInfo) -> i32;
         fn OpenClipboard(owner: *mut c_void) -> i32;
+        fn CreateWindowExW(
+            ex: u32,
+            class: *const u16,
+            name: *const u16,
+            style: u32,
+            x: i32,
+            y: i32,
+            width: i32,
+            height: i32,
+            parent: *mut c_void,
+            menu: *mut c_void,
+            instance: *mut c_void,
+            param: *mut c_void,
+        ) -> *mut c_void;
+        fn DestroyWindow(window: *mut c_void) -> i32;
         fn CloseClipboard() -> i32;
         fn GetClipboardData(format: u32) -> *mut c_void;
         fn EmptyClipboard() -> i32;
         fn SetClipboardData(format: u32, data: *mut c_void) -> *mut c_void;
         fn keybd_event(key: u8, scan: u8, flags: u32, extra: usize);
+        fn EnumClipboardFormats(format: u32) -> u32;
+        fn GetClipboardSequenceNumber() -> u32;
     }
     #[link(name = "kernel32")]
     extern "system" {
@@ -455,6 +474,18 @@ mod os {
         fn GlobalAlloc(flags: u32, bytes: usize) -> *mut c_void;
         fn GlobalFree(h: *mut c_void) -> *mut c_void;
         fn GlobalSize(h: *mut c_void) -> usize;
+    }
+    #[repr(C)]
+    struct GuiInfo {
+        size: u32,
+        flags: u32,
+        active: *mut c_void,
+        focus: *mut c_void,
+        capture: *mut c_void,
+        menu: *mut c_void,
+        move_size: *mut c_void,
+        caret: *mut c_void,
+        rect: [i32; 4],
     }
     pub struct Poller;
     impl Poller {
@@ -508,29 +539,66 @@ mod os {
             Ok(out)
         }
         pub fn focus(&self) -> Result<u64> {
-            let hwnd = unsafe { GetForegroundWindow() } as u64;
-            if hwnd == 0 {
-                Err("No focused window".into())
-            } else {
-                Ok(hwnd)
+            unsafe {
+                let window = GetForegroundWindow();
+                if window.is_null() {
+                    return Err("No foreground window".into());
+                }
+                let thread = GetWindowThreadProcessId(window, std::ptr::null_mut());
+                let mut info: GuiInfo = std::mem::zeroed();
+                info.size = std::mem::size_of::<GuiInfo>() as u32;
+                if thread == 0
+                    || GetGUIThreadInfo(thread, &mut info) == 0
+                    || info.focus.is_null()
+                    || info.active != window
+                {
+                    return Err(
+                        "Cannot identify focused Windows control; transcript saved without paste"
+                            .into(),
+                    );
+                }
+                Ok(info.focus as u64)
             }
         }
     }
-    struct Clip;
+    struct Clip(*mut c_void);
     impl Drop for Clip {
         fn drop(&mut self) {
             unsafe {
                 CloseClipboard();
+                DestroyWindow(self.0);
             }
         }
     }
     fn open() -> Result<Clip> {
-        if unsafe { OpenClipboard(std::ptr::null_mut()) } == 0 {
-            Err("Clipboard is busy; retry".into())
-        } else {
-            Ok(Clip)
+        unsafe {
+            let class: Vec<u16> = "STATIC".encode_utf16().chain(Some(0)).collect();
+            let window = CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                -3isize as _,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            if window.is_null() {
+                return Err("Cannot create clipboard owner window".into());
+            }
+            if OpenClipboard(window) == 0 {
+                DestroyWindow(window);
+                Err("Clipboard is busy; retry".into())
+            } else {
+                Ok(Clip(window))
+            }
         }
     }
+    #[allow(dead_code)]
     pub fn read_clipboard() -> Result<String> {
         let _guard = open()?;
         unsafe {
@@ -574,6 +642,102 @@ mod os {
         }
         Ok(())
     }
+    pub fn snapshot_and_write(text: &str) -> Result<impl FnOnce() -> Result<()> + Send> {
+        let mut formats = Vec::new();
+        let generation;
+        {
+            let _guard = open()?;
+            unsafe {
+                let mut format = EnumClipboardFormats(0);
+                let mut total = 0;
+                while format != 0 {
+                    // Bitmap, palette and metafile handles cannot be cloned as HGLOBAL.
+                    if [2, 3, 9, 14, 0x80, 0x81, 0x82, 0x83, 0x8e].contains(&format) {
+                        return Err("Clipboard contains an OS handle format that cannot be preserved; use manual copy".into());
+                    }
+                    let h = GetClipboardData(format);
+                    let size = GlobalSize(h);
+                    total += size;
+                    if size == 0 || total > 32 * 1024 * 1024 {
+                        return Err(
+                            "Clipboard snapshot unavailable or exceeds 32 MB; use manual copy"
+                                .into(),
+                        );
+                    }
+                    let p = GlobalLock(h) as *const u8;
+                    if p.is_null() {
+                        return Err("Cannot snapshot clipboard; use manual copy".into());
+                    }
+                    let bytes = std::slice::from_raw_parts(p, size).to_vec();
+                    GlobalUnlock(h);
+                    formats.push((format, bytes));
+                    format = EnumClipboardFormats(format);
+                }
+                let bytes: Vec<u8> = text
+                    .encode_utf16()
+                    .chain(Some(0))
+                    .flat_map(u16::to_ne_bytes)
+                    .collect();
+                let h = allocate(&bytes)?;
+                if EmptyClipboard() == 0 {
+                    GlobalFree(h);
+                    return Err("Clipboard clear failed".into());
+                }
+                if SetClipboardData(13, h).is_null() {
+                    GlobalFree(h);
+                    return Err("Clipboard set failed".into());
+                }
+                generation = GetClipboardSequenceNumber();
+            }
+        }
+        Ok(move || {
+            let _guard = open()?;
+            unsafe {
+                // Sequence check and restore share the clipboard lock: no check/write race.
+                if GetClipboardSequenceNumber() != generation {
+                    return Ok(());
+                }
+                let mut allocated = Vec::new();
+                for (format, bytes) in formats {
+                    match allocate(&bytes) {
+                        Ok(h) => allocated.push((format, h)),
+                        Err(e) => {
+                            for (_, h) in allocated {
+                                GlobalFree(h);
+                            }
+                            return Err(e);
+                        }
+                    }
+                }
+                if EmptyClipboard() == 0 {
+                    for (_, h) in allocated {
+                        GlobalFree(h);
+                    }
+                    return Err("Clipboard restore busy".into());
+                }
+                for (format, h) in allocated {
+                    if SetClipboardData(format, h).is_null() {
+                        GlobalFree(h);
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+    unsafe fn allocate(bytes: &[u8]) -> Result<*mut c_void> {
+        let h = GlobalAlloc(2, bytes.len());
+        if h.is_null() {
+            return Err("Clipboard allocation failed".into());
+        }
+        let p = GlobalLock(h) as *mut u8;
+        if p.is_null() {
+            GlobalFree(h);
+            return Err("Clipboard lock failed".into());
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
+        GlobalUnlock(h);
+        Ok(h)
+    }
     pub fn paste_keys() -> Result<()> {
         unsafe {
             keybd_event(0x11, 0, 0, 0);
@@ -584,8 +748,8 @@ mod os {
         Ok(())
     }
 }
-pub use os::{read_clipboard, write_clipboard, Poller};
-pub fn paste(target: u64, text: &str) -> Result<()> {
+pub use os::{write_clipboard, Poller};
+pub fn paste(target: u64, text: &str) -> Result<Option<crate::replacement::Receipt>> {
     let p = Poller::new()?;
     if p.focus()? != target {
         return Err("Focus changed; transcript saved without pasting".into());
@@ -593,36 +757,24 @@ pub fn paste(target: u64, text: &str) -> Result<()> {
     if !p.down()?.is_empty() {
         return Err("Keys are still held; transcript saved without pasting".into());
     }
-    let previous = read_clipboard().ok();
-    write_clipboard(text)?;
+    let receipt = crate::replacement::capture(target, text);
+    #[cfg(target_os = "linux")]
+    crate::xclipboard::begin(text)?;
+    #[cfg(not(target_os = "linux"))]
+    let restore = os::snapshot_and_write(text)?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    if p.focus()? != target {
-        if let Some(old) = previous {
-            if clipboard_restore_allowed(&read_clipboard().unwrap_or_default(), text) {
-                let _ = write_clipboard(&old);
-            }
+    let result = (|| {
+        if p.focus()? != target || !p.down()?.is_empty() {
+            Err("Focus or held keys changed before paste; transcript saved".into())
+        } else {
+            os::paste_keys()
         }
-        return Err("Focus changed before paste; transcript saved".into());
-    }
-    os::paste_keys()?;
-    let inserted = text.to_owned();
+    })();
+    #[cfg(not(target_os = "linux"))]
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(400));
-        if let Some(old) = previous {
-            if read_clipboard().is_ok_and(|current| clipboard_restore_allowed(&current, &inserted))
-            {
-                let _ = write_clipboard(&old);
-            }
-        }
+        let _ = restore();
     });
-    Ok(())
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn newer_copy_survives() {
-        assert!(!clipboard_restore_allowed("new copy", "dictation"));
-        assert!(clipboard_restore_allowed("dictation", "dictation"));
-    }
+    result?;
+    Ok(receipt)
 }

@@ -1,0 +1,6 @@
+npm notice run speechify-tauri-candidate@0.1.0 tauri
+npm notice run tauri bundle --ci --bundles deb --no-binary-patching
+        Warn Skipping binary patching for /workspaces/bhatsumedh/workspaces/worktrees/speechify/t3-860be60d/desktop/tauri/src-tauri/target/release/speechify-tauri-candidate due to --no-binary-patching flag.
+    Bundling Speechify Tauri Candidate_0.1.0_amd64.deb (/workspaces/bhatsumedh/workspaces/worktrees/speechify/t3-860be60d/desktop/tauri/src-tauri/target/release/bundle/deb/Speechify Tauri Candidate_0.1.0_amd64.deb)
+    Finished 1 bundle at:
+        /workspaces/bhatsumedh/workspaces/worktrees/speechify/t3-860be60d/desktop/tauri/src-tauri/target/release/bundle/deb/Speechify Tauri Candidate_0.1.0_amd64.deb (28.44 MiB)

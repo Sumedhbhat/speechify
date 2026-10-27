@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 pub struct Store {
     pub db: Connection,
     pub root: PathBuf,
+    latest_audio: std::cell::RefCell<Option<(i64, Vec<f32>)>>,
 }
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -44,6 +45,7 @@ impl Store {
         Ok(Self {
             db,
             root: root.into(),
+            latest_audio: std::cell::RefCell::new(None),
         })
     }
     pub fn record(&self, audio: &[f32], raw: &str, pasted: &str, keep: bool) -> Result<i64> {
@@ -57,7 +59,14 @@ impl Store {
                 params![now(), if keep { Some(name) } else { None }, raw, pasted],
             )
             .map_err(err)?;
-        Ok(self.db.last_insert_rowid())
+        let id = self.db.last_insert_rowid();
+        // One ten-minute clip at 16 kHz, at most 38.4 MB, never persisted until correction.
+        *self.latest_audio.borrow_mut() = if !keep && audio.len() <= 16000 * 600 {
+            Some((id, audio.to_vec()))
+        } else {
+            None
+        };
+        Ok(id)
     }
     pub fn history(&self, search: &str, filter: &str) -> Result<Vec<Value>> {
         self.history_rows(search, filter, 1000)
@@ -79,6 +88,25 @@ impl Store {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .map_err(err)?;
+        let retained = self
+            .latest_audio
+            .borrow()
+            .as_ref()
+            .filter(|(sample, _)| *sample == id)
+            .map(|(_, audio)| audio.clone());
+        if let Some(audio) = retained {
+            let name = format!("corrected-{id}.wav");
+            let path = self.root.join("audio").join(&name);
+            crate::audio::save(&path, &audio)?;
+            if let Err(e) = self
+                .db
+                .execute("UPDATE samples SET audio=? WHERE id=?", params![name, id])
+            {
+                let _ = std::fs::remove_file(path);
+                return Err(err(e));
+            }
+            self.latest_audio.borrow_mut().take();
+        }
         if before == text {
             return Ok(());
         }
@@ -121,6 +149,14 @@ impl Store {
         owned(&self.root.join("audio"), &name)
     }
     pub fn delete(&self, id: i64) -> Result<()> {
+        if self
+            .latest_audio
+            .borrow()
+            .as_ref()
+            .is_some_and(|(sample, _)| *sample == id)
+        {
+            self.latest_audio.borrow_mut().take();
+        }
         if let Ok(p) = self.audio_path(id) {
             if p.exists() {
                 std::fs::remove_file(p).map_err(err)?;
@@ -444,17 +480,49 @@ mod persistence_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn retention_off_keeps_only_latest_until_correction_or_restart() {
+        let root =
+            std::env::temp_dir().join(format!("speechify-retained-audio-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("audio")).unwrap();
+        let mut s = Store::open(&root).unwrap();
+        let old = s.record(&[0.1; 160], "old", "old", false).unwrap();
+        let latest = s.record(&[0.2; 320], "latest", "latest", false).unwrap();
+        assert_eq!(std::fs::read_dir(root.join("audio")).unwrap().count(), 0);
+        s.edit(old, "old corrected").unwrap();
+        assert!(s.audio_path(old).is_err());
+        s.edit(latest, "latest corrected").unwrap();
+        let path = s.audio_path(latest).unwrap();
+        assert_eq!(crate::audio::load(&path).unwrap().len(), 320);
+        assert!(s.latest_audio.borrow().is_none());
+        let lost = s.record(&[0.3; 160], "lost", "lost", false).unwrap();
+        drop(s);
+        let mut s = Store::open(&root).unwrap();
+        s.edit(lost, "lost corrected").unwrap();
+        assert!(s.audio_path(lost).is_err());
+        let deleted = s.record(&[0.1; 160], "delete", "delete", false).unwrap();
+        s.delete(deleted).unwrap();
+        assert!(s.latest_audio.borrow().is_none());
+        drop(s);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn export_includes_labels_older_than_history_limit() {
-        let root = std::env::temp_dir().join(format!("speechify-export-limit-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("speechify-export-limit-{}", std::process::id()));
         std::fs::create_dir_all(root.join("audio")).unwrap();
         let mut s = Store::open(&root).unwrap();
         let id = s.record(&[0.1; 16], "old", "old", true).unwrap();
         s.edit(id, "corrected oldest").unwrap();
-        s.db.execute("UPDATE samples SET ts=0 WHERE id=?", [id]).unwrap();
-        for _ in 0..1001 { s.record(&[], "new", "new", false).unwrap(); }
+        s.db.execute("UPDATE samples SET ts=0 WHERE id=?", [id])
+            .unwrap();
+        for _ in 0..1001 {
+            s.record(&[], "new", "new", false).unwrap();
+        }
         assert_eq!(s.history("", "").unwrap().len(), 1000);
         let out = s.export(0.7).unwrap();
-        assert!(std::fs::read_to_string(out.join("metadata.csv")).unwrap().contains("corrected oldest"));
+        assert!(std::fs::read_to_string(out.join("metadata.csv"))
+            .unwrap()
+            .contains("corrected oldest"));
         drop(s);
         std::fs::remove_dir_all(root).unwrap();
     }
