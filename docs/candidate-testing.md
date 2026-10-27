@@ -153,3 +153,12 @@ Current artifacts (relative to worktree root):
 | `desktop/tauri/artifacts/speechify-tauri-candidate-linux-x86_64.tar.gz` | 29,239,288 | `f242dda83d8e17590ba6db193f911dd258491a9f82aef7a8568d5a7a7d0b1f64` |
 
 Verify current outputs with `sha256sum -c docs/tauri-evidence/followup-SHA256SUMS`. Baseline and lead manifests are retained as historical records. There is no claim of full parity or post-change desktop acceptance: the explicit remaining platform/runtime blockers are in `candidate-parity.md`.
+
+
+## Lead Mac packaging verification — 2026-10-27
+
+Apple Silicon macOS candidate packaging passed on the native macos-15 GitHub runner. Compilation, tests, ad-hoc app signing verification, DMG creation and checksum verification passed. This does not establish microphone, focus, paste, permissions or tray runtime correctness. Mac and Windows runtime testing remains user-deferred. No release was published.
+
+Build evidence: https://github.com/Sumedhbhat/speechify/actions/runs/40442173851
+
+The authoritative comparison, downloads and unresolved acceptance gaps are at https://bhatsumedh.tail429e81.ts.net/pages/speechify-candidate-comparison/ . These personal test DMGs are not Developer-ID notarized. Use Finder and the app-specific Open Anyway control if needed; grant permissions to each distinct candidate.
