@@ -248,7 +248,7 @@ impl Store {
             .map_err(err)?;
         let mut p = String::new();
         for t in terms {
-            if p.len() + t.len() > 450 {
+            if p.len() + t.len() + if p.is_empty() { 0 } else { 2 } > 450 {
                 break;
             }
             if !p.is_empty() {

@@ -2,6 +2,14 @@
 use std::{io::{BufRead,Write}, path::Path};
 fn main() {
     let args: Vec<_> = std::env::args().collect();
+    if args[1].ends_with("finetune.py") {
+        let root = std::path::PathBuf::from(std::env::var_os("SPEECHIFY_TAURI_TRAINING_HOME").unwrap());
+        let report = &args[args.iter().position(|a| a=="--report").unwrap()+1];
+        let result = std::fs::read_to_string(root.join("trainer-result.json")).unwrap();
+        if result=="exit" { std::process::exit(1); }
+        std::fs::write(report,result).unwrap();
+        return;
+    }
     let model = Path::new(&args[2]);
     let mode = std::fs::read_to_string(model.join("scenario")).unwrap_or_default();
     match mode.trim() {
@@ -17,7 +25,7 @@ fn main() {
         let line = line.unwrap(); std::fs::write(model.join("request.json"), &line).unwrap();
         if mode.trim() == "slow" { std::thread::sleep(std::time::Duration::from_secs(60)); }
         if mode.trim() == "crash" { std::process::exit(1); }
-        if mode.trim() == "error" { println!("{{\"error\":\"bad clip\"}}"); }
+        if mode.trim() == "error" || mode.trim()=="gpu-error" && args[3]!="cpu" { println!("{{\"error\":\"bad clip\"}}"); }
         else if mode.trim() == "empty" { println!("{{\"text\":\"\",\"device\":\"cpu\",\"inference_ms\":1}}"); }
         else { println!("{{\"text\":\"get hub\",\"device\":\"cpu\",\"inference_ms\":1}}"); }
         std::io::stdout().flush().unwrap();

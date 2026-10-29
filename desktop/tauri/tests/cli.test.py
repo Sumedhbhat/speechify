@@ -6,6 +6,7 @@ Inherited LLVM_PROFILE_FILE lets cargo-llvm-cov include these real processes.
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,11 @@ class CliBehavior(unittest.TestCase):
         if linker := os.environ.get("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"):
             command += ["-C", f"linker={linker}"]
         subprocess.run(command, check=True, capture_output=True)
+        cls.worker_peer = cls.root / ("peer.exe" if os.name == "nt" else "peer")
+        command = ["rustc", "--edition=2021", str(ROOT / "tests/fixtures/worker.rs"), "-o", str(cls.worker_peer)]
+        if linker := os.environ.get("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"):
+            command += ["-C", f"linker={linker}"]
+        subprocess.run(command, check=True, capture_output=True)
         cls.wav = cls.root / "speech.wav"
         with wave.open(str(cls.wav), "wb") as wav:
             wav.setnchannels(1)
@@ -40,8 +46,13 @@ class CliBehavior(unittest.TestCase):
     def tearDownClass(cls):
         cls.workspace.cleanup()
 
-    def run_cli(self, *args, text=""):
+    def run_cli(self, *args, text="", extra_env=None):
         env = {**os.environ, "SPEECHIFY_CANDIDATE_PARENT": str(self.root / self._testMethodName)}
+        for key, value in (extra_env or {}).items():
+            if value is None:
+                env.pop(key, None)
+            else:
+                env[key] = str(value)
         return subprocess.run([str(BINARY), *map(str, args)], input=text, capture_output=True, text=True, timeout=10, env=env)
 
     def worker(self, model="plain", device="cpu", messages=None):
@@ -67,6 +78,46 @@ class CliBehavior(unittest.TestCase):
                 result = self.run_cli(*args)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(message, result.stderr)
+
+    def test_fixture_transcribes_repeatedly_without_adding_to_history(self):
+        data = self.root / self._testMethodName / "speechify-tauri-candidate"
+        model = data / "models/whisper-ft-cli"
+        model.mkdir(parents=True)
+        (model / "model.bin").write_text("fixture")
+        python = data / ("environments/whisper/Scripts/python.exe" if os.name == "nt" else "environments/whisper/bin/python")
+        python.parent.mkdir(parents=True)
+        shutil.copy2(self.worker_peer, python)
+        for extra, count in [((), 1), (("2", "cpu"), 2), (("invalid",), 1)]:
+            result = self.run_cli("fixture", "ft:whisper-ft-cli", self.wav, *extra)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            rows = list(map(json.loads, result.stdout.splitlines()))
+            self.assertEqual(len(rows), count)
+            self.assertEqual([r["iteration"] for r in rows], list(range(count)))
+            self.assertTrue(all(r["result"]["text"] == "get hub" for r in rows))
+        import sqlite3
+        with sqlite3.connect(data / "learning.db") as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM samples").fetchone()[0], 0)
+        self.assertTrue((data / "config.toml").is_file())
+
+    def test_data_root_override_is_private_and_does_not_touch_legacy_speechify(self):
+        result = self.run_cli("install-model", "unknown")
+        self.assertNotEqual(result.returncode, 0)
+        parent = self.root / self._testMethodName
+        data = parent / "speechify-tauri-candidate"
+        self.assertEqual(sorted(p.name for p in data.iterdir()), ["audio", "exports", "logs", "models"])
+        self.assertFalse((parent / "speechify").exists())
+        if os.name != "nt":
+            self.assertEqual(data.stat().st_mode & 0o777, 0o700)
+        result = self.run_cli("install-model", "unknown", extra_env={"HOME": None, "APPDATA": None, "XDG_DATA_HOME": None})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No user data directory", result.stderr)
+
+    def test_unwritable_data_location_is_reported_as_an_error(self):
+        occupied = self.root / "occupied"
+        occupied.write_text("file")
+        result = self.run_cli("install-model", "unknown", extra_env={"SPEECHIFY_CANDIDATE_PARENT": occupied})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(occupied.read_text(), "file")
 
     def test_worker_keeps_serving_after_a_bad_clip(self):
         result = self.worker(messages=[{}, {"wav": "/does/not/exist.wav"}, {"wav": str(self.wav)}])

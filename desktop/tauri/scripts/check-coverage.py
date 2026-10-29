@@ -1,60 +1,102 @@
 #!/usr/bin/env python3
-"""Fail unless every application source is measured and fully covered.
+"""Require every Rust/TypeScript application source to be fully covered.
 
-Consumes real Vitest and cargo-llvm-cov reports. Test fixtures, declarations,
-and build tooling are outside the application source denominator.
+Accept LCOV reports from each supported OS. A line/function is covered if a
+native run exercises it on any supported OS; platform sources never disappear
+from the denominator just because the current machine cannot compile them.
 """
 import argparse
 import json
 from pathlib import Path
+import subprocess
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
-def check(frontend: Path, backend: Path) -> list[str]:
-    root = Path(__file__).resolve().parents[1]
+def source_path(name: str) -> str:
+    name = name.replace("\\", "/")
+    for prefix in ["src-tauri/src/", "src/"]:
+        if prefix in name:
+            return prefix + name.rsplit(prefix, 1)[1]
+    return name
+
+
+def check(frontend: Path, backends: list[Path]) -> list[str]:
     failures = []
-    js = json.loads(frontend.read_text())
-    measured = {Path(name).resolve(): value for name, value in js.items()}
-    for source in sorted((root / "src").rglob("*.ts")):
+    js = {source_path(name): value for name, value in json.loads(frontend.read_text()).items()}
+    for source in sorted((ROOT / "src").rglob("*.ts")):
         if source.name.endswith(".d.ts"):
             continue
-        report = measured.get(source.resolve())
+        name = source.relative_to(ROOT).as_posix()
+        report = js.get(name)
         if report is None:
-            failures.append(f"{source.relative_to(root)}: not measured")
+            failures.append(f"{name}: not measured")
             continue
-        for name, counts in [("statements", report["s"].values()),
-                             ("functions", report["f"].values()),
-                             ("branches", (n for values in report["b"].values() for n in values))]:
+        for metric, counts in [("statements", report["s"].values()),
+                               ("functions", report["f"].values()),
+                               ("branches", (n for values in report["b"].values() for n in values))]:
             counts = list(counts)
             missing = sum(n == 0 for n in counts)
             if missing:
-                failures.append(f"{source.relative_to(root)}: {missing}/{len(counts)} {name} uncovered")
+                failures.append(f"{name}: {missing}/{len(counts)} {metric} uncovered")
 
-    llvm = json.loads(backend.read_text())
-    files = {Path(f["filename"]).resolve(): f for run in llvm["data"] for f in run["files"]}
-    for source in sorted((root / "src-tauri/src").glob("*.rs")):
-        if source.name.endswith("_tests.rs"):
-            continue
-        report = files.get(source.resolve())
+    files = {}
+    for path in backends:
+        current = None
+        for line in path.read_text().splitlines():
+            if line.startswith("SF:"):
+                current = files.setdefault(source_path(line[3:]), {"lines": {}, "functions": {}})
+            elif line == "end_of_record":
+                current = None
+            elif current is not None and line.startswith("DA:"):
+                number, count, *_ = line[3:].split(",")
+                current["lines"][number] = max(current["lines"].get(number, 0), int(count))
+            elif current is not None and line.startswith("FNDA:"):
+                count, name = line[5:].split(",", 1)
+                current["functions"][name] = max(current["functions"].get(name, 0), int(count))
+    # The same function has different linker symbols in test/CLI binaries and
+    # across target triples. Demangle names before merging their executions.
+    # rustfilt's stdin filter only recognizes legacy symbols; pass names as args
+    # so its demangler also handles the current Rust v0 symbol format.
+    symbols = sorted({name for f in files.values() for name in f["functions"] if name.startswith(("_R", "_ZN"))})
+    canonical = {}
+    for offset in range(0, len(symbols), 40):
+        batch = symbols[offset:offset + 40]
+        result = subprocess.run(["rustfilt", *batch], check=True, capture_output=True, text=True)
+        names = result.stdout.splitlines()
+        if len(names) != len(batch):
+            raise ValueError("rustfilt did not return one name per function")
+        canonical.update(zip(batch, names))
+    for report in files.values():
+        merged = {}
+        for name, count in report["functions"].items():
+            key = canonical.get(name, name)
+            merged[key] = max(merged.get(key, 0), count)
+        report["functions"] = merged
+    for source in sorted((ROOT / "src-tauri/src").glob("*.rs")):
+        name = source.relative_to(ROOT).as_posix()
+        report = files.get(name)
         if report is None:
-            failures.append(f"{source.relative_to(root)}: not measured (run on its supported OS)")
+            failures.append(f"{name}: not measured (run on its supported OS)")
             continue
-        for name in ["lines", "functions", "regions"]:
-            counts = report["summary"][name]
-            if counts["covered"] != counts["count"]:
-                failures.append(f"{source.relative_to(root)}: {counts['count'] - counts['covered']}/{counts['count']} {name} uncovered")
+        for metric, counts in report.items():
+            if not counts:
+                failures.append(f"{name}: no measured {metric}")
+            elif missing := sum(n == 0 for n in counts.values()):
+                failures.append(f"{name}: {missing}/{len(counts)} {metric} uncovered")
     return failures
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--frontend", type=Path, default=Path("coverage/coverage-final.json"))
-    parser.add_argument("--backend", type=Path, default=Path("coverage/rust.json"))
+    parser.add_argument("--backend", type=Path, nargs="+", default=[Path("coverage/rust.info")])
     args = parser.parse_args()
     failures = check(args.frontend, args.backend)
     for failure in failures:
         print(failure)
     if not failures:
-        print("All Tauri application sources have 100% coverage.")
+        print("All Rust/TypeScript application sources have 100% coverage.")
     return int(bool(failures))
 
 

@@ -33,7 +33,7 @@ fn fixtures() -> &'static Fixtures {
         } else {
             "worker"
         });
-        let declarations = include_str!("ffi.rs")
+        let declarations = include_str!("../../src/ffi.rs")
             .split("pub fn verify")
             .next()
             .unwrap();
@@ -41,7 +41,7 @@ fn fixtures() -> &'static Fixtures {
             home.0.join("native.rs"),
             format!(
                 "{declarations}\n{}",
-                include_str!("../../tests/fixtures/native.rs")
+                include_str!("../../../tests/fixtures/native.rs")
             ),
         )
         .unwrap();
@@ -75,7 +75,7 @@ fn fixtures() -> &'static Fixtures {
     })
 }
 
-fn fake_service(home: &Home, scenario: &str) -> std::sync::Arc<Service> {
+pub(crate) fn fake_service(home: &Home, scenario: &str) -> std::sync::Arc<Service> {
     let model = home.0.join("models/whisper-ft-test");
     std::fs::create_dir_all(&model).unwrap();
     std::fs::write(model.join("model.bin"), "fixture model").unwrap();
@@ -92,6 +92,33 @@ fn fake_service(home: &Home, scenario: &str) -> std::sync::Arc<Service> {
     cfg["device"] = json!("cpu");
     config::save(&home.0, &cfg).unwrap();
     home.service()
+}
+
+pub(crate) fn training_environment(home: &Home, report: &str) {
+    let python = home.0.join(if cfg!(windows) {
+        "environments/training/Scripts/python.exe"
+    } else {
+        "environments/training/bin/python"
+    });
+    std::fs::create_dir_all(python.parent().unwrap()).unwrap();
+    std::fs::copy(&fixtures().worker, &python).unwrap();
+    std::fs::write(
+        home.0.join("environments/training/candidate-ready"),
+        "cuda-cu126-v1",
+    )
+    .unwrap();
+    std::fs::write(home.0.join("trainer-result.json"), report).unwrap();
+}
+
+pub(crate) fn wait_until(mut condition: impl FnMut() -> bool) {
+    let start = std::time::Instant::now();
+    while !condition() {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "behavior did not settle before deadline"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -699,4 +726,59 @@ fn worker_protocol_reports_bad_startup_errors_timeouts_and_releases_children() {
         slot.take();
         assert_eq!(service.pid.load(Ordering::SeqCst), 0);
     }
+}
+
+#[test]
+fn failed_retained_audio_save_is_retryable_without_leaking_files_or_learning() {
+    let home = Home::new();
+    let mut store = home.store();
+    let id = store.record(&[0.1; 160], "raw", "original", false).unwrap();
+    store.db.execute_batch("CREATE TRIGGER refuse_audio BEFORE UPDATE OF audio ON samples BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END;").unwrap();
+    assert!(store.edit(id, "corrected").is_err());
+    assert_eq!(std::fs::read_dir(home.0.join("audio")).unwrap().count(), 0);
+    assert!(store.history("", "").unwrap()[0]["corrected"].is_null());
+    assert!(store.learning().unwrap()["rules"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    store.db.execute_batch("DROP TRIGGER refuse_audio").unwrap();
+    store.edit(id, "corrected").unwrap();
+    assert!(store.audio_path(id).unwrap().is_file());
+    assert_eq!(store.history("", "").unwrap()[0]["corrected"], "corrected");
+}
+
+#[test]
+fn most_frequent_correction_wins_when_the_same_phrase_has_multiple_fixes() {
+    let home = Home::new();
+    let mut store = home.store();
+    for correction in ["GitHub", "GitLab", "GitHub"] {
+        let id = store.record(&[], "get hub", "get hub", false).unwrap();
+        store.edit(id, correction).unwrap();
+    }
+    assert_eq!(store.apply("get hub", 1).unwrap(), "GitHub");
+    assert_eq!(store.prompt().unwrap(), "GitHub, GitLab");
+    let other = Home::new();
+    let mut nonempty = other.store();
+    nonempty.record(&[], "keep", "keep", false).unwrap();
+    assert!(nonempty
+        .import(&home.0)
+        .unwrap_err()
+        .contains("empty candidate history"));
+    assert_eq!(nonempty.history("", "").unwrap()[0]["pasted"], "keep");
+}
+
+#[test]
+fn learned_glossary_budget_includes_separators_between_terms() {
+    let home = Home::new();
+    let mut store = home.store();
+    let mut terms = vec![];
+    for index in 0..3 {
+        let term = format!("{index:03}{}", "x".repeat(146));
+        let id = store.record(&[], "misheard", "misheard", false).unwrap();
+        store.edit(id, &term).unwrap();
+        terms.push(term);
+    }
+    assert_eq!(store.prompt().unwrap(), terms[..2].join(", "));
+    // The third term would make the native glossary exceed its 450-byte budget.
+    assert!(store.prompt().unwrap().len() <= 450);
 }

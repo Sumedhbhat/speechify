@@ -9,6 +9,9 @@ use std::{
         Arc,
     },
 };
+#[cfg(test)]
+#[path = "../tests/unit/models.rs"]
+mod behavior;
 pub fn catalog() -> Vec<Value> {
     serde_json::from_str(include_str!("../resources/catalog.json")).unwrap()
 }
@@ -69,27 +72,46 @@ pub fn install(
         return Err("This model requires the optional isolated Python environment; see candidate-testing.md".into());
     }
     let dst = path(root, id)?;
-    let tmp = dst.with_extension("partial");
+    let url = format!(
+        "https://huggingface.co/{}/resolve/{}/{}",
+        g["repo"].as_str().unwrap(),
+        g["revision"].as_str().unwrap(),
+        g["file"].as_str().unwrap()
+    );
     let total = g["size"].as_u64().unwrap();
+    install_artifact(
+        &dst,
+        &url,
+        total,
+        g["sha256"].as_str().unwrap(),
+        &cancel,
+        |stage, bytes| {
+            progress(json!({"id":id,"stage":stage,"bytes":bytes,"total":total}));
+        },
+    )
+}
+fn install_artifact(
+    dst: &Path,
+    url: &str,
+    total: u64,
+    sha256: &str,
+    cancel: &AtomicBool,
+    progress: impl Fn(&str, u64),
+) -> Result<()> {
+    let tmp = dst.with_extension("partial");
     let result = (|| {
-        let url = format!(
-            "https://huggingface.co/{}/resolve/{}/{}",
-            g["repo"].as_str().unwrap(),
-            g["revision"].as_str().unwrap(),
-            g["file"].as_str().unwrap()
-        );
-        download(&url, total, &tmp, &cancel, |bytes| {
-            progress(json!({"id":id,"stage":"Downloading","bytes":bytes,"total":total}));
+        download(url, total, &tmp, cancel, |bytes| {
+            progress("Downloading", bytes);
         })?;
-        progress(json!({"id":id,"stage":"Verifying SHA-256","bytes":total,"total":total}));
-        if let Err(error) = verify(&tmp, g["sha256"].as_str().unwrap(), &cancel) {
+        progress("Verifying SHA-256", total);
+        if let Err(error) = verify(&tmp, sha256, cancel) {
             let _ = std::fs::remove_file(&tmp);
             return Err(error);
         }
         if cancel.load(Ordering::Relaxed) {
             return Err("Cancelled".into());
         }
-        std::fs::rename(&tmp, &dst).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, dst).map_err(|e| e.to_string())?;
         Ok(())
     })();
     // Network/disk failures retain the resumable prefix; cancellation removes it.

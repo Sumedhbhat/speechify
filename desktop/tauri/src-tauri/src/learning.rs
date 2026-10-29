@@ -10,6 +10,9 @@ use std::{
     sync::{atomic::Ordering, Arc},
     time::{Duration, Instant},
 };
+#[cfg(test)]
+#[path = "../tests/unit/learning.rs"]
+mod behavior;
 pub fn mains() -> bool {
     #[cfg(target_os = "linux")]
     {
@@ -226,6 +229,9 @@ pub fn judge(text: &str, seconds: f64) -> (f64, Option<String>) {
     (confidence, None)
 }
 pub fn start_training(s: Arc<Service>) -> Result<()> {
+    start_training_on_power(s, mains())
+}
+fn start_training_on_power(s: Arc<Service>, on_mains: bool) -> Result<()> {
     if s.downloading.load(Ordering::SeqCst) || s.recording.load(Ordering::SeqCst) {
         return Err("Finish installation and recording before training".into());
     }
@@ -252,7 +258,7 @@ pub fn start_training(s: Arc<Service>) -> Result<()> {
         s.learning_busy.store(false, Ordering::SeqCst);
         return Err("Install the optional training environment first. Training needs NVIDIA CUDA and at least 10 GB VRAM.".into());
     }
-    if !mains() {
+    if !on_mains {
         s.learning_busy.store(false, Ordering::SeqCst);
         return Err("Training pauses on battery; connect mains power".into());
     }

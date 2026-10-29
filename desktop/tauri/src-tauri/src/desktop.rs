@@ -14,7 +14,7 @@ use std::{
 };
 use tauri::{Emitter, Manager};
 #[cfg(test)]
-#[path = "desktop_tests.rs"]
+#[path = "../tests/unit/desktop.rs"]
 mod behavior;
 #[tauri::command]
 async fn request(
