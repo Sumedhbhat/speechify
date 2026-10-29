@@ -113,7 +113,7 @@ class App:
             return spec.name if spec else self._loading or self.cfg.model
 
         self.ui.open_settings(self.cfg, self.apply_settings, self._open_models, model_name, welcome,
-                              check_update=self.check_for_update)
+                              check_update=lambda: self.check_for_update(always_ask=True))
 
     def apply_settings(self, changed: dict) -> None:
         """Put saved settings into effect without a restart (on the UI thread)."""
@@ -225,18 +225,22 @@ class App:
             time.sleep(30)  # out of the way while the model loads
             while True:
                 if self.cfg.check_updates:
-                    self._check_update(asked=False)
+                    try:
+                        self._check_update(asked=False)
+                    except Exception:  # keep checking tomorrow
+                        traceback.print_exc()
                 time.sleep(24 * 3600)
 
         threading.Thread(target=run, daemon=True, name="updates").start()
 
-    def check_for_update(self) -> None:
+    def check_for_update(self, always_ask: bool = False) -> None:
         """The tray item and the settings button: check, and update if there's
-        a newer version. Clicking "Update to X" updates without asking again."""
+        a newer version. Clicking "Update to X" in the tray updates without
+        asking again; the settings button (`always_ask`) always asks."""
         if not self._updating:
-            threading.Thread(target=self._check_update, daemon=True).start()
+            threading.Thread(target=lambda: self._check_update(always_ask=always_ask), daemon=True).start()
 
-    def _check_update(self, asked: bool = True) -> None:
+    def _check_update(self, asked: bool = True, always_ask: bool = False) -> None:
         offered = self._update
         try:
             release = update.check()
@@ -257,13 +261,15 @@ class App:
                 self.ui.post(lambda: self.ui.show(
                     "info", f"Speechify {release.version} is available: update from the tray menu", 5000))
             return
-        confirmed = offered is not None and offered.version == release.version
+        confirmed = not always_ask and offered is not None and offered.version == release.version
         self.ui.post(lambda: self._offer_update(release, confirmed))
 
     def _offer_update(self, release: update.Release, confirmed: bool) -> None:
         """On the UI thread."""
         from tkinter import messagebox
 
+        if self._updating:  # a second click while the first is installing
+            return
         kind = update.install_kind()
         if kind is None:
             messagebox.showinfo("Speechify", f"Speechify {release.version} is available.\n\n"
@@ -275,6 +281,8 @@ class App:
             "Update now? Speechify restarts when it's done. Your recordings, corrections "
             "and settings are kept.",
         ):
+            return
+        if self._updating:  # another click got here while this dialog was open
             return
         self._updating = True
         self.tray.refresh()

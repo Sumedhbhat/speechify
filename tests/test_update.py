@@ -180,3 +180,67 @@ def test_app_installs_or_explains(monkeypatch, tmp_path, fails):
         assert "checksum mismatch" in errors[0]
     else:
         assert installed == [("setup.exe", "windows")] and app.quit_called and not errors
+
+
+def test_stable_builds_ask_for_the_latest_release(monkeypatch):
+    import json
+    import urllib.error
+
+    asked = []
+
+    def fake(url, timeout=30):
+        asked.append(url)
+        if url == update.LATEST:
+            return FakeResponse(json.dumps(release("v0.3.0")).encode())
+        return FakeResponse(json.dumps([release("v0.3.0-nightly.2")]).encode())
+
+    monkeypatch.setattr(update, "_open", fake)
+    assert update.check("0.2.0").version == "0.3.0"
+    assert update.check("0.3.0-nightly.1").version == "0.3.0-nightly.2"
+    assert asked == [update.LATEST, update.RELEASES]
+
+    def none_yet(url, timeout=30):
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(update, "_open", none_yet)
+    assert update.check("0.2.0") is None
+
+
+def test_truncated_reply_is_an_update_error(monkeypatch):
+    import http.client
+
+    def truncated(url, timeout=30):
+        raise http.client.IncompleteRead(b"[{")
+
+    monkeypatch.setattr(update, "_open", truncated)
+    with pytest.raises(update.UpdateError):
+        update.check("0.1.0-nightly.1")
+
+
+def test_only_one_update_installs_at_a_time(monkeypatch):
+    import threading
+    import tkinter.messagebox
+
+    from speechify.app import App
+
+    monkeypatch.setattr(update, "install_kind", lambda: "appimage")
+    started = []
+    monkeypatch.setattr(threading, "Thread", lambda target, daemon: types.SimpleNamespace(
+        start=lambda: started.append(target)))
+    app = Shell()
+    app._updating = False
+    r = update.Release("0.2.0", "https://example.invalid", {})
+    App._offer_update(app, r, confirmed=True)
+    App._offer_update(app, r, confirmed=True)
+    assert len(started) == 1
+
+    # Another click finishing while the dialog was open.
+    app._updating = False
+
+    def answer(*args):
+        app._updating = True
+        return True
+
+    monkeypatch.setattr(tkinter.messagebox, "askyesno", answer)
+    App._offer_update(app, r, confirmed=False)
+    assert len(started) == 1

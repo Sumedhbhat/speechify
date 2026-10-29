@@ -25,7 +25,7 @@ system and run it.
 Speechify checks GitHub once a day (switch that off with "Check for updates
 automatically" in Settings, or `check_updates = false` in config.toml). When a
 newer release is out, the tray menu's **Check for updates…** becomes **Update
-to <version>…**; click it and Speechify downloads that release's installer,
+to X…**, X being the new version; click it and Speechify downloads that release's installer,
 checks it against `SHA256SUMS`, installs it and starts again. Nothing is
 installed until you click. It stays on the channel you installed: a nightly
 build is offered newer nightlies and stable releases, a stable build only

@@ -19,6 +19,7 @@ Your data folder is never touched, the same as installing by hand.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import platform
@@ -28,6 +29,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +39,9 @@ from . import __version__
 
 REPO = "Sumedhbhat/speechify"
 RELEASES = f"https://api.github.com/repos/{REPO}/releases?per_page=30"
+# Stable builds ask for this instead: 30 nightlies in a row would push every
+# stable release off the first page of RELEASES.
+LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
 _VERSION = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-(nightly|dev)\.(\d+))?$")
 
 
@@ -112,12 +117,17 @@ def _open(url: str, timeout: float = 30):
 def check(current: str = __version__) -> Release | None:
     """The release to update to, or None if this is the newest. Raises
     UpdateError if GitHub can't be reached."""
+    stable = is_stable(current)
     try:
-        with _open(RELEASES, timeout=15) as resp:
+        with _open(LATEST if stable else RELEASES, timeout=15) as resp:
             releases = json.load(resp)
-    except (OSError, ValueError) as exc:
+    except urllib.error.HTTPError as exc:
+        if stable and exc.code == 404:  # no stable release yet
+            return None
         raise UpdateError(f"Couldn't reach GitHub to check for updates: {exc}") from exc
-    return newest(releases, current)
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        raise UpdateError(f"Couldn't reach GitHub to check for updates: {exc}") from exc
+    return newest([releases] if isinstance(releases, dict) else releases, current)
 
 
 # --- what kind of install this is ---------------------------------------------
@@ -205,7 +215,7 @@ def download(release: Release, kind: str, folder: Path,
                 done += len(chunk)
                 if total:
                     progress(done / total)
-    except OSError as exc:
+    except (OSError, http.client.HTTPException) as exc:
         raise UpdateError(f"The download failed: {exc}") from exc
     if digest.hexdigest() != expected:
         target.unlink(missing_ok=True)
