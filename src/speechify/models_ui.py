@@ -49,6 +49,19 @@ class ModelsWindow:
         self.current = ttk.Label(top, foreground="#1a7f37")
         self.current.pack(side="right")
 
+        filters = ttk.Frame(win, padding=(10, 8, 10, 0))
+        filters.pack(fill="x")
+        ttk.Label(filters, text="Languages:").pack(side="left", padx=(0, 6))
+        self.language_filter = tk.StringVar(value="All languages")
+        languages = ttk.Combobox(
+            filters, textvariable=self.language_filter, state="readonly", width=20,
+            values=("All languages", "English only", "Multilingual", "Other languages"),
+        )
+        languages.pack(side="left")
+        languages.bind("<<ComboboxSelected>>", lambda e: self.refresh())
+        self.filter_status = ttk.Label(filters)
+        self.filter_status.pack(side="left", padx=10)
+
         cols = [("name", "Model", 230), ("acc", "Accuracy", 80), ("speed", "Speed", 70),
                 ("langs", "Languages", 170), ("vram", "VRAM", 60), ("size", "Download", 75),
                 ("learn", "Learns", 110), ("status", "Status", 110)]
@@ -86,7 +99,11 @@ class ModelsWindow:
         self.tree.delete(*self.tree.get_children())
         self.specs.clear()
         active, in_use = self.active() or (None, None)
+        language_group = {"English only": "english", "Multilingual": "multilingual",
+                          "Other languages": "other"}.get(self.language_filter.get())
         for spec in all_models(data_dir()):
+            if language_group and spec.language_group != language_group:
+                continue
             state = host.status(spec, self.device)
             size = placed(spec, self.device).download_gb
             if self.only_ready.get() and state != "ready":
@@ -103,6 +120,9 @@ class ModelsWindow:
             ))
         if selected and selected[0] in self.specs:
             self.tree.selection_set(selected[0])
+        self.notes.configure(text="")
+        self._describe()
+        self.filter_status.configure(text="" if self.specs else "No models match these filters.")
         name = self.specs[active].name if active in self.specs else active
         self.current.configure(text=f"In use: {name}, on {in_use}" if active else "No model loaded")
 
