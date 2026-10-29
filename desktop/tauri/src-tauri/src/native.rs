@@ -6,6 +6,37 @@ use std::{
     ptr,
 };
 macro_rules! call {($lib:expr,$name:literal,$ty:ty,$($arg:expr),*)=>{{let f:libloading::Symbol<$ty>=$lib.get(concat!($name,"\0").as_bytes()).map_err(|e|e.to_string())?;f($($arg),*)}};}
+pub(crate) unsafe fn load_runtime(dir: &Path) -> Result<Library> {
+    let filename = if cfg!(target_os = "windows") {
+        "transcribe.dll"
+    } else if cfg!(target_os = "macos") {
+        "libtranscribe.dylib"
+    } else {
+        "libtranscribe.so"
+    };
+    let path = dir.join(filename);
+    #[cfg(windows)]
+    let lib = {
+        use libloading::os::windows::{
+            Library as WindowsLibrary, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+        };
+        let path = path
+            .canonicalize()
+            .map_err(|e| format!("Native library: {e}"))?;
+        // ggml.dll and ggml-base.dll are siblings of the pinned runtime DLL.
+        WindowsLibrary::load_with_flags(
+            path,
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+        )
+        .map(Library::from)
+        .map_err(|e| format!("Native library: {e}"))?
+    };
+    #[cfg(not(windows))]
+    let lib = Library::new(path).map_err(|e| format!("Native library: {e}"))?;
+    verify(&lib)?;
+    Ok(lib)
+}
 pub struct Native {
     lib: Library,
     model: *mut c_void,
@@ -17,16 +48,7 @@ pub struct Native {
 impl Native {
     pub fn open(dir: &Path, path: &Path, device: &str, threads: i32) -> Result<Self> {
         unsafe {
-            let filename = if cfg!(target_os = "windows") {
-                "transcribe.dll"
-            } else if cfg!(target_os = "macos") {
-                "libtranscribe.dylib"
-            } else {
-                "libtranscribe.so"
-            };
-            let lib =
-                Library::new(dir.join(filename)).map_err(|e| format!("Native library: {e}"))?;
-            verify(&lib)?;
+            let lib = load_runtime(dir)?;
             let mut init: transcribe_backend_init_params = std::mem::zeroed();
             call!(
                 lib,

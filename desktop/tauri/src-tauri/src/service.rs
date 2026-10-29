@@ -14,6 +14,9 @@ use std::{
     },
     time::Instant,
 };
+#[cfg(test)]
+#[path = "../tests/unit/service.rs"]
+mod behavior;
 pub struct Service {
     _lock: std::fs::File,
     pub root: PathBuf,
@@ -231,10 +234,10 @@ impl Service {
                 timeout,
             );
         }
-        let mut result = result?;
         if self.generation.load(Ordering::SeqCst) != generation {
             return Err("Cancelled".into());
         }
+        let mut result = result?;
         let raw = result["text"].as_str().unwrap_or("").to_owned();
         let mut text = self
             .store

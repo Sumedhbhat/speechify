@@ -88,3 +88,32 @@ fn exceeding_ten_minutes_reports_an_error_and_never_returns_a_truncated_success(
     audio.clear();
     assert_eq!(audio.level(), 0.);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Requires the synthetic ALSA configuration supplied by test-coverage.sh"]
+fn selected_and_default_microphones_open_capture_and_close_through_the_real_driver() {
+    assert_eq!(
+        std::env::var("SPEECHIFY_TEST_SYNTHETIC_ALSA").as_deref(),
+        Ok("1")
+    );
+    let devices = super::capture::devices().unwrap();
+    let selected = devices
+        .iter()
+        .find(|name| name.as_str() == "Speechify test input")
+        .expect("synthetic ALSA microphone was not enumerated");
+    for name in ["", selected.as_str(), "A disconnected microphone"] {
+        let capture = super::capture::Capture::open(name).unwrap();
+        assert!(!capture.actual_device.is_empty());
+        let mut clip = Vec::new();
+        crate::behavior_tests::wait_until(|| {
+            clip = capture.audio.take().unwrap();
+            !clip.is_empty()
+        });
+        assert!(clip.iter().all(|sample| sample.is_finite()));
+        assert!(capture.audio.level().is_finite());
+        capture.audio.preroll();
+        capture.audio.clear();
+        drop(capture);
+    }
+}

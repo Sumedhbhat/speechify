@@ -1,6 +1,14 @@
 //! Native clipboard tests run on disposable macOS/Windows CI desktops.
 use super::*;
 static CLIPBOARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(windows)]
+fn sequence() -> u32 {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetClipboardSequenceNumber() -> u32;
+    }
+    unsafe { GetClipboardSequenceNumber() }
+}
 
 #[cfg(target_os = "macos")]
 fn read() -> String {
@@ -49,10 +57,14 @@ fn read() -> String {
 #[test]
 #[ignore = "Mutates the OS clipboard; run on a disposable desktop with --include-ignored"]
 fn native_clipboard_preserves_unicode_restores_previous_copy_and_protects_newer_copies() {
-    let _clipboard = CLIPBOARD.lock().unwrap();
+    let _clipboard = CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner());
     write_clipboard("Earlier clipboard café 🦀\nsecond line").unwrap();
     let restore = os::snapshot_and_write("A new dictation").unwrap();
+    #[cfg(windows)]
+    eprintln!("after snapshot sequence={}", sequence());
     assert_eq!(read(), "A new dictation");
+    #[cfg(windows)]
+    eprintln!("after read sequence={}", sequence());
     restore().unwrap();
     assert_eq!(read(), "Earlier clipboard café 🦀\nsecond line");
     let restore = os::snapshot_and_write("Identical text").unwrap();
@@ -73,8 +85,8 @@ fn native_clipboard_preserves_unicode_restores_previous_copy_and_protects_newer_
 #[test]
 #[ignore = "Mutates the OS clipboard; run on a disposable desktop with --include-ignored"]
 fn macos_rich_clipboard_data_survives_a_transient_dictation() {
-    let _clipboard = CLIPBOARD.lock().unwrap();
-    let original = "{\\rtf1\\ansi A bold {\\b word}}";
+    let _clipboard = CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner());
+    let original = r"{\rtf1\ansi A bold {\b word}}";
     let mut writer = Command::new("/usr/bin/pbcopy")
         .stdin(Stdio::piped())
         .spawn()
@@ -91,7 +103,7 @@ fn macos_rich_clipboard_data_survives_a_transient_dictation() {
         .output()
         .unwrap();
     assert!(before.status.success());
-    assert!(String::from_utf8_lossy(&before.stdout).contains("\\rtf"));
+    assert!(String::from_utf8_lossy(&before.stdout).contains(r"\rtf"));
     let restore = os::snapshot_and_write("Dictation").unwrap();
     assert_eq!(read(), "Dictation");
     restore().unwrap();
@@ -108,7 +120,7 @@ fn macos_rich_clipboard_data_survives_a_transient_dictation() {
 #[ignore = "Mutates the OS clipboard; run on a disposable desktop with --include-ignored"]
 fn windows_bitmap_clipboard_is_refused_without_losing_the_owned_image() {
     use std::ffi::c_void;
-    let _clipboard = CLIPBOARD.lock().unwrap();
+    let _clipboard = CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner());
     #[link(name = "user32")]
     extern "system" {
         fn CreateWindowExW(

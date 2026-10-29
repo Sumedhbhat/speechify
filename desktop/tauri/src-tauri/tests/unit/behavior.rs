@@ -605,20 +605,10 @@ fn incompatible_native_abi_is_rejected_before_loading_a_model() {
 
 #[test]
 fn pinned_native_runtime_matches_the_generated_abi_contract() {
-    let filename = if cfg!(windows) {
-        "transcribe.dll"
-    } else if cfg!(target_os = "macos") {
-        "libtranscribe.dylib"
-    } else {
-        "libtranscribe.so"
-    };
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("resources/native")
-        .join(filename);
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/native");
     unsafe {
-        let library = libloading::Library::new(&path)
+        let _library = crate::native::load_runtime(&path)
             .expect("prepare the pinned native runtime with scripts/prepare-native.py");
-        crate::ffi::verify(&library).unwrap();
     }
 }
 

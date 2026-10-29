@@ -24,6 +24,7 @@ fn host(response: &str) -> (String, std::thread::JoinHandle<String>) {
             );
             std::thread::sleep(Duration::from_millis(2));
         };
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();

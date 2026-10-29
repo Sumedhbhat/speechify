@@ -285,9 +285,7 @@ class CliBehavior(unittest.TestCase):
         env.update(DBUS_SESSION_BUS_ADDRESS=bus[0], LIBGL_ALWAYS_SOFTWARE="1", WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS="1")
         # Restrict capture to a synthetic ALSA device, including if the test host
         # has a real microphone attached.
-        alsa = self.root / "test-alsa.conf"
-        alsa.write_text('pcm.!default { type null }\n')
-        env["ALSA_CONFIG_PATH"] = str(alsa)
+        env["ALSA_CONFIG_PATH"] = str(ROOT / "tests/fixtures/alsa.conf")
         (ROOT / "coverage").mkdir(exist_ok=True)
         log = open(ROOT / "coverage/desktop-startup.log", "w+")
         self.addCleanup(log.close)

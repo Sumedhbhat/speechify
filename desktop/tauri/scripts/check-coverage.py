@@ -47,7 +47,7 @@ def function_definition(name: str) -> str:
     return name
 
 
-def check(frontend: Path, backends: list[Path]) -> list[str]:
+def check(frontend: Path, backends: list[Path], details: bool = False) -> list[str]:
     failures = []
     js = {source_path(name): value for name, value in json.loads(frontend.read_text(encoding="utf-8")).items()}
     for source in sorted((ROOT / "src").rglob("*.ts")):
@@ -110,6 +110,8 @@ def check(frontend: Path, backends: list[Path]) -> list[str]:
                 failures.append(f"{name}: no measured {metric}")
             elif missing := sum(n == 0 for n in counts.values()):
                 failures.append(f"{name}: {missing}/{len(counts)} {metric} uncovered")
+                if details:
+                    failures.extend(f"  {metric}: {key}" for key, count in counts.items() if count == 0)
     return failures
 
 
@@ -117,6 +119,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--frontend", type=Path, default=Path("coverage/coverage-final.json"))
     parser.add_argument("--backend", type=Path, nargs="+", default=[Path("coverage/rust.info")])
+    parser.add_argument("--details", action="store_true", help="List uncovered Rust lines and source functions")
     parser.add_argument("--snapshot", type=Path, help="Write fingerprints of the sources and locked dependencies")
     parser.add_argument("--compare-source", type=Path, help="Require this prior snapshot to match before writing a report snapshot")
     args = parser.parse_args()
@@ -134,7 +137,7 @@ def main() -> int:
         if not source.is_file() or json.loads(source.read_text(encoding="utf-8")) != fingerprints:
             print(f"{source}: missing or stale source snapshot; rerun coverage on the current source.")
             return 1
-    failures = check(args.frontend, args.backend)
+    failures = check(args.frontend, args.backend, args.details)
     for failure in failures:
         print(failure)
     if not failures:

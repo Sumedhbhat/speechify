@@ -650,12 +650,19 @@ mod os {
                     return Err("Clipboard set failed".into());
                 }
                 generation = GetClipboardSequenceNumber();
+                #[cfg(test)]
+                eprintln!("clipboard sequence while open={generation}");
             }
         }
         Ok(move || {
             let _guard = open()?;
             unsafe {
                 // Sequence check and restore share the clipboard lock: no check/write race.
+                #[cfg(test)]
+                eprintln!(
+                    "clipboard restore expected={generation} actual={}",
+                    GetClipboardSequenceNumber()
+                );
                 if GetClipboardSequenceNumber() != generation {
                     return Ok(());
                 }
