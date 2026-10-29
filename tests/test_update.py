@@ -295,13 +295,40 @@ def test_without_restart_nothing_is_started(monkeypatch, tmp_path):
 def test_deb_as_root_skips_pkexec(monkeypatch, tmp_path):
     deb = tmp_path / "speechify_0.2.0_amd64.deb"
     deb.write_text("")
+    monkeypatch.setitem(update._verified, deb, "ab" * 32)
     ran = []
     monkeypatch.setattr(update.os, "geteuid", lambda: 0)
-    monkeypatch.setattr(update.shutil, "which", lambda name: f"/usr/bin/{name}" if name == "apt-get" else None)
     monkeypatch.setattr(update.subprocess, "run", lambda cmd, **kw: ran.append(cmd) or types.SimpleNamespace(
         returncode=0, stdout="", stderr=""))
     update.install(deb, "deb", restart=False)
-    assert ran == [["apt-get", "install", "-y", "--allow-downgrades", str(deb)]]
+    assert ran == [["/bin/sh", "-c", update._DEB_SCRIPT, "sh", str(deb), "ab" * 32]]
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="sha256sum")
+@pytest.mark.parametrize("swapped", [False, True])
+def test_deb_is_checked_again_before_apt_sees_it(tmp_path, swapped):
+    """What root runs: the copy apt gets is the one that matched."""
+    import subprocess
+
+    deb = tmp_path / "speechify.deb"
+    deb.write_bytes(b"evil" if swapped else b"deb")
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    (bin_ / "apt-get").write_text(f"#!/bin/sh\ncat \"$4\" > '{tmp_path}/installed'\n")
+    (bin_ / "apt-get").chmod(0o755)
+    env = {"PATH": f"{bin_}:/usr/bin:/bin"}
+    done = subprocess.run(["/bin/sh", "-c", update._DEB_SCRIPT, "sh", str(deb), hashlib.sha256(b"deb").hexdigest()],
+                          env=env)
+    if swapped:
+        assert done.returncode == 3 and not (tmp_path / "installed").exists()
+    else:
+        assert done.returncode == 0 and (tmp_path / "installed").read_bytes() == b"deb"
+
+
+def test_deb_not_from_download_is_refused(monkeypatch, tmp_path):
+    monkeypatch.setattr(update.os, "geteuid", lambda: 0, raising=False)
+    with pytest.raises(update.UpdateError, match="wasn't downloaded"):
+        update.install(tmp_path / "other.deb", "deb")
 
 
 def test_fake_release_matches_a_real_one(tmp_path, monkeypatch):

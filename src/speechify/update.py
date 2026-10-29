@@ -53,6 +53,11 @@ class UpdateError(RuntimeError):
     pass
 
 
+# The SHA-256 of each file download() checked, so a .deb can be checked again
+# where only root can change it (_install_deb).
+_verified: dict[Path, str] = {}
+
+
 def version_key(version: str) -> tuple[int, ...] | None:
     """Sorts versions: 0.1.0-nightly.9 < 0.1.0-nightly.10 < 0.1.0 < 0.2.0-nightly.1.
     None for a version that isn't ours (e.g. a source checkout's +unknown)."""
@@ -231,6 +236,7 @@ def download(release: Release, kind: str, folder: Path,
     if digest.hexdigest() != expected:
         target.unlink(missing_ok=True)
         raise UpdateError(f"{name} doesn't match its checksum, so it wasn't installed. Try again later.")
+    _verified[target] = expected
     return target
 
 
@@ -347,21 +353,40 @@ def _install_appimage(new: Path, restart: bool) -> None:
         _after_exit("", [str(current)])
 
 
+# Run as root with the downloaded .deb as $1 and its SHA-256 as $2. The
+# download is in a folder you own, so another program running as you could
+# swap it while the password prompt is open; root copies it somewhere only
+# root can write, checks that copy and installs it. 0755 so apt's sandbox
+# user can read it. --allow-downgrades: going from a nightly to a stable
+# build is fine; apt sorts 0.2.0~nightly.5 before 0.2.0 anyway.
+_DEB_SCRIPT = """set -e
+dir=$(mktemp -d /tmp/speechify-update.XXXXXX)
+trap 'rm -rf "$dir"' EXIT
+chmod 755 "$dir"
+cp -- "$1" "$dir/speechify.deb"
+chmod 644 "$dir/speechify.deb"
+echo "$2  $dir/speechify.deb" | sha256sum -c --status - || exit 3
+if command -v apt-get >/dev/null; then
+    apt-get install -y --allow-downgrades "$dir/speechify.deb"
+else
+    dpkg -i "$dir/speechify.deb"
+fi
+"""
+
+
 def _install_deb(deb: Path, restart: bool) -> None:
     root = os.geteuid() == 0  # `sudo speechify update` needs no password prompt
     if not root and not shutil.which("pkexec"):
         raise UpdateError(f"Installing a .deb needs your password, and pkexec isn't installed. "
                           f"Run this instead:\n    sudo apt install {deb}")
-    # --allow-downgrades: going from a nightly to a stable build of the same
-    # version is fine; apt sorts 0.2.0~nightly.5 before 0.2.0 anyway.
-    cmd = ["apt-get", "install", "-y", "--allow-downgrades", str(deb)] if shutil.which("apt-get") \
-        else ["dpkg", "-i", str(deb)]
-    # Readable by apt's sandbox user, so it doesn't warn.
-    deb.parent.chmod(0o755)
-    deb.chmod(0o644)
+    if deb not in _verified:
+        raise UpdateError(f"{deb.name} wasn't downloaded and checked by Speechify, so it wasn't installed.")
+    cmd = ["/bin/sh", "-c", _DEB_SCRIPT, "sh", str(deb), _verified[deb]]
     done = subprocess.run(cmd if root else ["pkexec", *cmd], env=_clean_env(), capture_output=True, text=True)
     if done.returncode == 126 and not root:
         raise UpdateError("Update cancelled.")
+    if done.returncode == 3:
+        raise UpdateError(f"{deb.name} changed after it was downloaded, so it wasn't installed. Try again.")
     if done.returncode != 0:
         print(done.stdout + done.stderr)
         raise UpdateError(f"apt couldn't install the update (see the log):\n{done.stderr.strip()[-400:]}")
