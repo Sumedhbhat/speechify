@@ -7,17 +7,32 @@ use std::{
     time::{Duration, Instant},
 };
 pub fn install(s: &Arc<Service>, id: &str) -> Result<()> {
-    // Do not mutate a Python environment while a worker is using it. New clips
-    // wait on this same model lock, behind the existing bounded capture queue.
-    let mut slot = s.worker.lock().unwrap();
-    slot.take();
-    s.state.lock().unwrap()["ready"] = json!(false);
     let family = match id {
         "distil-whisper-large-v3" => "whisper",
         "kyutai-stt-1b" | "kyutai-stt-2.6b" => "transformers",
         "training" => "training",
         _ => return Err("Unknown optional model".into()),
     };
+    // Synchronize briefly with inference, then let unrelated models keep running.
+    // ensure() checks the marker under the worker lock before starting a Python worker.
+    if family != "training" {
+        let mut slot = s.worker.lock().unwrap();
+        *s.installing_family.lock().unwrap() = Some(family.into());
+        if slot
+            .as_ref()
+            .is_some_and(|w| w.environment.as_deref() == Some(family))
+        {
+            slot.take();
+            s.state.lock().unwrap()["ready"] = json!(false);
+        }
+    }
+    struct Installing<'a>(&'a Service);
+    impl Drop for Installing<'_> {
+        fn drop(&mut self) {
+            self.0.installing_family.lock().unwrap().take();
+        }
+    }
+    let _installing = Installing(s);
     s.state.lock().unwrap()["download"] = json!({"id":id,"stage":"Starting optional installer"});
     let mut cmd = Command::new(if cfg!(windows) { "python" } else { "python3" });
     cmd.arg(
@@ -83,4 +98,36 @@ pub fn install(s: &Arc<Service>, id: &str) -> Result<()> {
     };
     s.install_pid.store(0, Ordering::SeqCst);
     result
+}
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    #[test]
+    fn training_setup_does_not_wait_for_the_dictation_worker_lock() {
+        let root =
+            std::env::temp_dir().join(format!("speechify-installer-lock-{}", std::process::id()));
+        for sub in ["audio", "models", "logs", "exports", "resources/native"] {
+            std::fs::create_dir_all(root.join(sub)).unwrap();
+        }
+        std::fs::write(root.join("resources/install-exception.py"),
+            "import pathlib,sys,time\nr=pathlib.Path(sys.argv[sys.argv.index('--root')+1])\n(r/'started').touch()\nfor _ in range(100):\n if (r/'finish').exists():break\n time.sleep(.05)\n").unwrap();
+        let service = Service::new(root.clone(), root.join("resources/native")).unwrap();
+        let slot = service.worker.lock().unwrap();
+        let background = service.clone();
+        let task = std::thread::spawn(move || install(&background, "training"));
+        let start = Instant::now();
+        while !root.join("started").exists() && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let started = root.join("started").exists();
+        std::fs::write(root.join("finish"), "").unwrap();
+        drop(slot);
+        task.join().unwrap().unwrap();
+        assert!(
+            started,
+            "training setup was blocked by the dictation worker mutex"
+        );
+        drop(service);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

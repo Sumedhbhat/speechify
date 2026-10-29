@@ -37,6 +37,7 @@ pub struct Service {
     pub downloading: AtomicBool,
     pub training_pid: AtomicU32,
     pub install_pid: AtomicU32,
+    pub installing_family: Mutex<Option<String>>,
     pub learning_busy: AtomicBool,
 }
 impl Service {
@@ -83,6 +84,7 @@ impl Service {
             downloading: AtomicBool::new(false),
             training_pid: AtomicU32::new(0),
             install_pid: AtomicU32::new(0),
+            installing_family: Mutex::new(None),
             learning_busy: AtomicBool::new(false),
         }))
     }
@@ -118,6 +120,14 @@ impl Service {
             return Err("Service is stopping".into());
         }
         let id = cfg["model"].as_str().ok_or("Model missing")?;
+        if models::environment(id)
+            .is_some_and(|family| self.installing_family.lock().unwrap().as_deref() == Some(family))
+        {
+            return Err(
+                "This model's optional environment is being installed; retry when setup finishes"
+                    .into(),
+            );
+        }
         let key = model_key(cfg);
         if slot.as_mut().is_none_or(|w| w.key != key || !w.alive()) {
             slot.take();
@@ -194,11 +204,17 @@ impl Service {
         let cfg = self.config.lock().unwrap().clone();
         let generation = self.generation.load(Ordering::SeqCst);
         let prompt = self.store.lock().unwrap().prompt()?;
+        let timeout = crate::worker::transcription_timeout(path)?;
         let mut slot = self.worker.lock().unwrap();
         let mut result = {
             let worker = self.ensure(&mut slot, &cfg)?;
             self.set_stage("Transcribing");
-            worker.run(path, cfg["language"].as_str().unwrap_or("en"), &prompt)
+            worker.run(
+                path,
+                cfg["language"].as_str().unwrap_or("en"),
+                &prompt,
+                timeout,
+            )
         };
         // A native crash gets one clean CPU retry; cancellation must not restart it.
         if result.is_err()
@@ -212,6 +228,7 @@ impl Service {
                 path,
                 cfg["language"].as_str().unwrap_or("en"),
                 &prompt,
+                timeout,
             );
         }
         let mut result = result?;

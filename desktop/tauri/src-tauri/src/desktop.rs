@@ -93,11 +93,17 @@ fn dispatch(s: &Arc<Service>, op: &str, args: &Value) -> Result<Value> {
             // Learning is saved even when OS replacement is refused.
             s.store.lock().unwrap().edit(sample, text)?;
             if args["replace"] == true {
-                let receipt = s.replacement.lock().unwrap().take();
-                let Some((saved, receipt)) = receipt.filter(|(saved, _)| *saved == sample) else {
+                let receipt = {
+                    let mut slot = s.replacement.lock().unwrap();
+                    if slot.as_ref().is_some_and(|(saved, _)| *saved == sample) {
+                        slot.take()
+                    } else {
+                        None
+                    }
+                };
+                let Some((_, receipt)) = receipt else {
                     return Err("Correction saved. Replacement unavailable: no proven original text range/caret for this sample. Copy it manually.".into());
                 };
-                let _ = saved;
                 crate::replacement::replace(&receipt, text)?;
             }
             Ok(json!(true))
@@ -741,6 +747,43 @@ mod command_tests {
             .audio_path(sample)
             .unwrap()
             .is_file());
+        let root = s.root.clone();
+        drop(s);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn older_correction_does_not_consume_latest_replacement_receipt() {
+        let s = service();
+        let older = s
+            .store
+            .lock()
+            .unwrap()
+            .record(&[], "older", "older", false)
+            .unwrap();
+        let latest = s
+            .store
+            .lock()
+            .unwrap()
+            .record(&[], "latest", "latest", false)
+            .unwrap();
+        *s.replacement.lock().unwrap() = Some((
+            latest,
+            crate::replacement::Receipt {
+                target: 0,
+                expected: vec![],
+                start: 0,
+                end: 0,
+                process: 0,
+                created: Instant::now(),
+            },
+        ));
+        assert!(dispatch(
+            &s,
+            "correct",
+            &json!({"id":older,"text":"older corrected","replace":true})
+        )
+        .is_err());
+        assert_eq!(s.replacement.lock().unwrap().as_ref().unwrap().0, latest);
         let root = s.root.clone();
         drop(s);
         std::fs::remove_dir_all(root).unwrap();

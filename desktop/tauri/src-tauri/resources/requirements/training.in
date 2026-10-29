@@ -1,3 +1,4 @@
+# CUDA training only (Windows/Linux). Resolve with --torch-backend cu126.
 numpy
 torch>=2.4
 transformers>=4.45,<5

@@ -359,6 +359,7 @@ mod os {
             ("cmd_r", 54),
             ("cmd_l", 55),
             ("shift_l", 56),
+            ("caps_lock", 57),
             ("alt_l", 58),
             ("ctrl_l", 59),
             ("shift_r", 60),
@@ -507,6 +508,7 @@ mod os {
                 ("enter".into(), 13),
                 ("backspace".into(), 8),
                 ("tab".into(), 9),
+                ("caps_lock".into(), 0x14),
                 ("scroll_lock".into(), 0x91),
                 ("left".into(), 37),
                 ("right".into(), 39),
@@ -524,7 +526,7 @@ mod os {
             }
             let mut out = BTreeSet::new();
             for key in 1..256 {
-                if [0x10, 0x11, 0x12].contains(&key) {
+                if [1, 2, 4, 5, 6, 0x10, 0x11, 0x12].contains(&key) {
                     continue;
                 }
                 if unsafe { GetAsyncKeyState(key) < 0 } {

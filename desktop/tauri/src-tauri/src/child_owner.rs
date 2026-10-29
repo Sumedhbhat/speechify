@@ -8,12 +8,17 @@ pub struct Owner;
 pub fn spawn(cmd: &mut Command) -> Result<(Child, Owner)> {
     use std::os::unix::process::CommandExt;
     cmd.process_group(0);
+    #[cfg(target_os = "linux")]
+    let parent = unsafe { libc::getpid() };
     unsafe {
-        cmd.pre_exec(|| {
+        cmd.pre_exec(move || {
             #[cfg(target_os = "linux")]
             {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 || libc::getppid() == 1 {
-                    return Err(std::io::Error::other("Cannot establish parent ownership"));
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::getppid() != parent {
+                    return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
                 }
             }
             Ok(())

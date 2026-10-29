@@ -95,6 +95,7 @@ pub struct Worker {
     pub key: String,
     pub device: String,
     pub load_ms: f64,
+    pub environment: Option<String>,
     pid: Arc<AtomicU32>,
 }
 impl Worker {
@@ -113,7 +114,7 @@ impl Worker {
             c.arg(dir.parent().unwrap_or(dir).join("exception-worker.py"))
                 .arg(model)
                 .arg(device)
-                .arg(config.to_string());
+                .arg(json!({"compute_type":config["compute_type"],"language":config["language"],"beam_size":config["beam_size"]}).to_string());
             c
         } else {
             let mut c = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
@@ -159,9 +160,16 @@ impl Worker {
             key,
             device: String::new(),
             load_ms: 0.,
+            environment: python.and_then(|p| {
+                p.parent()?
+                    .parent()?
+                    .file_name()?
+                    .to_str()
+                    .map(str::to_owned)
+            }),
             pid,
         };
-        let msg = worker.read()?;
+        let msg = worker.read(std::time::Duration::from_secs(900))?;
         if msg["ready"] != true {
             return Err(msg.to_string());
         }
@@ -172,14 +180,11 @@ impl Worker {
     pub fn alive(&mut self) -> bool {
         self.child.try_wait().is_ok_and(|status| status.is_none())
     }
-    fn read(&mut self) -> Result<Value> {
-        let line = self
-            .output
-            .recv_timeout(std::time::Duration::from_secs(180))
-            .map_err(|e| {
-                terminate(self.child.id());
-                format!("Worker stopped responding: {e}; retry to recover")
-            })??;
+    fn read(&mut self, timeout: std::time::Duration) -> Result<Value> {
+        let line = self.output.recv_timeout(timeout).map_err(|e| {
+            terminate(self.child.id());
+            format!("Worker stopped responding: {e}; retry to recover")
+        })??;
         let v: Value =
             serde_json::from_str(&line).map_err(|e| format!("Invalid worker response: {e}"))?;
         if let Some(e) = v["error"].as_str() {
@@ -187,7 +192,13 @@ impl Worker {
         }
         Ok(v)
     }
-    pub fn run(&mut self, wav: &Path, language: &str, prompt: &str) -> Result<Value> {
+    pub fn run(
+        &mut self,
+        wav: &Path,
+        language: &str,
+        prompt: &str,
+        timeout: std::time::Duration,
+    ) -> Result<Value> {
         writeln!(
             self.input,
             "{}",
@@ -195,7 +206,7 @@ impl Worker {
         )
         .and_then(|_| self.input.flush())
         .map_err(|e| e.to_string())?;
-        self.read()
+        self.read(timeout)
     }
 }
 impl Drop for Worker {
@@ -208,6 +219,14 @@ impl Drop for Worker {
     }
 }
 pub type WorkerSlot = Arc<Mutex<Option<Worker>>>;
+pub fn transcription_timeout(wav: &Path) -> Result<std::time::Duration> {
+    let reader = hound::WavReader::open(wav).map_err(|e| e.to_string())?;
+    let seconds = f64::from(reader.duration()) / f64::from(reader.spec().sample_rate.max(1));
+    // CPU models may run slower than real time; cancellation still kills the child immediately.
+    Ok(std::time::Duration::from_secs_f64(
+        180. + seconds.min(600.) * 6.,
+    ))
+}
 pub fn native_dir(resource: Option<PathBuf>) -> PathBuf {
     if let Some(p) = std::env::var_os("SPEECHIFY_NATIVE_DIR") {
         return p.into();

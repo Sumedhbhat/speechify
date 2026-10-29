@@ -12,6 +12,15 @@ use std::{
 pub fn catalog() -> Vec<Value> {
     serde_json::from_str(include_str!("../resources/catalog.json")).unwrap()
 }
+pub fn environment(id: &str) -> Option<&'static str> {
+    if id.starts_with("ft:") || id.starts_with("distil") {
+        Some("whisper")
+    } else if id.starts_with("kyutai-") {
+        Some("transformers")
+    } else {
+        None
+    }
+}
 pub fn spec(id: &str) -> Result<Value> {
     catalog()
         .into_iter()
@@ -61,6 +70,7 @@ pub fn install(
     }
     let dst = path(root, id)?;
     let tmp = dst.with_extension("partial");
+    let total = g["size"].as_u64().unwrap();
     let result = (|| {
         let url = format!(
             "https://huggingface.co/{}/resolve/{}/{}",
@@ -68,28 +78,66 @@ pub fn install(
             g["revision"].as_str().unwrap(),
             g["file"].as_str().unwrap()
         );
-        let client = reqwest::blocking::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(20))
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| e.to_string())?;
-        let mut f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
-        let total = g["size"].as_u64().unwrap();
-        let mut bytes = 0u64;
-        // Bounded range requests bound cancellation even when a server stops sending.
-        while bytes < total {
-            if cancel.load(Ordering::Relaxed) {
-                return Err("Cancelled".into());
-            }
-            let end = (bytes + 4 * 1024 * 1024 - 1).min(total - 1);
+        download(&url, total, &tmp, &cancel, |bytes| {
+            progress(json!({"id":id,"stage":"Downloading","bytes":bytes,"total":total}));
+        })?;
+        progress(json!({"id":id,"stage":"Verifying SHA-256","bytes":total,"total":total}));
+        if let Err(error) = verify(&tmp, g["sha256"].as_str().unwrap(), &cancel) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(error);
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Cancelled".into());
+        }
+        std::fs::rename(&tmp, &dst).map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+    // Network/disk failures retain the resumable prefix; cancellation removes it.
+    if cancel.load(Ordering::Relaxed) {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+fn download(
+    url: &str,
+    total: u64,
+    tmp: &Path,
+    cancel: &AtomicBool,
+    progress: impl Fn(u64),
+) -> Result<()> {
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(tmp)
+        .map_err(|e| e.to_string())?;
+    let mut bytes = f.metadata().map_err(|e| e.to_string())?.len();
+    if bytes > total {
+        f.set_len(0).map_err(|e| e.to_string())?;
+        bytes = 0;
+    }
+    progress(bytes);
+    while bytes < total {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Cancelled".into());
+        }
+        let before = bytes;
+        let end = (bytes + 4 * 1024 * 1024 - 1).min(total - 1);
+        let attempt = (|| {
             let mut response = client
-                .get(&url)
+                .get(url)
                 .header(reqwest::header::RANGE, format!("bytes={bytes}-{end}"))
                 .send()
                 .and_then(|r| r.error_for_status())
                 .map_err(|e| e.to_string())?;
             if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-                return Err("Model host did not honor a bounded range request; retry later".into());
+                return Err(
+                    "Model host did not honor a bounded range request; retry later".to_owned(),
+                );
             }
             let expected = format!("bytes {bytes}-{end}/{total}");
             if response
@@ -115,25 +163,20 @@ pub fn install(
                 bytes += n as u64;
                 remaining -= n as u64;
             }
-            progress(json!({"id":id,"stage":"Downloading","bytes":bytes,"total":total}));
+            Ok(())
+        })();
+        progress(bytes);
+        if let Err(error) = attempt {
+            // Resume progress even if a slow range exceeds its bounded request deadline.
+            // A zero-progress failure returns to the UI, preserving the prefix for Retry.
+            if bytes == before || cancel.load(Ordering::Relaxed) {
+                return Err(error);
+            }
         }
-        f.sync_all().map_err(|e| e.to_string())?;
-        if bytes != total {
-            return Err("Download was truncated".into());
-        }
-        progress(json!({"id":id,"stage":"Verifying SHA-256","bytes":bytes,"total":total}));
-        verify(&tmp, g["sha256"].as_str().unwrap(), &cancel)?;
-        if cancel.load(Ordering::Relaxed) {
-            return Err("Cancelled".into());
-        }
-        std::fs::rename(&tmp, &dst).map_err(|e| e.to_string())?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
     }
-    result
+    f.sync_all().map_err(|e| e.to_string())
 }
+
 pub fn list(root: &Path) -> Vec<Value> {
     let mut items = catalog();
     for m in &mut items {
@@ -179,6 +222,43 @@ mod tests {
         flag.store(true, Ordering::SeqCst);
         assert_eq!(verify(&p, "bad", &flag).unwrap_err(), "Cancelled");
         std::fs::remove_file(p).unwrap();
+    }
+    #[test]
+    fn interrupted_range_resumes_without_discarding_existing_prefix() {
+        use std::{
+            io::{BufRead, BufReader},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/model", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for (start, body) in [(2, "cd"), (4, "efgh")] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = String::new();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    request.push_str(&line);
+                }
+                assert!(request
+                    .to_lowercase()
+                    .contains(&format!("range: bytes={start}-7")));
+                write!(stream, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-7/8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", 8-start).unwrap();
+            }
+        });
+        let tmp = std::env::temp_dir().join(format!("speechify-range-{}", std::process::id()));
+        std::fs::write(&tmp, b"ab").unwrap();
+        download(&url, 8, &tmp, &AtomicBool::new(false), |_| {}).unwrap();
+        server.join().unwrap();
+        assert_eq!(std::fs::read(&tmp).unwrap(), b"abcdefgh");
+        std::fs::remove_file(tmp).unwrap();
     }
     #[test]
     fn catalog_is_complete() {

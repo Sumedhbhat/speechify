@@ -53,6 +53,23 @@ class InstallerTests(unittest.TestCase):
             if args[1] == 'pip': raise RuntimeError('disk full')
         with patch.object(installer.subprocess, 'run', side_effect=fail), patch.object(installer, 'emit'):
             with self.assertRaises(RuntimeError): installer.install(self.root, 'whisper')
+    def test_training_repairs_cpu_receipt_and_selects_cuda_backend(self):
+        marker = self.root / 'environments/training/candidate-ready'
+        marker.parent.mkdir(parents=True)
+        marker.write_text('complete\n')
+        commands = []
+        def run(args, **kwargs):
+            commands.append(args)
+            self.fake_run(args, **kwargs)
+        with patch.object(installer.sys, 'platform', 'win32'), patch.object(installer.subprocess, 'run', side_effect=run), patch.object(installer, 'emit'):
+            installer.install(self.root, 'training')
+        self.assertEqual(marker.read_text(), 'cuda-cu126-v1\n')
+        sync = next(c for c in commands if c[1] == 'pip')
+        self.assertIn('--torch-backend', sync)
+        self.assertEqual(sync[sync.index('--torch-backend')+1], 'cu126')
+        with patch.object(installer.sys, 'platform', 'darwin'):
+            with self.assertRaisesRegex(ValueError, 'macOS training is unavailable'):
+                installer.install(self.root, 'training')
         self.assertFalse((self.root / 'environments/whisper/candidate-ready').exists())
     def test_oversized_download_rejected(self):
         with self.assertRaises(ValueError): self.install(self.body + b'bad')

@@ -25,6 +25,8 @@ python3 scripts/package-portable.py
 
 For this machine's locally extracted prerequisites, first run `python3 scripts/bootstrap-linux.py` and `source scripts/local-env.sh`. These only extract packages into `.build/`; they do not install packages or change services. The source checkout's build evidence documents the exact environment.
 
+CI Linux Debian and portable packages target Ubuntu 24.04 or newer. Debian 12 is not a supported target for those prebuilt binaries; build from source on that distribution. The GTK/ALSA `t64` dependencies match the Ubuntu 24.04 build host.
+
 The Linux portable tar contains the release executable, native inference libraries, optional-worker/training resources and checksums. It requires the system GTK/WebKit/ALSA libraries; it is not a universal static Linux binary. Build on your oldest supported Linux distribution for broader glibc compatibility. A binary built on Ubuntu 26.04 is not claimed to run on older glibc distributions.
 
 ## Build and launch on your Mac
@@ -108,3 +110,11 @@ X11 restoration uses unique selection ownership and retains supported MIME data,
 Windows replacement is limited to standard Edit controls, an unchanged UTF-16 document/caret and a two-minute receipt. Replacement uses bounded synchronous messages and is undoable. It does not move focus back to the original app. Concurrent programmatic mutation between separate Win32 messages remains a limitation; other control types and platforms save only and explain the refusal.
 
 The lead owns native macOS packaging via GitHub Actions after this handoff. No CI workflow, branch push, installed-app replacement or release is part of this implementation commit.
+
+Training environments use hash-locked PyTorch CUDA 12.6 builds on Windows/Linux.
+The installer passes `--torch-backend cu126` to uv; older training receipts are
+repaired only when you explicitly run installation again. macOS fine-tuning is
+unavailable. Regenerate the lock with `uv pip compile --python-version 3.12
+--universal --generate-hashes --exclude-newer 2026-10-11 --torch-backend cu126
+--emit-index-url src-tauri/resources/requirements/training.in
+-o src-tauri/resources/requirements/training.lock` from this directory.

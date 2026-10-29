@@ -16,32 +16,37 @@ pub fn now() -> f64 {
         .unwrap_or_default()
         .as_secs_f64()
 }
+fn migrate(db: &Connection) -> Result<()> {
+    db.execute_batch("CREATE TABLE IF NOT EXISTS samples(id INTEGER PRIMARY KEY,ts REAL NOT NULL,audio TEXT,raw TEXT NOT NULL,pasted TEXT NOT NULL,corrected TEXT,excluded INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS rules(wrong TEXT NOT NULL,right TEXT NOT NULL,count INTEGER NOT NULL,PRIMARY KEY(wrong,right));CREATE TABLE IF NOT EXISTS vocab(term TEXT PRIMARY KEY,count INTEGER NOT NULL);CREATE TABLE IF NOT EXISTS learn_state(key TEXT PRIMARY KEY,value TEXT NOT NULL);").map_err(err)?;
+    let cols: Vec<String> = db
+        .prepare("PRAGMA table_info(samples)")
+        .map_err(err)?
+        .query_map([], |r| r.get(1))
+        .map_err(err)?
+        .collect::<std::result::Result<_, _>>()
+        .map_err(err)?;
+    for (k, t) in [
+        ("excluded", "INTEGER NOT NULL DEFAULT 0"),
+        ("teacher_text", "TEXT"),
+        ("teacher_model", "TEXT"),
+        ("teacher_confidence", "REAL"),
+        ("teacher_ts", "REAL"),
+        ("teacher_note", "TEXT"),
+    ] {
+        if !cols.iter().any(|s| s == k) {
+            db.execute(&format!("ALTER TABLE samples ADD COLUMN {k} {t}"), [])
+                .map_err(err)?;
+        }
+    }
+    Ok(())
+}
 impl Store {
     pub fn open(root: &Path) -> Result<Self> {
         let db = Connection::open(root.join("learning.db")).map_err(err)?;
         db.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(err)?;
-        db.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS samples(id INTEGER PRIMARY KEY,ts REAL NOT NULL,audio TEXT,raw TEXT NOT NULL,pasted TEXT NOT NULL,corrected TEXT,excluded INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS rules(wrong TEXT NOT NULL,right TEXT NOT NULL,count INTEGER NOT NULL,PRIMARY KEY(wrong,right));CREATE TABLE IF NOT EXISTS vocab(term TEXT PRIMARY KEY,count INTEGER NOT NULL);CREATE TABLE IF NOT EXISTS learn_state(key TEXT PRIMARY KEY,value TEXT NOT NULL);").map_err(err)?;
-        let cols: Vec<String> = db
-            .prepare("PRAGMA table_info(samples)")
-            .map_err(err)?
-            .query_map([], |r| r.get(1))
-            .map_err(err)?
-            .collect::<std::result::Result<_, _>>()
-            .map_err(err)?;
-        for (k, t) in [
-            ("excluded", "INTEGER NOT NULL DEFAULT 0"),
-            ("teacher_text", "TEXT"),
-            ("teacher_model", "TEXT"),
-            ("teacher_confidence", "REAL"),
-            ("teacher_ts", "REAL"),
-            ("teacher_note", "TEXT"),
-        ] {
-            if !cols.iter().any(|s| s == k) {
-                db.execute(&format!("ALTER TABLE samples ADD COLUMN {k} {t}"), [])
-                    .map_err(err)?;
-            }
-        }
+        db.execute_batch("PRAGMA journal_mode=WAL;").map_err(err)?;
+        migrate(&db)?;
         Ok(Self {
             db,
             root: root.into(),
@@ -300,41 +305,60 @@ impl Store {
         {
             return Err("Import requires empty candidate history".into());
         }
-        let src = Connection::open_with_flags(
-            source.join("learning.db"),
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .map_err(err)?;
         let stage = self.root.join("import.db");
-        let mut dest = Connection::open(&stage).map_err(err)?;
-        {
-            let backup = rusqlite::backup::Backup::new(&src, &mut dest).map_err(err)?;
-            backup
-                .run_to_completion(50, std::time::Duration::from_millis(10), None)
-                .map_err(err)?;
-        }
-        let names = dest
-            .prepare("SELECT audio FROM samples WHERE audio IS NOT NULL")
-            .map_err(err)?
-            .query_map([], |r| r.get::<_, String>(0))
-            .map_err(err)?
-            .collect::<std::result::Result<Vec<_>, _>>()
+        let mut copied = Vec::new();
+        let result = (|| {
+            let src = Connection::open_with_flags(
+                source.join("learning.db"),
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
             .map_err(err)?;
-        for name in &names {
-            let p = owned(&source.join("audio"), name)?;
-            let q = owned(&self.root.join("audio"), name)?;
-            std::fs::copy(p, q).map_err(err)?;
-        }
-        drop(dest);
-        {
-            let staged = Connection::open(&stage).map_err(err)?;
-            let backup = rusqlite::backup::Backup::new(&staged, &mut self.db).map_err(err)?;
+            let mut dest = Connection::open(&stage).map_err(err)?;
+            {
+                let backup = rusqlite::backup::Backup::new(&src, &mut dest).map_err(err)?;
+                backup
+                    .run_to_completion(50, std::time::Duration::from_millis(10), None)
+                    .map_err(err)?;
+            }
+            // Migrate the staged snapshot before touching candidate history.
+            migrate(&dest)?;
+            let names = dest
+                .prepare("SELECT DISTINCT audio FROM samples WHERE audio IS NOT NULL")
+                .map_err(err)?
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(err)?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(err)?;
+            for name in &names {
+                let p = owned(&source.join("audio"), name)?;
+                let q = owned(&self.root.join("audio"), name)?;
+                let mut input = std::fs::File::open(p).map_err(err)?;
+                let mut output = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&q)
+                    .map_err(err)?;
+                copied.push(q);
+                std::io::copy(&mut input, &mut output).map_err(err)?;
+                output.sync_all().map_err(err)?;
+            }
+            let backup = rusqlite::backup::Backup::new(&dest, &mut self.db).map_err(err)?;
             backup
                 .run_to_completion(50, std::time::Duration::from_millis(10), None)
                 .map_err(err)?;
+            Ok(names.len())
+        })();
+        if result.is_err() {
+            for path in copied {
+                let _ = std::fs::remove_file(path);
+            }
+        } else {
+            self.latest_audio.borrow_mut().take();
         }
-        std::fs::remove_file(stage).map_err(err)?;
-        Ok(names.len())
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", stage.display()));
+        }
+        result
     }
 }
 pub fn label(row: &Value, min: f64) -> Option<(String, &'static str)> {
@@ -525,6 +549,43 @@ mod persistence_tests {
             .contains("corrected oldest"));
         drop(s);
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn legacy_import_migrates_and_failed_audio_copy_is_retryable() {
+        let base =
+            std::env::temp_dir().join(format!("speechify-legacy-import-{}", std::process::id()));
+        let src = base.join("original");
+        let dst = base.join("candidate");
+        for p in [&src, &dst] {
+            std::fs::create_dir_all(p.join("audio")).unwrap();
+        }
+        let legacy = Connection::open(src.join("learning.db")).unwrap();
+        legacy.execute_batch("CREATE TABLE samples(id INTEGER PRIMARY KEY,ts REAL NOT NULL,audio TEXT,raw TEXT NOT NULL,pasted TEXT NOT NULL,corrected TEXT); INSERT INTO samples VALUES(1,0,'a.wav','old','old','human'); INSERT INTO samples VALUES(2,1,'missing.wav','missing','missing',NULL);").unwrap();
+        crate::audio::save(&src.join("audio/a.wav"), &[0.1; 16]).unwrap();
+        let mut dest = Store::open(&dst).unwrap();
+        assert!(dest.import(&src).is_err());
+        assert!(!dst.join("import.db").exists());
+        assert_eq!(std::fs::read_dir(dst.join("audio")).unwrap().count(), 0);
+        assert!(dest.history("", "").unwrap().is_empty());
+        legacy
+            .execute("DELETE FROM samples WHERE id=2", [])
+            .unwrap();
+        assert_eq!(dest.import(&src).unwrap(), 1);
+        let row = &dest.history("", "").unwrap()[0];
+        assert_eq!(row["excluded"], 0);
+        assert_eq!(row["corrected"], "human");
+        assert!(row["teacher_text"].is_null());
+        let original_has_excluded: i64 = legacy
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('samples') WHERE name='excluded'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(original_has_excluded, 0);
+        drop(dest);
+        drop(legacy);
+        std::fs::remove_dir_all(base).unwrap();
     }
     #[test]
     fn consistent_import_copies_audio() {

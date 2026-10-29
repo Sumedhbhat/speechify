@@ -179,7 +179,12 @@ fn teacher(s: &Arc<Service>, cfg: &Value) -> Result<()> {
             .lock()
             .unwrap()
             .state("teacher_status", &json!(format!("Labelling sample {id}")))?;
-        let result = w.run(&path, cfg["language"].as_str().unwrap_or("en"), "")?;
+        let result = w.run(
+            &path,
+            cfg["language"].as_str().unwrap_or("en"),
+            "",
+            crate::worker::transcription_timeout(&path)?,
+        )?;
         if s.generation.load(Ordering::SeqCst) != generation {
             return Err("Teacher preempted".into());
         }
@@ -240,7 +245,10 @@ pub fn start_training(s: Arc<Service>) -> Result<()> {
     } else {
         "bin/python"
     });
-    if !py.exists() {
+    if !py.exists()
+        || !std::fs::read_to_string(s.root.join("environments/training/candidate-ready"))
+            .is_ok_and(|receipt| receipt.trim() == "cuda-cu126-v1")
+    {
         s.learning_busy.store(false, Ordering::SeqCst);
         return Err("Install the optional training environment first. Training needs NVIDIA CUDA and at least 10 GB VRAM.".into());
     }
@@ -249,6 +257,15 @@ pub fn start_training(s: Arc<Service>) -> Result<()> {
         return Err("Training pauses on battery; connect mains power".into());
     }
     std::thread::spawn(move || {
+        let count = s
+            .store
+            .lock()
+            .unwrap()
+            .history("", "")
+            .unwrap_or_default()
+            .iter()
+            .filter(|r| label(r, cfg["teacher_min_confidence"].as_f64().unwrap_or(0.7)).is_some())
+            .count();
         let result: Result<()> = (|| {
             s.cancel_work();
             s.worker.lock().unwrap().take();
@@ -341,25 +358,17 @@ pub fn start_training(s: Arc<Service>) -> Result<()> {
             adopted["model"] = json!(format!("ft:{name}"));
             s.update(adopted)?;
             prune(&s, cfg["keep_versions"].as_u64().unwrap_or(3) as usize)?;
-            let count = s
-                .store
-                .lock()
-                .unwrap()
-                .history("", "")?
-                .iter()
-                .filter(|r| {
-                    label(r, cfg["teacher_min_confidence"].as_f64().unwrap_or(0.7)).is_some()
-                })
-                .count();
-            s.store
-                .lock()
-                .unwrap()
-                .state("last_training", &json!({"ts":now(),"count":count}))?;
             Ok(())
         })();
         if let Err(e) = result {
             let _ = s.store.lock().unwrap().state("training_status", &json!(e));
         }
+        // Failed, rejected and cancelled attempts also consume this scheduling batch.
+        let _ = s
+            .store
+            .lock()
+            .unwrap()
+            .state("last_training", &json!({"ts":now(),"count":count}));
         s.learning_busy.store(false, Ordering::SeqCst);
         let _ = s.preload();
     });

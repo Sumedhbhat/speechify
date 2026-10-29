@@ -119,7 +119,9 @@ Continuation started from lead evidence commit `a38e6da` on the same `sb/tauri-c
 Reproduce these additional checks from the worktree root:
 
 ```sh
-source desktop/tauri/scripts/local-env.sh
+if [ -x desktop/tauri/.build/sysroot/usr/bin/gcc ]; then
+  source desktop/tauri/scripts/local-env.sh
+fi
 cargo test --release --locked --manifest-path desktop/tauri/src-tauri/Cargo.toml
 python3 desktop/tauri/scripts/test-optional-installer.py
 python3 desktop/tauri/scripts/check-platform-adapters.py
@@ -162,3 +164,22 @@ Apple Silicon macOS candidate packaging passed on the native macos-15 GitHub run
 Build evidence: https://github.com/Sumedhbhat/speechify/actions/runs/40442173851
 
 The authoritative comparison, downloads and unresolved acceptance gaps are at https://bhatsumedh.tail429e81.ts.net/pages/speechify-candidate-comparison/ . These personal test DMGs are not Developer-ID notarized. Use Finder and the app-specific Open Anyway control if needed; grant permissions to each distinct candidate.
+
+
+## Pre-merge review corrections — 2026-10-29
+
+The review fixes cover resumable native downloads, isolated optional setup,
+training retry backoff/readiness, migrated and recoverable legacy imports,
+receipt preservation for older corrections, worker argv privacy, duration-based
+inference deadlines, and Windows/macOS shortcut mappings. Training now pins
+PyTorch's CUDA 12.6 build using the original 2026-10-11 resolution cutoff;
+Windows and Linux hash-locked installation dry runs both select
+`torch==2.14.1+cu126`. Those dry runs do not establish successful GPU training.
+
+New regressions exercise a truncated HTTP range resumed from a saved prefix,
+a legacy database import with a missing audio file followed by a successful
+retry, an older correction preserving the latest replacement receipt, and a
+training installer helper running while the dictation worker mutex is held.
+Installer tests also cover explicit CUDA selection and repair of an old
+training receipt. Full model hashes are still verified on every worker load.
+Prebuilt Linux packages target Ubuntu 24.04+, not Debian 12.

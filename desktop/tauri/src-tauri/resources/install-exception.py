@@ -2,24 +2,28 @@
 Candidate-only files; hash-locked environments and pinned model revisions.
 A killed installation leaves no completion marker and is safely retryable.
 """
-import argparse, hashlib, json, os, pathlib, shutil, subprocess, urllib.request
+import argparse, hashlib, json, os, pathlib, shutil, subprocess, sys, urllib.request
 
 def emit(stage, **fields):
     print(json.dumps(dict(stage=stage, **fields)), flush=True)
 
 def install(root, family, model=None):
+    if family == 'training' and sys.platform == 'darwin':
+        raise ValueError('Fine-tuning requires NVIDIA CUDA on Windows or Linux; macOS training is unavailable')
     source = pathlib.Path(__file__).resolve().parent
     env = root / 'environments' / family
     marker = env / 'candidate-ready'
     uv_env = {**os.environ, 'UV_CACHE_DIR': str(root / 'cache/uv'), 'UV_PYTHON_INSTALL_DIR': str(root / 'environments/python')}
-    if not marker.exists():
+    receipt = 'cuda-cu126-v1\n' if family == 'training' else 'complete\n'
+    if not marker.exists() or (family == 'training' and marker.read_text() != receipt):
         emit('Preparing Python 3.12 environment')
         # Retry repairs an interrupted environment. uv owns only this candidate path.
         subprocess.run(['uv', 'venv', '--clear', '--python', '3.12', str(env)], env=uv_env, check=True, stdout=subprocess.DEVNULL)
         python = env / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
         emit('Installing hash-locked dependencies')
-        subprocess.run(['uv', 'pip', 'sync', '--python', str(python), '--require-hashes', str(source / 'requirements' / f'{family}.lock')], env=uv_env, check=True, stdout=subprocess.DEVNULL)
-        marker.write_text('complete\n')
+        backend = ['--torch-backend', 'cu126'] if family == 'training' else []
+        subprocess.run(['uv', 'pip', 'sync', *backend, '--python', str(python), '--require-hashes', str(source / 'requirements' / f'{family}.lock')], env=uv_env, check=True, stdout=subprocess.DEVNULL)
+        marker.write_text(receipt)
     if not model:
         return
     spec = json.loads((source / 'exception-models.json').read_text())[model]

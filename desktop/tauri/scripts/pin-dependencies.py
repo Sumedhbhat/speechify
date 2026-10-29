@@ -21,7 +21,7 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=4) as p: pins=dict(p.map(
 (root/'dependency-pins.json').write_text(json.dumps({'cutoff':'2026-10-11','pins':pins},indent=2)+'\n')
 pkg={'name':'speechify-tauri-candidate','private':True,'version':'0.1.0','type':'module','scripts':{'build':'tsc --noEmit && vite build','dev':'vite --host 127.0.0.1','tauri':'tauri'},'dependencies':{'@tauri-apps/api':pins['@tauri-apps/api']['version']},'devDependencies':{n:pins[n]['version'] for n in npm if n!='@tauri-apps/api'}}
 (root/'package.json').write_text(json.dumps(pkg,indent=2)+'\n')
-features={'tauri':['tray-icon','image-png'],'serde':['derive'],'rusqlite':['bundled','backup'],'reqwest':['blocking','json','rustls-tls']}
+features={'tauri':['tray-icon','image-png'],'serde':['derive'],'rusqlite':['bundled','backup'],'reqwest':['blocking','json','rustls']}
 lines=['[package]','name = "speechify-tauri-candidate"','version = "0.1.0"','edition = "2021"','default-run = "speechify-tauri-candidate"','[build-dependencies]',f'tauri-build = "={pins["tauri-build"]["version"]}"','[dependencies]']
 for c in crates:
  if c=='tauri-build':continue

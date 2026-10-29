@@ -94,6 +94,15 @@ pub fn validate(v: &Value) -> Result<()> {
     ] {
         let s = v[k].as_str().unwrap_or("");
         let normalized = crate::keys::parse(s)?;
+        #[cfg(target_os = "macos")]
+        if normalized
+            .split('+')
+            .any(|key| ["scroll_lock", "f21", "f22", "f23", "f24"].contains(&key))
+        {
+            return Err(
+                "macOS does not expose Scroll Lock or F21–F24 to the global shortcut poller".into(),
+            );
+        }
         if !combos.insert(normalized) {
             return Err("Shortcut conflicts with another action".into());
         }
