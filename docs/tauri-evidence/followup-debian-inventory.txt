@@ -1,0 +1,69 @@
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/bin
+-rwxr-xr-x 0/0        19295768 2026-10-27 08:32 usr/bin/speechify-tauri-candidate
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/lib
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native
+-rw-r--r-- 0/0             119 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/contract.json
+-rw-r--r-- 0/0          796352 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml-base.so
+-rw-r--r-- 0/0         1110008 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml-cpu-alderlake.so
+-rw-r--r-- 0/0         1347576 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml-cpu-cannonlake.so
+-rw-r--r-- 0/0         1343480 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml-cpu-cascadelake.so
+-rw-r--r-- 0/0         1343480 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml-cpu-cooperlake.so
+-rw-r--r-- 0/0         1114104 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml-cpu-haswell.so
+-rw-r--r-- 0/0         1343480 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml-cpu-icelake.so
+-rw-r--r-- 0/0         1060856 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml-cpu-ivybridge.so
+-rw-r--r-- 0/0         1056760 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml-cpu-piledriver.so
+-rw-r--r-- 0/0         1052664 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml-cpu-sandybridge.so
+-rw-r--r-- 0/0         1626328 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml-cpu-sapphirerapids.so
+-rw-r--r-- 0/0         1347576 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml-cpu-skylakex.so
+-rw-r--r-- 0/0          901112 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml-cpu-sse42.so
+-rw-r--r-- 0/0          868376 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml-cpu-x64.so
+-rw-r--r-- 0/0         1343480 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml-cpu-zen4.so
+-rw-r--r-- 0/0        42983080 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml-vulkan.so
+-rw-r--r-- 0/0          220776 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libggml.so
+-rw-r--r-- 0/0         2233128 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/libtranscribe.so
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/licenses
+-rw-r--r-- 0/0            1083 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/licenses/LICENSE
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/licenses/ggml
+-rw-r--r-- 0/0            1078 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/licenses/ggml/LICENSE
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/licenses/src
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/licenses/src/third_party
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/licenses/src/third_party/miniz
+-rw-r--r-- 0/0            1162 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/licenses/src/third_party/miniz/LICENSE
+-rw-r--r-- 0/0             360 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/native/provenance.json
+-rw-r--r-- 0/0            2855 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/exception-worker.py
+-rw-r--r-- 0/0            3868 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/install-exception.py
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/training
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/training/scripts
+-rw-r--r-- 0/0           17833 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/training/scripts/finetune.py
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/training/src
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/training/src/speechify
+-rw-r--r-- 0/0              68 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/training/src/speechify/__init__.py
+-rw-r--r-- 0/0            7330 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/training/src/speechify/audio.py
+-rw-r--r-- 0/0             566 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/training/src/speechify/config.py
+-rw-r--r-- 0/0            9524 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/training/src/speechify/labels.py
+-rw-r--r-- 0/0            5094 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/training/src/speechify/metrics.py
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/requirements
+-rw-r--r-- 0/0              77 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/requirements/training.in
+-rw-r--r-- 0/0           86658 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/requirements/training.lock
+-rw-r--r-- 0/0             104 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/requirements/transformers.in
+-rw-r--r-- 0/0          119126 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/requirements/transformers.lock
+-rw-r--r-- 0/0              42 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/requirements/whisper.in
+-rw-r--r-- 0/0           27383 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/requirements/whisper.lock
+-rw-r--r-- 0/0            4218 2026-10-27 08:32 usr/lib/Speechify Tauri Candidate/resources/exception-models.json
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/share
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/share/icons
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/share/icons/hicolor
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/share/icons/hicolor/32x32
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/share/icons/hicolor/32x32/apps
+-rw-r--r-- 0/0             748 2026-10-27 08:32 usr/share/icons/hicolor/32x32/apps/speechify-tauri-candidate.png
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/share/icons/hicolor/128x128
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/share/icons/hicolor/128x128/apps
+-rw-r--r-- 0/0             748 2026-10-27 08:32 usr/share/icons/hicolor/128x128/apps/speechify-tauri-candidate.png
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/share/icons/hicolor/256x256@2
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/share/icons/hicolor/256x256@2/apps
+-rw-r--r-- 0/0             736 2026-10-27 08:32 usr/share/icons/hicolor/256x256@2/apps/speechify-tauri-candidate.png
+drwxr-xr-x 0/0               0 2026-10-27 08:32 usr/share/applications
+-rw-r--r-- 0/0             256 2026-10-27 08:32 usr/share/applications/Speechify Tauri Candidate.desktop

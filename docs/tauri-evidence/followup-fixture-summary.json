@@ -1,0 +1,19 @@
+{
+  "platform": "Linux",
+  "samples": 20,
+  "model_id": "moonshine-base",
+  "model_sha256": "7f0027dfd857d310b63a85ef57cadf183da712cc374f85a648f8bc18aaa2efc8",
+  "model_bytes": 77476480,
+  "wav_sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+  "wav_bytes": 352078,
+  "binary_sha256": "e97225a416d911fdd9a06415f2acfbff6bf227563800f0f182cf9dcc20f2ceea",
+  "device": "cpu",
+  "threads": 4,
+  "language": "en",
+  "persistent_model_loads": 1,
+  "native_load_ms": 118.299919,
+  "process_wall_ms": 14745.36128397449,
+  "inference_median_ms": 718.034399,
+  "inference_p95_ms": 742.433923,
+  "notes": "Fresh process, warm filesystem cache; no microphone/paste/tray. Shared development host, not an exclusive benchmark."
+}

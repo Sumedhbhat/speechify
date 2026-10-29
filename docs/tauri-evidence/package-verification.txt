@@ -1,0 +1,5 @@
+Debian archive inventory: passed (executable, native library, exception worker, trainer, hash locks)
+Portable per-file SHA256SUMS: passed
+Shared acceptance contract matches current source exactly.
+Python syntax: 15 files passed; optional workers were not executed.
+Native range download: 77,476,480 bytes, pinned SHA-256 verified, partial removed.

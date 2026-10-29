@@ -184,3 +184,11 @@ Speechify takes on Wayland. What CI can't cover is a desktop session on
 Linux or macOS: grabbing the talk key and pasting into another app there have
 only been tested by hand. Runners have no GPU, so GPU speed is the one thing CI can't measure;
 run `speechify selftest` on your own machine for that.
+
+## Merge without publishing
+
+For a merge that should run packaging and checks without publishing a release,
+include `[no-release]` in the final merge or squash commit message. The Release
+workflow still builds and tests the installers; its publish job is skipped.
+Tauri desktop packages are separate CI artifacts and are never published by
+that Python release workflow.

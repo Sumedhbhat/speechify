@@ -1,0 +1,108 @@
+name: Tauri candidate packages
+
+on:
+  push:
+    branches: [main, sb/tauri-candidate-implementation]
+    paths: ['desktop/tauri/**', '.github/workflows/tauri-candidate.yml']
+  pull_request:
+    paths: ['desktop/tauri/**', '.github/workflows/tauri-candidate.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tauri-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Tauri Linux package and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: desktop/tauri
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: desktop/tauri/package-lock.json
+      - name: Install desktop build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libx11-dev libxtst-dev
+      - name: Prepare locked dependencies and pinned native runtime
+        run: |
+          npm ci
+          python3 scripts/prepare-native.py
+      - name: Test desktop backend and optional installer
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --locked
+          python3 scripts/test-optional-installer.py
+      - name: Build Debian and portable packages
+        run: |
+          npm run tauri -- build --ci --bundles deb -- --locked
+          python3 scripts/package-portable.py
+          (cd artifacts/speechify-tauri-candidate-linux-x86_64 && sha256sum -c SHA256SUMS)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: speechify-tauri-linux-candidate
+          path: |
+            desktop/tauri/artifacts/*.tar.gz
+            desktop/tauri/src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: error
+          retention-days: 14
+
+  mac:
+    name: macOS candidate package (no release)
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: desktop/tauri
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: desktop/tauri/package-lock.json
+      - name: Record build host
+        run: |
+          uname -a
+          sw_vers
+          rustc --version
+          cargo --version
+      - name: Prepare locked dependencies and pinned native runtime
+        run: |
+          npm ci
+          python3 scripts/prepare-native.py
+      - name: Test
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --locked --no-default-features
+          python3 scripts/test-optional-installer.py
+      - name: Build app
+        run: npm run tauri -- build --ci --bundles app -- --locked
+      - name: Sign local candidate and create disk image
+        run: |
+          bundle='src-tauri/target/release/bundle/macos/Speechify Tauri Candidate.app'
+          codesign --force --deep --sign - --entitlements src-tauri/Entitlements.plist "$bundle"
+          codesign --verify --deep --strict --verbose=2 "$bundle"
+          mkdir -p artifacts/dmg-stage
+          cp -R "$bundle" artifacts/dmg-stage/
+          ln -s /Applications artifacts/dmg-stage/Applications
+          hdiutil create -volname 'Speechify Tauri Candidate' -srcfolder artifacts/dmg-stage -ov -format UDZO artifacts/speechify-tauri-candidate-mac-arm64.dmg
+          (cd artifacts && shasum -a 256 *.dmg > SHA256SUMS && shasum -a 256 -c SHA256SUMS)
+          printf '%s\n' "$GITHUB_SHA" > artifacts/SOURCE-COMMIT.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: speechify-tauri-macos-candidate
+          path: |
+            desktop/tauri/artifacts/*.dmg
+            desktop/tauri/artifacts/SHA256SUMS
+            desktop/tauri/artifacts/SOURCE-COMMIT.txt
+          if-no-files-found: error
+          retention-days: 14

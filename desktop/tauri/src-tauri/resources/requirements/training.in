@@ -1,0 +1,7 @@
+# CUDA training only (Windows/Linux). Resolve with --torch-backend cu126.
+numpy
+torch>=2.4
+transformers>=4.45,<5
+peft>=0.13
+ctranslate2>=4.5
+soundfile

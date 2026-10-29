@@ -5,6 +5,21 @@ runs locally on Windows, Linux and macOS, on whatever GPU the machine has
 (NVIDIA, AMD, Intel or Apple Silicon), lets you pick from 14 speech models,
 and gets better as you correct it.
 
+## Tauri desktop app
+
+The Rust and TypeScript desktop implementation is in
+[`desktop/tauri`](desktop/tauri/README.md), with a redesigned interface,
+background recording, model management, history and learning controls.
+Build and launch instructions, platform permissions and known limitations are
+in its README. The [parity inventory](docs/candidate-parity.md) distinguishes
+implemented behavior from verified behavior, including the remaining Wayland
+paste and correction-replacement limitations.
+
+Tauri uses its own application ID and data directory. Existing recordings,
+settings and models stay available for explicit import or verified reuse.
+The installers below continue to install the Python application; Tauri packages
+are available as artifacts of the **Tauri candidate packages** workflow.
+
 ## Install
 
 Download the installer for your system from the

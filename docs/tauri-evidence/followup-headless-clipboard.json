@@ -1,0 +1,7 @@
+{
+  "test": "packaged clipboard helper refuses unavailable display without desktop initialization",
+  "binary_sha256": "e97225a416d911fdd9a06415f2acfbff6bf227563800f0f182cf9dcc20f2ceea",
+  "exit_code": 1,
+  "stdout": "{\"Err\":\"Cannot open clipboard display\"}\n",
+  "stderr": "Cannot open clipboard display\n"
+}

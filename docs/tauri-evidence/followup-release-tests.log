@@ -1,0 +1,32 @@
+   Compiling speechify-tauri-candidate v0.1.0 (/workspaces/bhatsumedh/workspaces/worktrees/speechify/t3-860be60d/desktop/tauri/src-tauri)
+    Finished `release` profile [optimized] target(s) in 44.45s
+     Running unittests src/main.rs (desktop/tauri/src-tauri/target/release/deps/speechify_tauri_candidate-df501cc17d9807f0)
+
+running 25 tests
+test config::tests::traversal ... ok
+test config::tests::config_validation ... ok
+test keys::tests::combination ... ok
+test evdev::tests::maps_physical_keys ... ok
+test keys::tests::taps_repeats_and_ctrl_c ... ok
+test learning::tests::both_gates_required ... ok
+test learning::tests::hallucination_rejected ... ok
+test replacement::tests::replacement_range_is_utf16_and_preserves_surroundings ... ok
+test models::tests::catalog_is_complete ... ok
+test learning::selection_tests::auto_selection_respects_memory_and_cpu_consent ... ok
+test models::tests::checksum_and_cancel ... ok
+test service::reload_tests::every_worker_captured_setting_invalidates_loaded_model ... ok
+test desktop::command_tests::invalid_install_does_not_latch_download_and_manual_tap_cancels ... ok
+test desktop::command_tests::refused_replacement_still_saves_correction_and_latest_audio ... ok
+test store::tests::bounded_edits ... ok
+test store::tests::no_guesses ... ok
+test store::persistence_tests::retention_off_keeps_only_latest_until_correction_or_restart ... ok
+test xclipboard::tests::snapshot_formats_are_explicit ... ok
+test store::persistence_tests::restart_correction_export_and_safe_delete ... ok
+test worker::tests::cancellation_reaps_process_group ... ok
+test store::persistence_tests::consistent_import_copies_audio ... ok
+test service::cleanup_tests::unavailable_cleanup_is_an_error_not_empty_output ... ok
+test store::persistence_tests::export_includes_labels_older_than_history_limit ... ok
+test audio::tests::resampling ... ok
+test audio::tests::anti_alias ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s

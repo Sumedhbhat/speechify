@@ -1,0 +1,203 @@
+{
+  "platform": "Linux",
+  "samples": 20,
+  "model_id": "moonshine-base",
+  "model_sha256": "7f0027dfd857d310b63a85ef57cadf183da712cc374f85a648f8bc18aaa2efc8",
+  "model_bytes": 77476480,
+  "wav_sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+  "wav_bytes": 352078,
+  "binary_sha256": "d35c65cc42141ba5d4d08008e10a0e09127d32838ad2bda165b69d7a6c0aa55e",
+  "device": "cpu",
+  "threads": 4,
+  "language": "en",
+  "persistent_model_loads": 1,
+  "native_load_ms": 124.728556,
+  "process_wall_ms": 15276.900338009,
+  "inference_median_ms": 732.7846525,
+  "inference_p95_ms": 872.184838,
+  "inference_ms": [
+    752.0750419999999,
+    872.184838,
+    916.22521,
+    713.744817,
+    732.9201840000001,
+    717.100186,
+    758.857087,
+    732.649121,
+    733.76325,
+    731.909913,
+    702.836515,
+    722.352125,
+    716.261149,
+    732.985628,
+    701.771839,
+    721.078565,
+    750.533405,
+    711.989906,
+    758.482188,
+    740.454843
+  ],
+  "transcripts": [
+    {
+      "iteration": 0,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 752.0750419999999,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 1,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 872.184838,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 2,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 916.22521,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 3,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 713.744817,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 4,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 732.9201840000001,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 5,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 717.100186,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 6,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 758.857087,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 7,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 732.649121,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 8,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 733.76325,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 9,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 731.909913,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 10,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 702.836515,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 11,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 722.352125,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 12,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 716.261149,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 13,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 732.985628,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 14,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 701.771839,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 15,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 721.078565,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 16,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 750.533405,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 17,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 711.989906,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 18,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 758.482188,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    },
+    {
+      "iteration": 19,
+      "result": {
+        "device": "cpu",
+        "inference_ms": 740.454843,
+        "text": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country"
+      }
+    }
+  ],
+  "notes": "Fresh process, warm filesystem cache; no microphone/paste/tray. Shared development host, not an exclusive benchmark."
+}

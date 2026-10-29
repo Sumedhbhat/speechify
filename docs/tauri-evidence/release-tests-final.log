@@ -1,0 +1,25 @@
+    Blocking waiting for file lock on build directory
+   Compiling speechify-tauri-candidate v0.1.0 (/home/bhatsumedh/workspaces/worktrees/speechify/t3-860be60d/desktop/tauri/src-tauri)
+    Finished `release` profile [optimized] target(s) in 1m 54s
+     Running unittests src/main.rs (target/release/deps/speechify_tauri_candidate-df501cc17d9807f0)
+
+running 17 tests
+test config::tests::config_validation ... ok
+test config::tests::traversal ... ok
+test evdev::tests::maps_physical_keys ... ok
+test keys::tests::combination ... ok
+test keys::tests::taps_repeats_and_ctrl_c ... ok
+test learning::tests::both_gates_required ... ok
+test learning::tests::hallucination_rejected ... ok
+test models::tests::catalog_is_complete ... ok
+test platform::tests::newer_copy_survives ... ok
+test store::tests::bounded_edits ... ok
+test models::tests::checksum_and_cancel ... ok
+test store::tests::no_guesses ... ok
+test worker::tests::cancellation_reaps_process_group ... ok
+test store::persistence_tests::restart_correction_export_and_safe_delete ... ok
+test store::persistence_tests::consistent_import_copies_audio ... ok
+test audio::tests::resampling ... ok
+test audio::tests::anti_alias ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
