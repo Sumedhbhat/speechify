@@ -238,3 +238,247 @@ fn manual_recording_refuses_unavailable_or_busy_recorder_and_recovers() {
         .contains("busy"));
     assert!(!service.recording.load(Ordering::SeqCst));
 }
+
+#[cfg(target_os = "linux")]
+struct Running {
+    service: Arc<Service>,
+    threads: Vec<std::thread::JoinHandle<()>>,
+    visibility: Arc<std::sync::Mutex<Vec<bool>>>,
+    navigation: Arc<std::sync::Mutex<Vec<String>>>,
+}
+#[cfg(target_os = "linux")]
+impl Running {
+    fn new(service: Arc<Service>) -> Self {
+        let visibility = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let changes = visibility.clone();
+        let navigation = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let pages = navigation.clone();
+        let threads = start_runtime(
+            service.clone(),
+            move |page| pages.lock().unwrap().push(page.to_owned()),
+            move |visible| {
+                changes.lock().unwrap().push(visible);
+            },
+        )
+        .into_iter()
+        .collect();
+        Self {
+            service,
+            threads,
+            visibility,
+            navigation,
+        }
+    }
+    fn start(&self) {
+        dispatch(&self.service, "manual_start", &json!({})).unwrap();
+        crate::behavior_tests::wait_until(|| self.visibility.lock().unwrap().last() == Some(&true));
+    }
+}
+#[cfg(target_os = "linux")]
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.service.shutdown();
+        for thread in self.threads.drain(..) {
+            let _ = thread.join();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Uses the synthetic ALSA input and isolated Xvfb supplied by test-coverage.sh"]
+fn app_recording_submits_audio_to_history_and_hides_the_finished_indicator() {
+    use crate::behavior_tests::{fake_service, wait_until};
+    let _desktop = crate::behavior_tests::DESKTOP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    assert_eq!(
+        std::env::var("SPEECHIFY_TEST_SYNTHETIC_ALSA").as_deref(),
+        Ok("1")
+    );
+    for keep in [false, true] {
+        let home = Home::new();
+        let service = fake_service(&home, "");
+        let mut cfg = service.config.lock().unwrap().clone();
+        cfg["min_hold_ms"] = json!(1);
+        cfg["keep_mic_open"] = json!(keep);
+        service.update(cfg).unwrap();
+        let runtime = Running::new(service.clone());
+        runtime.start();
+        std::thread::sleep(Duration::from_millis(20));
+        dispatch(&service, "manual_stop", &json!({})).unwrap();
+        wait_until(|| service.snapshot()["state"]["recent"] == "get hub");
+        let history = dispatch(&service, "history", &json!({})).unwrap();
+        assert_eq!(history.as_array().unwrap().len(), 1);
+        assert_eq!(history[0]["raw"], "get hub");
+        assert!(service.snapshot()["state"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("Use Copy text"));
+        wait_until(|| runtime.visibility.lock().unwrap().last() == Some(&false));
+        assert!(!std::fs::read_dir(&home.0).unwrap().any(|p| p
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("pending-")));
+        assert!(!service.snapshot()["manual_recording"].as_bool().unwrap());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Uses the synthetic ALSA input and isolated Xvfb supplied by test-coverage.sh"]
+fn cancelling_an_app_recording_clears_audio_without_saving_history_and_allows_another_hold() {
+    use crate::behavior_tests::{fake_service, wait_until};
+    let _desktop = crate::behavior_tests::DESKTOP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    assert_eq!(
+        std::env::var("SPEECHIFY_TEST_SYNTHETIC_ALSA").as_deref(),
+        Ok("1")
+    );
+    for keep in [false, true] {
+        let home = Home::new();
+        let service = fake_service(&home, "");
+        service.config.lock().unwrap()["keep_mic_open"] = json!(keep);
+        let runtime = Running::new(service.clone());
+        runtime.start();
+        // A deliberately long minimum makes this release a cancellation.
+        service.config.lock().unwrap()["min_hold_ms"] = json!(60_000);
+        dispatch(&service, "manual_stop", &json!({})).unwrap();
+        wait_until(|| runtime.visibility.lock().unwrap().last() == Some(&false));
+        assert!(dispatch(&service, "history", &json!({}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert_eq!(service.snapshot()["state"]["stage"], "Ready");
+        runtime.start();
+        dispatch(&service, "cancel", &json!({})).unwrap();
+        wait_until(|| runtime.visibility.lock().unwrap().last() == Some(&false));
+        assert!(dispatch(&service, "history", &json!({}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Uses the synthetic ALSA input and isolated Xvfb supplied by test-coverage.sh"]
+fn global_holds_cancel_on_escape_reload_shortcuts_and_open_the_requested_pages() {
+    use crate::behavior_tests::{fake_service, wait_until};
+    let _desktop = crate::behavior_tests::DESKTOP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    assert_eq!(
+        std::env::var("SPEECHIFY_TEST_SYNTHETIC_ALSA").as_deref(),
+        Ok("1")
+    );
+    let home = Home::new();
+    let service = fake_service(&home, "");
+    let mut cfg = service.config.lock().unwrap().clone();
+    cfg["min_hold_ms"] = json!(1);
+    service.update(cfg.clone()).unwrap();
+    let runtime = Running::new(service.clone());
+    let key = |action: &str, name: &str| {
+        // Xvfb's physical right modifier codes avoid xdotool's keysym
+        // synthesis, which also presses the corresponding left modifier.
+        let name = match name {
+            "Control_R" => "105",
+            "Alt_R" => "108",
+            other => other,
+        };
+        assert!(std::process::Command::new("xdotool")
+            .args([action, name])
+            .status()
+            .unwrap()
+            .success());
+    };
+    // Leave enough time for the native poller to open its X11 connection.
+    std::thread::sleep(Duration::from_millis(100));
+    for (shortcut, page) in [("f", "History"), ("h", "History"), ("m", "Models")] {
+        let before = runtime.navigation.lock().unwrap().len();
+        key("keydown", "Control_L");
+        key("keydown", "Alt_L");
+        key("keydown", shortcut);
+        wait_until(|| runtime.navigation.lock().unwrap().len() == before + 1);
+        key("keyup", shortcut);
+        key("keyup", "Alt_L");
+        key("keyup", "Control_L");
+        assert_eq!(runtime.navigation.lock().unwrap().last().unwrap(), page);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    key("keydown", "Control_R");
+    wait_until(|| service.snapshot()["state"]["stage"] == "Recording");
+    key("keydown", "Escape");
+    wait_until(|| runtime.visibility.lock().unwrap().last() == Some(&false));
+    key("keyup", "Escape");
+    key("keyup", "Control_R");
+    assert!(dispatch(&service, "history", &json!({}))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .is_empty());
+    cfg["ptt_key"] = json!("alt_r");
+    dispatch(&service, "settings", &cfg).unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    service.learning_busy.store(true, Ordering::SeqCst);
+    key("keydown", "Alt_R");
+    wait_until(|| service.snapshot()["state"]["stage"] == "Recording");
+    key("keyup", "Alt_R");
+    wait_until(|| {
+        dispatch(&service, "history", &json!({}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len()
+            == 1
+    });
+    assert_eq!(service.snapshot()["state"]["recent"], "get hub");
+    service.learning_busy.store(false, Ordering::SeqCst);
+    runtime.start();
+    key("keydown", "Alt_R");
+    key("keyup", "Alt_R");
+    // Global shortcut events cannot end a recording started from the app.
+    assert!(service.snapshot()["manual_recording"].as_bool().unwrap());
+    dispatch(&service, "cancel", &json!({})).unwrap();
+}
+
+#[cfg(not(windows))]
+#[test]
+fn a_correction_is_saved_when_the_platform_cannot_replace_the_original_target() {
+    let home = Home::new();
+    let service = home.service();
+    let sample = service
+        .store
+        .lock()
+        .unwrap()
+        .record(&[0.1; 160], "raw", "get hub", true)
+        .unwrap();
+    assert!(crate::replacement::capture(1, "get hub").is_none());
+    *service.replacement.lock().unwrap() = Some((
+        sample,
+        crate::replacement::Receipt {
+            target: 1,
+            expected: vec![],
+            start: 0,
+            end: 0,
+            process: 0,
+            created: Instant::now(),
+        },
+    ));
+    let error = dispatch(
+        &service,
+        "correct",
+        &json!({"id":sample,"text":"GitHub","replace":true}),
+    )
+    .unwrap_err();
+    assert!(error.contains("Saved correction only"));
+    assert_eq!(
+        dispatch(&service, "history", &json!({})).unwrap()[0]["corrected"],
+        "GitHub"
+    );
+    assert!(service.replacement.lock().unwrap().is_none());
+}

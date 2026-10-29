@@ -110,6 +110,7 @@ pub(crate) fn training_environment(home: &Home, report: &str) {
     std::fs::write(home.0.join("trainer-result.json"), report).unwrap();
 }
 
+#[track_caller]
 pub(crate) fn wait_until(mut condition: impl FnMut() -> bool) {
     let start = std::time::Instant::now();
     while !condition() {
@@ -122,6 +123,8 @@ pub(crate) fn wait_until(mut condition: impl FnMut() -> bool) {
 }
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(all(feature = "desktop", target_os = "linux"))]
+pub(crate) static DESKTOP: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub(crate) struct Home(pub PathBuf);
 impl Home {
     pub(crate) fn new() -> Self {
@@ -319,6 +322,156 @@ fn nonfinite_or_invalid_wav_files_are_rejected_before_inference() {
     assert!(audio::load(&path).unwrap_err().contains("Non-finite"));
     std::fs::write(&path, "not audio").unwrap();
     assert!(audio::load(&path).is_err());
+}
+
+#[test]
+fn unreadable_settings_and_failed_atomic_replacement_preserve_the_previous_configuration() {
+    let home = Home::new();
+    let expected = config::defaults();
+    config::save(&home.0, &expected).unwrap();
+    std::fs::create_dir(home.0.join("config.tmp")).unwrap();
+    assert!(config::save(&home.0, &expected).is_err());
+    assert_eq!(config::load(&home.0).unwrap(), expected);
+    std::fs::remove_dir(home.0.join("config.tmp")).unwrap();
+    std::fs::remove_file(home.0.join("config.toml")).unwrap();
+    std::fs::create_dir(home.0.join("config.toml")).unwrap();
+    assert!(config::load(&home.0).is_err());
+    assert!(config::save(&home.0, &expected).is_err());
+    assert!(home.0.join("config.toml").is_dir());
+}
+
+#[test]
+fn truncated_pcm_and_float_recordings_are_rejected_instead_of_transcribing_partial_audio() {
+    let home = Home::new();
+    for format in [hound::SampleFormat::Float, hound::SampleFormat::Int] {
+        let path = home.0.join("truncated.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16000,
+            bits_per_sample: if format == hound::SampleFormat::Float {
+                32
+            } else {
+                16
+            },
+            sample_format: format,
+        };
+        let mut wav = hound::WavWriter::create(&path, spec).unwrap();
+        if format == hound::SampleFormat::Float {
+            wav.write_sample(0.5f32).unwrap();
+        } else {
+            wav.write_sample(500i16).unwrap();
+        }
+        wav.finalize().unwrap();
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len(file.metadata().unwrap().len() - 1).unwrap();
+        assert!(audio::load(&path).is_err());
+    }
+}
+
+#[test]
+fn deleting_the_only_unretained_recording_prevents_later_recovery_or_learning() {
+    let home = Home::new();
+    let mut store = home.store();
+    let sample = store
+        .record(&[0.1; 160], "raw", "unsaved voice", false)
+        .unwrap();
+    store.delete(sample).unwrap();
+    assert!(store.history("", "").unwrap().is_empty());
+    assert!(store.edit(sample, "should never be learned").is_err());
+    assert!(!home
+        .0
+        .join(format!("audio/corrected-{sample}.wav"))
+        .exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn helpers_are_refused_when_the_os_cannot_establish_parent_ownership() {
+    use std::os::{
+        fd::{AsRawFd, FromRawFd, OwnedFd},
+        unix::process::CommandExt,
+    };
+    for (denied, expected) in [
+        (libc::SYS_prctl, libc::EACCES),
+        (libc::SYS_getppid, libc::ESRCH),
+    ] {
+        // The filter applies only in the forked child. A byte on this pipe
+        // proves setup succeeded before the production ownership hook ran.
+        let mut pipe = [-1; 2];
+        assert_eq!(
+            unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) },
+            0
+        );
+        let reader = unsafe { OwnedFd::from_raw_fd(pipe[0]) };
+        let writer = unsafe { OwnedFd::from_raw_fd(pipe[1]) };
+        let fd = writer.as_raw_fd();
+        let mut command = std::process::Command::new("/usr/bin/true");
+        unsafe {
+            command.pre_exec(move || {
+                let filters = [
+                    libc::sock_filter {
+                        code: (libc::BPF_LD | libc::BPF_W | libc::BPF_ABS) as u16,
+                        jt: 0,
+                        jf: 0,
+                        k: 0,
+                    },
+                    libc::sock_filter {
+                        code: (libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K) as u16,
+                        jt: 0,
+                        jf: 1,
+                        k: denied as u32,
+                    },
+                    libc::sock_filter {
+                        code: (libc::BPF_RET | libc::BPF_K) as u16,
+                        jt: 0,
+                        jf: 0,
+                        k: libc::SECCOMP_RET_ERRNO | libc::EACCES as u32,
+                    },
+                    libc::sock_filter {
+                        code: (libc::BPF_RET | libc::BPF_K) as u16,
+                        jt: 0,
+                        jf: 0,
+                        k: libc::SECCOMP_RET_ALLOW,
+                    },
+                ];
+                let program = libc::sock_fprog {
+                    len: filters.len() as u16,
+                    filter: filters.as_ptr().cast_mut(),
+                };
+                if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+                    || libc::syscall(
+                        libc::SYS_seccomp,
+                        libc::SECCOMP_SET_MODE_FILTER,
+                        0,
+                        &program,
+                    ) != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::write(fd, b"1".as_ptr().cast(), 1) != 1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let error = match crate::child_owner::spawn(&mut command) {
+            Err(error) => error,
+            Ok((mut child, _owner)) => {
+                child.wait().unwrap();
+                panic!("helper escaped its ownership requirements");
+            }
+        };
+        let mut marker = [0u8];
+        assert_eq!(
+            unsafe { libc::read(reader.as_raw_fd(), marker.as_mut_ptr().cast(), 1) },
+            1
+        );
+        assert_eq!(marker, *b"1");
+        assert_eq!(
+            error,
+            std::io::Error::from_raw_os_error(expected).to_string()
+        );
+    }
 }
 
 #[test]

@@ -261,9 +261,21 @@ fn show(app: &tauri::AppHandle, page: &str) {
     }
 }
 fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
+    let indicator = app.clone();
+    start_runtime(s, move |page| show(&app, page), move |visible| {
+        if let Some(w) = indicator.get_webview_window("indicator") {
+            if visible { let _ = w.show(); } else { let _ = w.hide(); }
+        }
+    });
+}
+fn start_runtime(
+    s: Arc<Service>,
+    navigate: impl Fn(&str) + Send + 'static,
+    indicator: impl Fn(bool) + Send + 'static,
+) -> [std::thread::JoinHandle<()>; 3] {
     let (tx, rx) = mpsc::sync_channel::<(Vec<f32>, u64, u64)>(4);
     let infer = s.clone();
-    std::thread::spawn(move || {
+    let inference = std::thread::spawn(move || {
         for (audio, target, generation) in rx {
             if infer.stopping.load(Ordering::SeqCst) {
                 break;
@@ -304,8 +316,7 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
     let (capture_tx, capture_rx) = mpsc::sync_channel::<(Action, u64, u64)>(32);
     *s.capture_tx.lock().unwrap() = Some(capture_tx.clone());
     let recorder = s.clone();
-    let indicator = app.clone();
-    std::thread::spawn(move || {
+    let recording = std::thread::spawn(move || {
         let mut capture: Option<Capture> = None;
         let mut active_target = 0;
         let mut active_capture = false;
@@ -346,9 +357,7 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                                 "microphone_ready",
                                 json!({"clock_ms":crate::store::now()*1000.}),
                             );
-                            if let Some(w) = indicator.get_webview_window("indicator") {
-                                let _ = w.show();
-                            }
+                            indicator(true);
                         }
                     }
                     Action::Cancel => {
@@ -361,9 +370,7 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                             capture = None;
                         }
                         recorder.set_stage("Ready");
-                        if let Some(w) = indicator.get_webview_window("indicator") {
-                            let _ = w.hide();
-                        }
+                        indicator(false);
                     }
                     Action::Submit => {
                         if !active_capture {
@@ -429,14 +436,12 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                 )
                 && !recorder.recording.load(Ordering::SeqCst)
             {
-                if let Some(w) = indicator.get_webview_window("indicator") {
-                    let _ = w.hide();
-                }
+                indicator(false);
                 hide_at = None;
             }
         }
     });
-    std::thread::spawn(move || {
+    let keyboard = std::thread::spawn(move || {
         let poll = match platform::Poller::new() {
             Ok(p) => p,
             Err(e) => {
@@ -492,7 +497,7 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                     if n.event(&key, pressed, clock.elapsed().as_millis() as u64)
                         == Some(Action::Start)
                     {
-                        show(&app, ["History", "History", "Models"][i]);
+                        navigate(["History", "History", "Models"][i]);
                     }
                 }
                 if s.manual_started.lock().unwrap().is_some() {
@@ -524,6 +529,7 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
             std::thread::sleep(Duration::from_millis(8));
         }
     });
+    [inference, recording, keyboard]
 }
 
 pub fn run() -> Result<()> {

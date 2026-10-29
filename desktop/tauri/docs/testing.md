@@ -41,6 +41,10 @@ combining execution counts from different binaries and target triples.
 Generic instantiations count as one source function; distinct closure bodies
 remain separate. Source and dependency fingerprints prevent combining reports
 from different versions of the application.
+Linux uses continuous LLVM profiling so pre-exec child setup and cancelled
+helpers retain their execution counts. A standalone collector test verifies
+this behavior before the application run. Add `--details` to the gate command
+to list the uncovered lines and functions.
 
 ```sh
 python3 scripts/check-coverage.py \

@@ -448,6 +448,7 @@ mod os {
         fn keybd_event(key: u8, scan: u8, flags: u32, extra: usize);
         fn EnumClipboardFormats(format: u32) -> u32;
         fn GetClipboardSequenceNumber() -> u32;
+        fn GetClipboardOwner() -> *mut c_void;
     }
     #[link(name = "kernel32")]
     extern "system" {
@@ -544,12 +545,36 @@ mod os {
             }
         }
     }
-    struct Clip(*mut c_void);
+    struct Clip {
+        window: *mut c_void,
+        locked: bool,
+    }
+    impl Clip {
+        fn committed_generation(&mut self) -> Result<u32> {
+            unsafe {
+                // CloseClipboard commits synthesized text formats and advances
+                // the sequence. Retain our unique owner window, then reacquire
+                // the lock and prove no other writer took ownership meanwhile.
+                CloseClipboard();
+                self.locked = false;
+                if OpenClipboard(self.window) == 0 {
+                    return Err("Clipboard is busy; retry".into());
+                }
+                self.locked = true;
+                if GetClipboardOwner() != self.window {
+                    return Err("Clipboard changed before paste; transcript saved".into());
+                }
+                Ok(GetClipboardSequenceNumber())
+            }
+        }
+    }
     impl Drop for Clip {
         fn drop(&mut self) {
             unsafe {
-                CloseClipboard();
-                DestroyWindow(self.0);
+                if self.locked {
+                    CloseClipboard();
+                }
+                DestroyWindow(self.window);
             }
         }
     }
@@ -577,7 +602,7 @@ mod os {
                 DestroyWindow(window);
                 Err("Clipboard is busy; retry".into())
             } else {
-                Ok(Clip(window))
+                Ok(Clip { window, locked: true })
             }
         }
     }
@@ -608,7 +633,7 @@ mod os {
         let mut formats = Vec::new();
         let generation;
         {
-            let _guard = open()?;
+            let mut guard = open()?;
             unsafe {
                 let mut format = EnumClipboardFormats(0);
                 let mut total = 0;
@@ -649,20 +674,13 @@ mod os {
                     GlobalFree(h);
                     return Err("Clipboard set failed".into());
                 }
-                generation = GetClipboardSequenceNumber();
-                #[cfg(test)]
-                eprintln!("clipboard sequence while open={generation}");
+                generation = guard.committed_generation()?;
             }
         }
         Ok(move || {
             let _guard = open()?;
             unsafe {
                 // Sequence check and restore share the clipboard lock: no check/write race.
-                #[cfg(test)]
-                eprintln!(
-                    "clipboard restore expected={generation} actual={}",
-                    GetClipboardSequenceNumber()
-                );
                 if GetClipboardSequenceNumber() != generation {
                     return Ok(());
                 }

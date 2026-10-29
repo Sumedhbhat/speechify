@@ -71,6 +71,9 @@ fn key(action: &str, name: &str) {
 
 #[test]
 fn x11_key_state_focus_guards_and_copy_match_the_native_contract() {
+    let _desktop = crate::behavior_tests::DESKTOP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let window = Window::new();
     let poller = Poller::new().unwrap();
     assert_eq!(poller.focus().unwrap(), window.id);

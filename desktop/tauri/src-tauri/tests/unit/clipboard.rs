@@ -86,33 +86,36 @@ fn native_clipboard_preserves_unicode_restores_previous_copy_and_protects_newer_
 #[ignore = "Mutates the OS clipboard; run on a disposable desktop with --include-ignored"]
 fn macos_rich_clipboard_data_survives_a_transient_dictation() {
     let _clipboard = CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner());
+    // Write an explicit native RTF type. pbcopy/pbpaste may coerce it to text.
+    let swift = |script: &str| {
+        let output = Command::new("/usr/bin/swift")
+            .args(["-e", script])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output.stdout
+    };
     let original = r"{\rtf1\ansi A bold {\b word}}";
-    let mut writer = Command::new("/usr/bin/pbcopy")
-        .stdin(Stdio::piped())
-        .spawn()
-        .unwrap();
-    writer
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(original.as_bytes())
-        .unwrap();
-    assert!(writer.wait().unwrap().success());
-    let before = Command::new("/usr/bin/pbpaste")
-        .args(["-Prefer", "rtf"])
-        .output()
-        .unwrap();
-    assert!(before.status.success());
-    assert!(String::from_utf8_lossy(&before.stdout).contains(r"\rtf"));
+    swift(
+        r##"import AppKit
+let pb = NSPasteboard.general
+pb.clearContents()
+guard pb.setData(Data(#"{\rtf1\ansi A bold {\b word}}"#.utf8), forType: .rtf) else { exit(1) }
+"##,
+    );
+    let read_rtf = r#"import AppKit
+guard let data = NSPasteboard.general.data(forType: .rtf) else { exit(1) }
+FileHandle.standardOutput.write(data)
+"#;
+    assert_eq!(swift(read_rtf), original.as_bytes());
     let restore = os::snapshot_and_write("Dictation").unwrap();
     assert_eq!(read(), "Dictation");
     restore().unwrap();
-    let copied = Command::new("/usr/bin/pbpaste")
-        .args(["-Prefer", "rtf"])
-        .output()
-        .unwrap();
-    assert!(copied.status.success());
-    assert_eq!(copied.stdout, before.stdout);
+    assert_eq!(swift(read_rtf), original.as_bytes());
 }
 
 #[cfg(windows)]

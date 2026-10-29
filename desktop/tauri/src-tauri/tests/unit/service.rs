@@ -177,3 +177,51 @@ fn cancelling_an_inflight_worker_reports_cancellation_and_never_restarts_it() {
         .is_empty());
     assert_eq!(service.snapshot()["state"]["stage"], "Cancelled");
 }
+
+#[test]
+fn loading_models_reports_missing_environments_and_rejects_unverified_native_files() {
+    for id in ["distil-whisper-large-v3", "kyutai-stt-1b"] {
+        let home = Home::new();
+        std::fs::create_dir_all(home.0.join("models").join(id)).unwrap();
+        let mut cfg = crate::config::defaults();
+        cfg["model"] = json!(id);
+        crate::config::save(&home.0, &cfg).unwrap();
+        let service = home.service();
+        assert!(service
+            .preload()
+            .unwrap_err()
+            .contains("environment is not installed"));
+        assert!(!service.snapshot()["state"]["ready"].as_bool().unwrap());
+        assert_eq!(service.pid.load(Ordering::SeqCst), 0);
+    }
+    let home = Home::new();
+    let mut cfg = crate::config::defaults();
+    cfg["model"] = json!("moonshine-base");
+    crate::config::save(&home.0, &cfg).unwrap();
+    std::fs::write(
+        home.0.join("models/moonshine-base.gguf"),
+        "corrupted download",
+    )
+    .unwrap();
+    let service = home.service();
+    assert!(service.preload().unwrap_err().contains("SHA-256 mismatch"));
+    assert_eq!(service.pid.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn timing_logs_rotate_at_two_megabytes_and_preserve_the_latest_event() {
+    let home = Home::new();
+    let service = home.service();
+    let path = home.0.join("logs/timings.jsonl");
+    let previous = "x".repeat(2_000_001);
+    std::fs::write(&path, &previous).unwrap();
+    std::fs::write(home.0.join("logs/timings.1.jsonl"), "older rotation").unwrap();
+    service.log("test dictation", json!({"inference_ms":42}));
+    assert_eq!(
+        std::fs::read_to_string(home.0.join("logs/timings.1.jsonl")).unwrap(),
+        previous
+    );
+    let event: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(event["event"], "test dictation");
+    assert_eq!(event["values"]["inference_ms"], 42);
+}
