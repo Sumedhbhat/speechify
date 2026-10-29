@@ -355,7 +355,7 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                         active_capture = false;
                         if keep {
                             if let Some(c) = &capture {
-                                c.data.lock().unwrap().clear();
+                                c.audio.clear();
                             }
                         } else {
                             capture = None;
@@ -371,7 +371,7 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                         }
                         active_capture = false;
                         if let Some(c) = &capture {
-                            match c.take() {
+                            match c.audio.take() {
                                 Ok(a) => {
                                     if a.len() < 160 {
                                         recorder.error("Microphone was not ready before release; try holding longer");
@@ -411,10 +411,10 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
             }
             if let Some(c) = &capture {
                 if !active_capture {
-                    c.preroll();
+                    c.audio.preroll();
                 }
-                recorder.state.lock().unwrap()["level"] = json!(c.level());
-                let err = c.error.lock().unwrap().take();
+                recorder.state.lock().unwrap()["level"] = json!(c.audio.level());
+                let err = c.audio.take_error();
                 if let Some(e) = err {
                     recorder.error(e);
                     capture = None;
@@ -615,7 +615,7 @@ pub fn run() -> Result<()> {
             .visible(false)
             .build()?;
             runtime(app.handle().clone(), s.clone());
-            crate::learning::scheduler(s.clone());
+            let _ = crate::learning::scheduler(s.clone());
             std::thread::spawn(move || {
                 if let Err(e) = s.preload() {
                     s.error(e);

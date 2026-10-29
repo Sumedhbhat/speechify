@@ -1,6 +1,9 @@
 use crate::config::Result;
 use std::path::Path;
 pub const RATE: u32 = 16000;
+#[cfg(all(test, feature = "desktop"))]
+#[path = "../tests/unit/capture.rs"]
+mod behavior;
 pub fn resample(input: &[f32], rate: u32, channels: usize) -> Vec<f32> {
     if rate == 0 || channels == 0 {
         return vec![];
@@ -100,10 +103,14 @@ pub mod capture {
     pub struct Capture {
         pub _stream: cpal::Stream,
         pub actual_device: String,
-        pub data: Arc<Mutex<Vec<f32>>>,
-        pub rate: u32,
-        pub channels: usize,
-        pub error: Arc<Mutex<Option<String>>>,
+        pub audio: CapturedAudio,
+    }
+    #[derive(Clone)]
+    pub struct CapturedAudio {
+        data: Arc<Mutex<Vec<f32>>>,
+        error: Arc<Mutex<Option<String>>>,
+        rate: u32,
+        channels: usize,
     }
     impl Capture {
         pub fn open(name: &str) -> Result<Self> {
@@ -124,29 +131,20 @@ pub mod capture {
             let config = device.default_input_config().map_err(|e| e.to_string())?;
             let rate = config.sample_rate();
             let channels = config.channels() as usize;
-            let data = Arc::new(Mutex::new(Vec::new()));
-            let error = Arc::new(Mutex::new(None));
+            let audio = CapturedAudio::new(rate, channels);
             macro_rules! stream {
-                ($t:ty,$convert:expr) => {{
-                    let d = data.clone();
-                    let e = error.clone();
+                ($t:ty) => {{
+                    let captured = audio.clone();
                     device
                         .build_input_stream(
                             config.clone().into(),
                             move |buf: &[$t], _: &cpal::InputCallbackInfo| {
-                                let mut out = d.lock().unwrap();
-                                let max = rate as usize * channels * 600;
-                                if out.len() + buf.len() <= max {
-                                    out.extend(buf.iter().map($convert));
-                                } else {
-                                    *e.lock().unwrap() =
-                                        Some("Recording exceeds ten-minute limit".into());
-                                }
+                                captured.push(buf);
                             },
                             {
-                                let e = error.clone();
+                                let captured = audio.clone();
                                 move |err| {
-                                    *e.lock().unwrap() = Some(format!(
+                                    captured.fail(format!(
                                         "Microphone disconnected or unavailable: {err}"
                                     ));
                                 }
@@ -157,23 +155,50 @@ pub mod capture {
                 }};
             }
             let stream = match config.sample_format() {
-                cpal::SampleFormat::F32 => stream!(f32, |x: &f32| *x),
-                cpal::SampleFormat::I16 => stream!(i16, |x: &i16| *x as f32 / 32768.),
-                cpal::SampleFormat::U16 => stream!(u16, |x: &u16| (*x as f32 - 32768.) / 32768.),
+                cpal::SampleFormat::F32 => stream!(f32),
+                cpal::SampleFormat::I16 => stream!(i16),
+                cpal::SampleFormat::U16 => stream!(u16),
                 f => return Err(format!("Unsupported microphone sample format: {f}")),
             };
             stream.play().map_err(|e| e.to_string())?;
             Ok(Self {
                 _stream: stream,
                 actual_device,
-                data,
-                rate,
-                channels,
-                error,
+                audio,
             })
         }
+    }
+    impl CapturedAudio {
+        pub fn new(rate: u32, channels: usize) -> Self {
+            Self {
+                data: Arc::new(Mutex::new(Vec::new())),
+                error: Arc::new(Mutex::new(None)),
+                rate,
+                channels,
+            }
+        }
+        pub fn push<T: cpal::Sample>(&self, samples: &[T])
+        where
+            f32: cpal::FromSample<T>,
+        {
+            let mut data = self.data.lock().unwrap();
+            if data.len() + samples.len() <= self.rate as usize * self.channels * 600 {
+                data.extend(samples.iter().map(|sample| sample.to_sample::<f32>()));
+            } else {
+                self.fail("Recording exceeds ten-minute limit".into());
+            }
+        }
+        pub fn fail(&self, message: String) {
+            *self.error.lock().unwrap() = Some(message);
+        }
+        pub fn take_error(&self) -> Option<String> {
+            self.error.lock().unwrap().take()
+        }
+        pub fn clear(&self) {
+            self.data.lock().unwrap().clear();
+        }
         pub fn take(&self) -> Result<Vec<f32>> {
-            if let Some(e) = self.error.lock().unwrap().take() {
+            if let Some(e) = self.take_error() {
                 return Err(e);
             }
             Ok(resample(

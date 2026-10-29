@@ -1,5 +1,11 @@
 //! Native key state and target guards. Created only by a normal desktop launch.
 use crate::config::Result;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "../tests/unit/platform.rs"]
+mod behavior;
+#[cfg(all(test, not(target_os = "linux")))]
+#[path = "../tests/unit/clipboard.rs"]
+mod clipboard_behavior;
 use std::{
     collections::BTreeSet,
     io::Write,
@@ -163,24 +169,6 @@ mod os {
             v.push((format!("f{i}"), format!("F{i}")));
         }
         v
-    }
-    #[allow(dead_code)]
-    pub fn read_clipboard() -> Result<String> {
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            let o = Command::new("wl-paste")
-                .arg("--no-newline")
-                .output()
-                .map_err(|e| e.to_string())?;
-            return String::from_utf8(o.stdout).map_err(|e| e.to_string());
-        }
-        let o = Command::new("xclip")
-            .args(["-selection", "clipboard", "-o"])
-            .output()
-            .map_err(|e| format!("Install xclip: {e}"))?;
-        if !o.status.success() {
-            return Err("Clipboard is not text".into());
-        }
-        String::from_utf8(o.stdout).map_err(|e| e.to_string())
     }
     pub fn write_clipboard(text: &str) -> Result<()> {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
@@ -392,13 +380,6 @@ mod os {
         ];
         letters.into_iter().map(|(s, k)| (s.into(), k)).collect()
     }
-    #[allow(dead_code)]
-    pub fn read_clipboard() -> Result<String> {
-        let o = Command::new("/usr/bin/pbpaste")
-            .output()
-            .map_err(|e| e.to_string())?;
-        String::from_utf8(o.stdout).map_err(|e| e.to_string())
-    }
     pub fn write_clipboard(text: &str) -> Result<()> {
         let mut c = Command::new("/usr/bin/pbcopy")
             .stdin(Stdio::piped())
@@ -598,27 +579,6 @@ mod os {
             } else {
                 Ok(Clip(window))
             }
-        }
-    }
-    #[allow(dead_code)]
-    pub fn read_clipboard() -> Result<String> {
-        let _guard = open()?;
-        unsafe {
-            let h = GetClipboardData(13);
-            if h.is_null() {
-                return Err("Clipboard is not Unicode text".into());
-            }
-            let p = GlobalLock(h) as *const u16;
-            if p.is_null() {
-                return Err("Clipboard lock failed".into());
-            }
-            let mut len = 0;
-            while len < (GlobalSize(h) / 2).min(1_000_000) && *p.add(len) != 0 {
-                len += 1;
-            }
-            let text = String::from_utf16_lossy(std::slice::from_raw_parts(p, len));
-            GlobalUnlock(h);
-            Ok(text)
         }
     }
     pub fn write_clipboard(text: &str) -> Result<()> {

@@ -6,6 +6,10 @@ use std::{
     sync::{atomic::Ordering, Arc},
     time::{Duration, Instant},
 };
+#[cfg(test)]
+#[path = "../tests/unit/installer.rs"]
+mod behavior;
+const CANCELLED: &str = "Installation cancelled or timed out. Retry resumes completed environment setup and restarts incomplete model files.";
 pub fn install(s: &Arc<Service>, id: &str) -> Result<()> {
     let family = match id {
         "distil-whisper-large-v3" => "whisper",
@@ -74,7 +78,7 @@ pub fn install(s: &Arc<Service>, id: &str) -> Result<()> {
         {
             crate::worker::terminate(child.id());
             let _ = child.wait();
-            break Err("Installation cancelled or timed out. Retry resumes completed environment setup and restarts incomplete model files.".into());
+            break Err(CANCELLED.into());
         }
         if let Ok(mut progress) = rx.recv_timeout(Duration::from_millis(100)) {
             progress["id"] = json!(id);
@@ -82,11 +86,14 @@ pub fn install(s: &Arc<Service>, id: &str) -> Result<()> {
         }
         match child.try_wait() {
             Ok(Some(status)) => {
+                if s.cancel.load(Ordering::SeqCst) || s.stopping.load(Ordering::SeqCst) {
+                    break Err(CANCELLED.into());
+                }
                 break if status.success() {
                     Ok(())
                 } else {
                     Err("Optional installation failed. Check Python 3, uv, available disk space and network; Retry safely repairs partial setup.".into())
-                }
+                };
             }
             Ok(None) => (),
             Err(e) => {

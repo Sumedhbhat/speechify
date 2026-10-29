@@ -239,3 +239,195 @@ fn battery_power_prevents_training_without_changing_the_active_model() {
     assert_eq!(*service.config.lock().unwrap(), before);
     assert!(!home.0.join("training-report.json").exists());
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_power_reading_distinguishes_mains_battery_desktops_and_unavailable_status() {
+    let home = Home::new();
+    assert!(!linux_mains(&home.0.join("absent")));
+    assert!(linux_mains(&home.0));
+    let battery = home.0.join("BAT0");
+    std::fs::create_dir(&battery).unwrap();
+    std::fs::write(battery.join("type"), "Battery\n").unwrap();
+    std::fs::write(battery.join("status"), "Discharging\n").unwrap();
+    assert!(!linux_mains(&home.0));
+    std::fs::write(battery.join("status"), "Charging\n").unwrap();
+    assert!(linux_mains(&home.0));
+    std::fs::write(battery.join("status"), "Full\n").unwrap();
+    assert!(linux_mains(&home.0));
+    std::fs::write(battery.join("status"), "Unknown\n").unwrap();
+    let adapter = home.0.join("AC");
+    std::fs::create_dir(&adapter).unwrap();
+    std::fs::write(adapter.join("online"), "1\n").unwrap();
+    assert!(linux_mains(&home.0));
+    std::fs::write(adapter.join("online"), "0\n").unwrap();
+    assert!(!linux_mains(&home.0));
+}
+
+fn idle(service: &Arc<Service>) -> (Value, Instant) {
+    *service.last_activity.lock().unwrap() = Instant::now() - Duration::from_secs(600);
+    let mut cfg = service.config.lock().unwrap().clone();
+    cfg["teacher"] = json!("off");
+    (cfg, Instant::now() - Duration::from_secs(1))
+}
+
+#[test]
+fn scheduler_pauses_when_busy_recently_active_disabled_or_on_battery() {
+    let home = Home::new();
+    let service = home.service();
+    let (mut cfg, mut retry) = idle(&service);
+    scheduler_tick(&service, &cfg, false, &mut retry);
+    assert!(service
+        .store
+        .lock()
+        .unwrap()
+        .get_state("teacher_status")
+        .is_err());
+    service.learning_busy.store(true, Ordering::SeqCst);
+    scheduler_tick(&service, &cfg, false, &mut retry);
+    assert_eq!(service.snapshot()["state"]["stage"], "Cancelled");
+    service.learning_busy.store(false, Ordering::SeqCst);
+    cfg["teacher"] = json!("unknown-model");
+    for reason in [
+        "download",
+        "recording",
+        "learning",
+        "disabled",
+        "recent",
+        "backoff",
+    ] {
+        service
+            .downloading
+            .store(reason == "download", Ordering::SeqCst);
+        service
+            .recording
+            .store(reason == "recording", Ordering::SeqCst);
+        service
+            .learning_busy
+            .store(reason == "learning", Ordering::SeqCst);
+        cfg["learn_auto"] = json!(reason != "disabled");
+        *service.last_activity.lock().unwrap() =
+            Instant::now() - Duration::from_secs(if reason == "recent" { 0 } else { 600 });
+        retry = if reason == "backoff" {
+            Instant::now() + Duration::from_secs(60)
+        } else {
+            Instant::now() - Duration::from_secs(1)
+        };
+        scheduler_tick(&service, &cfg, true, &mut retry);
+        assert!(
+            service
+                .store
+                .lock()
+                .unwrap()
+                .get_state("teacher_status")
+                .is_err(),
+            "scheduler ignored {reason}"
+        );
+    }
+}
+
+#[test]
+fn teacher_failure_is_reported_and_backed_off_without_starting_a_download() {
+    let home = Home::new();
+    let service = home.service();
+    let (mut cfg, mut retry) = idle(&service);
+    cfg["teacher"] = json!("unknown-model");
+    cfg["teacher_on_cpu"] = json!(true);
+    cfg["device"] = json!("cpu");
+    scheduler_tick(&service, &cfg, true, &mut retry);
+    assert!(service
+        .store
+        .lock()
+        .unwrap()
+        .get_state("teacher_status")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .contains("Unknown catalog model"));
+    assert!(!service.downloading.load(Ordering::SeqCst));
+    assert!(retry > Instant::now() + Duration::from_secs(3500));
+    let status = service
+        .store
+        .lock()
+        .unwrap()
+        .get_state("teacher_status")
+        .unwrap();
+    cfg["teacher"] = json!("off");
+    scheduler_tick(&service, &cfg, true, &mut retry);
+    assert_eq!(
+        service
+            .store
+            .lock()
+            .unwrap()
+            .get_state("teacher_status")
+            .unwrap(),
+        status
+    );
+}
+
+#[test]
+fn scheduler_labels_unedited_audio_and_respects_explicit_cpu_consent() {
+    let home = Home::new();
+    let service = fake_service(&home, "");
+    let (mut cfg, mut retry) = idle(&service);
+    cfg["teacher"] = json!("distil-whisper-large-v3");
+    cfg["device"] = json!("cpu");
+    scheduler_tick(&service, &cfg, true, &mut retry);
+    assert!(service
+        .store
+        .lock()
+        .unwrap()
+        .get_state("teacher_status")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .contains("teacher_on_cpu"));
+    cfg["teacher_on_cpu"] = json!(true);
+    retry = Instant::now() - Duration::from_secs(1);
+    scheduler_tick(&service, &cfg, true, &mut retry);
+    assert!(service
+        .store
+        .lock()
+        .unwrap()
+        .get_state("teacher_status")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .contains("Install teacher"));
+    std::fs::write(home.0.join("models/distil-whisper-large-v3.gguf"), "marker").unwrap();
+    std::fs::create_dir_all(home.0.join("models/distil-whisper-large-v3")).unwrap();
+    let id = service
+        .store
+        .lock()
+        .unwrap()
+        .record(&[0.1; 16000], "student guess", "student guess", true)
+        .unwrap();
+    retry = Instant::now() - Duration::from_secs(1);
+    scheduler_tick(&service, &cfg, true, &mut retry);
+    let rows = service.store.lock().unwrap().history("", "").unwrap();
+    assert_eq!(rows[0]["id"], id);
+    assert_eq!(rows[0]["teacher_text"], "get hub");
+    assert_eq!(rows[0]["teacher_model"], "distil-whisper-large-v3");
+    assert_eq!(rows[0]["pasted"], "student guess");
+    assert!(!service.learning_busy.load(Ordering::SeqCst));
+    scheduler_tick(&service, &cfg, true, &mut retry);
+    assert_eq!(
+        service.store.lock().unwrap().history("", "").unwrap()[0]["teacher_text"],
+        "get hub"
+    );
+}
+
+#[test]
+fn shutdown_releases_the_background_scheduler_without_starting_work() {
+    let home = Home::new();
+    let service = home.service();
+    let task = scheduler(service.clone());
+    service.shutdown();
+    task.join().unwrap();
+    assert!(service
+        .store
+        .lock()
+        .unwrap()
+        .get_state("last_training")
+        .is_err());
+}

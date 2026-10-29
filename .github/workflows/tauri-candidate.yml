@@ -44,7 +44,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libx11-dev libxtst-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libx11-dev libxtst-dev xvfb xauth xclip xdotool dbus libglib2.0-bin
       - name: Install coverage tools
         run: |
           rustup component add llvm-tools-preview
@@ -54,6 +54,7 @@ jobs:
       - name: Exercise application behavior and collect native coverage
         env:
           PYTHON: python
+          SPEECHIFY_TEST_DISPOSABLE_DESKTOP: '1'
         run: bash scripts/test-coverage.sh --collect-only
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()

@@ -7,14 +7,21 @@ use std::{
     fs::{File, OpenOptions},
     io::Read,
     os::unix::fs::OpenOptionsExt,
+    path::Path,
 };
+#[cfg(test)]
+#[path = "../tests/unit/evdev.rs"]
+mod behavior;
 pub struct Keyboard {
     devices: RefCell<Vec<(File, BTreeSet<String>)>>,
 }
 impl Keyboard {
     pub fn open() -> Result<Self> {
+        Self::open_at(Path::new("/dev/input/by-id"))
+    }
+    fn open_at(root: &Path) -> Result<Self> {
         let mut devices = vec![];
-        let entries=std::fs::read_dir("/dev/input/by-id").map_err(|_|"Wayland recording requires explicit read permission on your keyboard's /dev/input/by-id/*-event-kbd device. No permissions are changed automatically.")?;
+        let entries=std::fs::read_dir(root).map_err(|_|"Wayland recording requires explicit read permission on your keyboard's /dev/input/by-id/*-event-kbd device. No permissions are changed automatically.")?;
         for entry in entries.flatten() {
             if !entry.file_name().to_string_lossy().ends_with("-event-kbd") {
                 continue;

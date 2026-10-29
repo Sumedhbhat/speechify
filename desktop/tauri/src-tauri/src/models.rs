@@ -2,7 +2,7 @@ use crate::config::{owned, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -134,7 +134,8 @@ fn download(
         .map_err(|e| e.to_string())?;
     let mut f = std::fs::OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
+        .truncate(false)
         .open(tmp)
         .map_err(|e| e.to_string())?;
     let mut bytes = f.metadata().map_err(|e| e.to_string())?.len();
@@ -142,6 +143,7 @@ fn download(
         f.set_len(0).map_err(|e| e.to_string())?;
         bytes = 0;
     }
+    f.seek(SeekFrom::Start(bytes)).map_err(|e| e.to_string())?;
     progress(bytes);
     while bytes < total {
         if cancel.load(Ordering::Relaxed) {

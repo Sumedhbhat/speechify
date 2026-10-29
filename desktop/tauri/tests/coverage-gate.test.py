@@ -51,6 +51,26 @@ class CoverageGate(unittest.TestCase):
         self.assertIn("src/main.ts: 1/2 branches uncovered", failures)
         self.assertIn("src/new-feature.ts: not measured", failures)
 
+    def test_generic_instantiations_merge_but_distinct_closure_bodies_do_not(self):
+        first = "app::download::<app::install<first::Callback>>::{closure#0}"
+        second = "app::download::<second::Callback>::{closure#0}"
+        self.assertEqual(gate.function_definition(first), "app::download::{closure#0}")
+        self.assertEqual(gate.function_definition(first), gate.function_definition(second))
+        self.assertNotEqual(gate.function_definition(first), gate.function_definition(second.replace("closure#0", "closure#1")))
+        self.assertEqual(gate.function_definition("<app::Capture>::open"), "<app::Capture>::open")
+
+    def test_source_fingerprints_detect_changes_and_normalize_platform_line_endings(self):
+        path = self.root / "src/main.ts"
+        path.write_text("application code\n")
+        before = gate.source_fingerprints()
+        path.write_bytes(b"application code\r\n")
+        self.assertEqual(gate.source_fingerprints(), before)
+        path.write_text("different behavior\n")
+        self.assertNotEqual(gate.source_fingerprints(), before)
+        before = gate.source_fingerprints()
+        (self.root / "package-lock.json").write_text('{"version":"changed"}')
+        self.assertNotEqual(gate.source_fingerprints(), before)
+
 
 if __name__ == "__main__":
     unittest.main()
