@@ -13,6 +13,9 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{Emitter, Manager};
+#[cfg(test)]
+#[path = "desktop_tests.rs"]
+mod behavior;
 #[tauri::command]
 async fn request(
     op: String,

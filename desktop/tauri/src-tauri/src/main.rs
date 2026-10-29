@@ -3,6 +3,8 @@
     windows_subsystem = "windows"
 )]
 mod audio;
+#[cfg(test)]
+mod behavior_tests;
 mod child_owner;
 mod config;
 #[cfg(feature = "desktop")]
