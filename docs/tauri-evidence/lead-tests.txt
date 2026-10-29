@@ -24,4 +24,3 @@ test audio::tests::anti_alias ... ok
 test store::persistence_tests::export_includes_labels_older_than_history_limit ... ok
 
 test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
-

@@ -278,7 +278,8 @@ jobs:
   publish:
     name: Publish ${{ needs.version.outputs.channel }} release
     needs: [version, package, check-package, selftest]
-    if: github.event_name == 'push' && needs.version.outputs.channel != 'none'
+    # A merge can explicitly retain build/test artifacts without publishing.
+    if: github.event_name == 'push' && needs.version.outputs.channel != 'none' && !contains(github.event.head_commit.message, '[no-release]')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
