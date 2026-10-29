@@ -182,28 +182,59 @@ def test_app_installs_or_explains(monkeypatch, tmp_path, fails):
         assert installed == [("setup.exe", "windows")] and app.quit_called and not errors
 
 
-def test_stable_builds_ask_for_the_latest_release(monkeypatch):
+def test_stable_builds_find_the_highest_stable_release(monkeypatch):
     import json
     import urllib.error
 
+    # 0.1.5, a patch for the older line, came out after 0.2.0, so it's GitHub's latest.
+    listed = [release("v0.3.0-nightly.2"), release("v0.1.5"), release("v0.2.0")]
+    latest = release("v0.1.5")
     asked = []
 
     def fake(url, timeout=30):
         asked.append(url)
         if url == update.LATEST:
-            return FakeResponse(json.dumps(release("v0.3.0")).encode())
-        return FakeResponse(json.dumps([release("v0.3.0-nightly.2")]).encode())
+            if latest is None:
+                raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+            return FakeResponse(json.dumps(latest).encode())
+        return FakeResponse(json.dumps(listed).encode())
 
     monkeypatch.setattr(update, "_open", fake)
-    assert update.check("0.2.0").version == "0.3.0"
+    assert update.check("0.1.0").version == "0.2.0"
     assert update.check("0.3.0-nightly.1").version == "0.3.0-nightly.2"
-    assert asked == [update.LATEST, update.RELEASES]
+    assert asked == [update.RELEASES, update.LATEST, update.RELEASES]
 
-    def none_yet(url, timeout=30):
-        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+    # A stable release pushed off the list by nightlies is still found.
+    listed = [release(f"v0.3.0-nightly.{n}") for n in range(100)]
+    latest = release("v0.2.0")
+    assert update.check("0.1.0").version == "0.2.0"
 
-    monkeypatch.setattr(update, "_open", none_yet)
-    assert update.check("0.2.0") is None
+    listed, latest = [], None  # no stable release yet
+    assert update.check("0.1.0") is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="sh")
+@pytest.mark.parametrize("move_works", [True, False])
+def test_mac_swap_keeps_the_old_app_until_the_new_one_is_in(monkeypatch, tmp_path, move_works):
+    import subprocess
+
+    apps = tmp_path / "Applications"
+    bundle, staged = apps / "Speechify.app", apps / ".Speechify-update.app"
+    (bundle / "Contents").mkdir(parents=True)
+    (bundle / "Contents" / "v").write_text("old")
+    if move_works:  # else the staged copy is missing, so moving it fails
+        (staged / "Contents").mkdir(parents=True)
+        (staged / "Contents" / "v").write_text("new")
+    swaps = []
+    monkeypatch.setattr(update, "_app_bundle", lambda: bundle)
+    monkeypatch.setattr(update.subprocess, "run", lambda *a, **kw: None)  # hdiutil, ditto
+    monkeypatch.setattr(update.shutil, "rmtree", lambda *a, **kw: None)  # keeps the staged copy
+    monkeypatch.setattr(update, "_after_exit", lambda then, cmd: swaps.append(then))
+    update._install_macos(tmp_path / "x.dmg", restart=True)
+    monkeypatch.undo()
+    subprocess.run(["/bin/sh", "-c", swaps[0]])
+    assert (bundle / "Contents" / "v").read_text() == ("new" if move_works else "old")
+    assert not (apps / ".Speechify-previous.app").exists()
 
 
 def test_truncated_reply_is_an_update_error(monkeypatch):

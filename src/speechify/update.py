@@ -41,9 +41,10 @@ REPO = "Sumedhbhat/speechify"
 # SPEECHIFY_UPDATE_API points at a stand-in for GitHub's API, for testing
 # updates end to end (scripts/fake_release.py, the check-update CI job).
 API = os.environ.get("SPEECHIFY_UPDATE_API") or f"https://api.github.com/repos/{REPO}"
-RELEASES = f"{API}/releases?per_page=30"
-# Stable builds ask for this instead: 30 nightlies in a row would push every
-# stable release off the first page of RELEASES.
+RELEASES = f"{API}/releases?per_page=100"
+# Stable builds also ask for this: 100 nightlies in a row would push every
+# stable release off RELEASES. It alone isn't enough either: a patch for an
+# older line (0.1.5 after 0.2.0) becomes GitHub's latest release.
 LATEST = f"{API}/releases/latest"
 _VERSION = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-(nightly|dev)\.(\d+))?$")
 
@@ -120,17 +121,24 @@ def _open(url: str, timeout: float = 30):
 def check(current: str = __version__) -> Release | None:
     """The release to update to, or None if this is the newest. Raises
     UpdateError if GitHub can't be reached."""
-    stable = is_stable(current)
+    releases = _get(RELEASES)
+    if is_stable(current):
+        latest = _get(LATEST, missing_ok=True)  # 404: no stable release yet
+        if latest:
+            releases.append(latest)
+    return newest(releases, current)
+
+
+def _get(url: str, missing_ok: bool = False):
     try:
-        with _open(LATEST if stable else RELEASES, timeout=15) as resp:
-            releases = json.load(resp)
+        with _open(url, timeout=15) as resp:
+            return json.load(resp)
     except urllib.error.HTTPError as exc:
-        if stable and exc.code == 404:  # no stable release yet
+        if missing_ok and exc.code == 404:
             return None
         raise UpdateError(f"Couldn't reach GitHub to check for updates: {exc}") from exc
     except (OSError, ValueError, http.client.HTTPException) as exc:
         raise UpdateError(f"Couldn't reach GitHub to check for updates: {exc}") from exc
-    return newest([releases] if isinstance(releases, dict) else releases, current)
 
 
 # --- what kind of install this is ---------------------------------------------
@@ -315,8 +323,12 @@ def _install_macos(dmg: Path, restart: bool) -> None:
     except subprocess.CalledProcessError as exc:
         shutil.rmtree(staged, ignore_errors=True)
         raise UpdateError(f"Couldn't unpack {dmg.name}: {exc.stderr.decode(errors='replace').strip()}") from exc
-    # Swapped once this one has quit, so nothing runs from a moved bundle.
-    swap = f"rm -rf '{_sh(bundle)}' && mv '{_sh(staged)}' '{_sh(bundle)}'"
+    # Swapped once this one has quit, so nothing runs from a moved bundle. The
+    # old bundle is only deleted once the new one is in place.
+    old = bundle.with_name(".Speechify-previous.app")
+    swap = (f"rm -rf '{_sh(old)}' && mv '{_sh(bundle)}' '{_sh(old)}' && "
+            f"if mv '{_sh(staged)}' '{_sh(bundle)}'; then rm -rf '{_sh(old)}'; "
+            f"else mv '{_sh(old)}' '{_sh(bundle)}'; fi")
     _after_exit(swap, ["open", str(bundle)] if restart else [])
 
 
