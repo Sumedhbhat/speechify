@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Callable
 
-from . import autostart, settings
+from . import __version__, autostart, settings
 from .applog import open_in_os
 from .audio import microphones
 from .combos import describe_combo, describe_key, key_from_tk
@@ -34,8 +34,10 @@ class SettingsWindow:
         model_name: Callable[[], str],
         welcome: bool = False,
         on_close: Callable[[], None] | None = None,
+        check_update: Callable[[], None] | None = None,
     ):
         self.cfg, self.on_save, self.on_close = cfg, on_save, on_close
+        self.check_update = check_update
         self.vars: dict[str, tk.Variable] = {}
         self._recording_key = False
 
@@ -127,6 +129,16 @@ class SettingsWindow:
         row = f.grid_size()[1]
         ttk.Checkbutton(f, text="Start Speechify when I sign in", variable=self._autostart).grid(
             row=row, column=0, columnspan=2, sticky="w", pady=(12, 0))
+
+        box = ttk.Frame(f)
+        ttk.Label(box, text=f"Speechify {__version__}").pack(side="left")
+        if self.check_update:
+            ttk.Button(box, text="Check for updates", command=self.check_update).pack(side="left", padx=8)
+        row = f.grid_size()[1]
+        box.grid(row=row, column=0, columnspan=2, sticky="w", pady=(18, 0))
+        self._check(f, "check_updates", "Check for updates automatically",
+                    "Once a day, from GitHub. The tray menu then offers the new version; "
+                    "nothing is installed until you click it.")
 
     def _describe_key(self, name: str) -> str:
         name = name.strip()

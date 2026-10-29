@@ -75,8 +75,16 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; Value
 
 [Run]
 Filename: "{app}\Speechify.exe"; Description: "Start Speechify"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+; Updating from Speechify's tray menu runs this silently with /RELAUNCH=1
+; (update.py), and the new version starts when it's done.
+Filename: "{app}\Speechify.exe"; WorkingDir: "{app}"; Flags: nowait runasoriginaluser; Check: Relaunch
 
 [Code]
+function Relaunch(): Boolean;
+begin
+  Result := WizardSilent and (ExpandConstant('{param:RELAUNCH|0}') = '1');
+end;
+
 function UserPath(): string;
 begin
   if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Result) then

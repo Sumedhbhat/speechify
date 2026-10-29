@@ -46,6 +46,9 @@ def main() -> None:
     bench.add_argument("--cpu", action="store_true", help="also time both engines on the CPU")
     bench.add_argument("--clips", help="folder with clips.json and WAV files (default: the self-test clip)")
     bench.add_argument("--out", help="JSON file for the results")
+    upd = sub.add_parser("update", help="install a newer release, the same as the tray menu's Update item")
+    upd.add_argument("--check", action="store_true", help="only say whether there's a newer release")
+    upd.add_argument("--restart", action="store_true", help="start the new version once it's installed")
     sub.add_parser("devices", help="list microphones")
     sub.add_parser("where", help="print the config and data directory")
     args = parser.parse_args()
@@ -61,6 +64,9 @@ def main() -> None:
         return
     if args.cmd == "where":
         print(data_dir())
+        return
+    if args.cmd == "update":
+        update_command(args.check, args.restart)
         return
 
     if args.cmd == "bench":
@@ -122,6 +128,35 @@ def main() -> None:
         app.run()
     finally:
         instance.close()
+
+
+def update_command(check_only: bool, restart: bool) -> None:
+    from . import __version__, update
+
+    try:
+        release = update.check()
+        if release is None:
+            print(f"Speechify {__version__} is the newest.")
+            return
+        print(f"Speechify {release.version} is available; you have {__version__}.")
+        if check_only:
+            return
+        kind = update.install_kind()
+        if kind is None:
+            raise update.UpdateError(update.why_not())
+        shown = [-1]
+
+        def progress(fraction: float) -> None:
+            if int(fraction * 10) > shown[0]:
+                shown[0] = int(fraction * 10)
+                print(f"Downloading... {fraction:.0%}", flush=True)
+
+        path = update.download(release, kind, update.download_folder(kind), progress)
+        update.install(path, kind, restart)
+    except update.UpdateError as exc:
+        raise SystemExit(str(exc)) from None
+    print(f"Installing Speechify {release.version}. A running Speechify is closed (Windows) "
+          "or keeps the old version until you start it again.")
 
 
 def rollback_command(cfg: Config) -> None:
