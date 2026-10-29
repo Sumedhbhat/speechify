@@ -68,7 +68,16 @@ function settings(view: Element) { const groups: [string, string[]][] = [['Gener
 async function inputs() { try { const names = await api<string[]>('devices'); const el = document.querySelector('#inputs'); if (el) el.innerHTML = names.map(n => `<option value="${esc(n)}"></option>`).join(''); } catch (e) { error(e); } }
 app.addEventListener('submit', e => { e.preventDefault(); const form = e.target as HTMLFormElement; if (form.id !== 'settings') return; const cfg = { ...snapshot!.config }; for (const el of form.elements) { if (!(el instanceof HTMLInputElement || el instanceof HTMLSelectElement) || !el.name) continue; cfg[el.name] = el instanceof HTMLInputElement && el.type === 'checkbox' ? el.checked : typeof cfg[el.name] === 'number' ? Number(el.value) : el.value; } void api('settings', cfg).then(async () => { snapshot = await api('snapshot'); dirty = false; notify('Settings applied.'); status(); }).catch(error); });
 app.addEventListener('input', e => { const el = e.target as HTMLInputElement; if (el.id === 'search') { search = el.value; void history().catch(error); } if (el.id === 'correction' || el.closest('#settings')) dirty = true; });
-app.addEventListener('change', e => { const el = e.target as HTMLInputElement; if (el.id === 'filter') { filter = el.value; void history().catch(error); } if (el.id === 'model-language') { modelLanguage = el.value; void render().catch(error); } if (el.id === 'downloaded') { downloaded = el.checked; void render().catch(error); } });
+app.addEventListener('change', e => {
+  const el = e.target as HTMLInputElement;
+  if (el.id === 'filter') { filter = el.value; void history().catch(error); }
+  if (el.id === 'model-language') {
+    const focused = document.activeElement === el;
+    modelLanguage = el.value;
+    void render().then(() => { if (focused) document.querySelector<HTMLSelectElement>('#model-language')?.focus(); }).catch(error);
+  }
+  if (el.id === 'downloaded') { downloaded = el.checked; void render().catch(error); }
+});
 app.addEventListener('keydown', e => { if ((e.target as HTMLElement).id === 'correction' && e.key === 'Enter' && (e.shiftKey || e.ctrlKey)) { e.preventDefault(); void action(e.ctrlKey ? 'replace' : 'save', {} as HTMLElement).catch(error); } });
 app.addEventListener('click', e => { const b = (e.target as HTMLElement).closest<HTMLElement>('button'); if (!b) return; if (b.dataset.page) { if (dirty && !confirm('Discard unsaved edits?')) return; dirty = false; page = b.dataset.page; void render().catch(error); } else if (b.dataset.sample) { if (dirty && !confirm('Discard unsaved correction?')) return; selected = Number(b.dataset.sample); void history().catch(error); } else if (b.dataset.action) { void action(b.dataset.action, b).catch(error); } });
 async function action(a: string, b: HTMLElement) { const r = rows.find(r => r.id === selected); const id = selected;
