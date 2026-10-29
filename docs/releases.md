@@ -38,6 +38,10 @@ stable releases.
 | AppImage | Puts the new AppImage in place of the old file, under the old name, so the app menu entry and start at sign-in keep working. |
 | `.deb` | `apt-get install` through pkexec, which asks for your password. |
 
+From a terminal, `speechify update` does the same (`--check` only looks,
+`--restart` starts the new version afterwards); with the `.deb`, run it with
+`sudo` to skip the password prompt.
+
 Running from source, `git pull` instead; Speechify only says a new version is
 out. Builds from before the updater need one last update by hand.
 
@@ -144,7 +148,13 @@ every push to `main` and `release/**`, and on pull requests:
 3. **Check package**: installs each one on a fresh runner (Ubuntu 24.04 for
    Linux), checks `speechify --version` prints the stamped version, and runs
    `speechify selftest --engine-only` through the installed app.
-4. **Publish** (pushes only, never PRs): creates the GitHub release with the
+4. **Check update**: builds the same commit as version `0.0.1-dev.1`,
+   installs it, serves this run's installers as a stand-in GitHub release
+   (`scripts/fake_release.py`), and runs `speechify update` in the old app.
+   It passes when the installed app reports the new version: through the
+   Windows installer (which must also start the new version), the macOS
+   bundle swap, the AppImage and apt.
+5. **Publish** (pushes only, never PRs): creates the GitHub release with the
    installers and `SHA256SUMS`. Nightlies are marked as prereleases. If a
    stable tag already exists, it skips publishing and says why in the log.
 

@@ -244,3 +244,50 @@ def test_only_one_update_installs_at_a_time(monkeypatch):
     monkeypatch.setattr(tkinter.messagebox, "askyesno", answer)
     App._offer_update(app, r, confirmed=False)
     assert len(started) == 1
+
+
+def test_without_restart_nothing_is_started(monkeypatch, tmp_path):
+    current, new = tmp_path / "Speechify.AppImage", tmp_path / "new.AppImage"
+    current.write_text("old")
+    new.write_text("new")
+    monkeypatch.setenv("APPIMAGE", str(current))
+    started = []
+    monkeypatch.setattr(update, "_after_exit", lambda then, cmd: started.append(cmd))
+    update.install(new, "appimage", restart=False)
+    assert current.read_text() == "new" and not started
+    new.write_text("newer")
+    update.install(new, "appimage")
+    assert started == [[str(current)]]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="geteuid")
+def test_deb_as_root_skips_pkexec(monkeypatch, tmp_path):
+    deb = tmp_path / "speechify_0.2.0_amd64.deb"
+    deb.write_text("")
+    ran = []
+    monkeypatch.setattr(update.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(update.shutil, "which", lambda name: f"/usr/bin/{name}" if name == "apt-get" else None)
+    monkeypatch.setattr(update.subprocess, "run", lambda cmd, **kw: ran.append(cmd) or types.SimpleNamespace(
+        returncode=0, stdout="", stderr=""))
+    update.install(deb, "deb", restart=False)
+    assert ran == [["apt-get", "install", "-y", "--allow-downgrades", str(deb)]]
+
+
+def test_fake_release_matches_a_real_one(tmp_path, monkeypatch):
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "fake_release", Path(__file__).parents[1] / "scripts" / "fake_release.py")
+    fake = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fake)
+    (tmp_path / "speechify_0.2.0~nightly.5_amd64.deb").write_bytes(b"deb")
+    fake.publish(tmp_path, "0.2.0-nightly.5", 8765)
+    assert "speechify_0.2.0~nightly.5_amd64.deb" in (tmp_path / "SHA256SUMS").read_text()
+    monkeypatch.setattr(update, "_open", lambda url, timeout=30: FakeResponse(
+        (tmp_path / url.split("/")[-1].split("?")[0]).read_bytes()))
+    monkeypatch.setattr(update, "RELEASES", "http://127.0.0.1:8765/releases?per_page=30")
+    r = update.check("0.1.0-nightly.1")
+    out = tmp_path / "out"
+    out.mkdir()
+    assert update.download(r, "deb", out).read_bytes() == b"deb"
