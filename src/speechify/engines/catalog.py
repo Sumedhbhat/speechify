@@ -12,6 +12,7 @@ text appears after you let go of the key.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -72,6 +73,18 @@ class ModelSpec:
     gguf: Gguf | None = None
     # For a model placed on the ggml backend, the backend the catalog lists it under.
     origin: str = ""
+
+    @property
+    def language_group(self) -> str:
+        """Picker category derived from the catalog's language description."""
+        languages = self.languages.strip().lower()
+        if languages in ("english", "en"):
+            return "english"
+        if languages in ("", "as trained"):
+            return "unknown"
+        if "," in languages or re.search(r"\b\d+\b.*\blanguages\b", languages):
+            return "multilingual"
+        return "other"
 
 
 # transcribe.cpp, the ggml engine Handy uses: Vulkan, Metal, CUDA and CPU
