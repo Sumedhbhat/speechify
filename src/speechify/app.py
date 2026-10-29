@@ -9,7 +9,7 @@ import time
 import traceback
 from typing import Callable
 
-from . import __version__, applog, config, keys, output, postprocess, settings, versions
+from . import __version__, applog, config, keys, output, postprocess, settings, update, versions
 from .autolearn import AutoLearner
 from .audio import Recorder, is_silent
 from .combos import describe_combo, describe_key
@@ -55,6 +55,8 @@ class App:
         )
         self.hotkeys = global_hotkeys(self._hotkey_bindings())
         self._loading: str | None = None  # the model being loaded, for the tray
+        self._update: update.Release | None = None  # a newer release, once a check found one
+        self._updating = False
         self.tray = Tray(self._status_line, self._hint, [
             ("Settings…", lambda: self.ui.post(self.open_settings)),
             (lambda: self._menu_label("History…", self.cfg.history_hotkey), self.open_history),
@@ -63,6 +65,7 @@ class App:
             None,
             ("Open log", lambda: self._open(applog.log_path())),
             ("Open data folder", lambda: self._open(data_dir())),
+            (self._update_label, self.check_for_update),
             None,
             ("Quit Speechify", self.quit),
         ])
@@ -109,7 +112,8 @@ class App:
             spec = self.engine.spec
             return spec.name if spec else self._loading or self.cfg.model
 
-        self.ui.open_settings(self.cfg, self.apply_settings, self._open_models, model_name, welcome)
+        self.ui.open_settings(self.cfg, self.apply_settings, self._open_models, model_name, welcome,
+                              check_update=self.check_for_update)
 
     def apply_settings(self, changed: dict) -> None:
         """Put saved settings into effect without a restart (on the UI thread)."""
@@ -184,6 +188,7 @@ class App:
             spec = resolve(config.platform_defaults()["model"], data_dir())
         self.switch_model(spec)
         self.autolearn.start()
+        self._watch_for_updates()
         try:
             self.ui.run()
         except KeyboardInterrupt:
@@ -205,6 +210,95 @@ class App:
         messagebox.showerror("Speechify", message)
         self.recorder.close()
         raise SystemExit(1)
+
+    # --- updates ----------------------------------------------------------------
+
+    def _update_label(self) -> str:
+        if self._updating:
+            return "Updating…"
+        return f"Update to {self._update.version}…" if self._update else "Check for updates…"
+
+    def _watch_for_updates(self) -> None:
+        """Check soon after starting, then once a day, while check_updates is on."""
+
+        def run() -> None:
+            time.sleep(30)  # out of the way while the model loads
+            while True:
+                if self.cfg.check_updates:
+                    self._check_update(asked=False)
+                time.sleep(24 * 3600)
+
+        threading.Thread(target=run, daemon=True, name="updates").start()
+
+    def check_for_update(self) -> None:
+        """The tray item and the settings button: check, and update if there's
+        a newer version. Clicking "Update to X" updates without asking again."""
+        if not self._updating:
+            threading.Thread(target=self._check_update, daemon=True).start()
+
+    def _check_update(self, asked: bool = True) -> None:
+        offered = self._update
+        try:
+            release = update.check()
+        except update.UpdateError as exc:
+            print(exc)
+            if asked:
+                self.ui.post(lambda: self.ui.show("error", "Couldn't check for updates", 3000))
+            return
+        self._update = release
+        self.ui.post(self.tray.refresh)
+        if release is None:
+            if asked:
+                self.ui.post(lambda: self.ui.show("ok", f"Speechify {__version__} is the newest", 2500))
+            return
+        if not asked:
+            if offered is None or offered.version != release.version:
+                print(f"Speechify {release.version} is available.")
+                self.ui.post(lambda: self.ui.show(
+                    "info", f"Speechify {release.version} is available: update from the tray menu", 5000))
+            return
+        confirmed = offered is not None and offered.version == release.version
+        self.ui.post(lambda: self._offer_update(release, confirmed))
+
+    def _offer_update(self, release: update.Release, confirmed: bool) -> None:
+        """On the UI thread."""
+        from tkinter import messagebox
+
+        kind = update.install_kind()
+        if kind is None:
+            messagebox.showinfo("Speechify", f"Speechify {release.version} is available.\n\n"
+                                             f"{update.why_not()}\n\n{release.url}")
+            return
+        if not confirmed and not messagebox.askyesno(
+            "Speechify",
+            f"Speechify {release.version} is available; you have {__version__}.\n\n"
+            "Update now? Speechify restarts when it's done. Your recordings, corrections "
+            "and settings are kept.",
+        ):
+            return
+        self._updating = True
+        self.tray.refresh()
+        threading.Thread(target=lambda: self._install_update(release, kind), daemon=True).start()
+
+    def _install_update(self, release: update.Release, kind: str) -> None:
+        def progress(fraction: float) -> None:
+            self.ui.post(lambda: self.ui.show("working", f"Downloading update… {fraction:.0%}"))
+
+        try:
+            self.ui.post(lambda: self.ui.show("working", "Downloading update…"))
+            path = update.download(release, kind, update.download_folder(kind), progress)
+            self.ui.post(lambda: self.ui.show("working", "Installing update…"))
+            update.install(path, kind)
+        except Exception as exc:  # UpdateError, or anything else, so the menu works again
+            from tkinter import messagebox
+
+            self._updating = False
+            message = f"The update didn't install.\n\n{exc}"  # exc is gone once this block ends
+            print(f"Update failed: {exc}")
+            self.ui.post(lambda: (self.ui.hide(), self.tray.refresh(), messagebox.showerror("Speechify", message)))
+            return
+        print(f"Updating to {release.version}; restarting.")
+        self.quit()
 
     # --- models ---------------------------------------------------------------
 

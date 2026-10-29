@@ -350,7 +350,8 @@ class UI:
         self._models = ModelsWindow(self.root, active, use, install, rollback, device, on_close=closed)
         bring_to_front(self._models.win)
 
-    def open_settings(self, cfg, on_save, open_models, model_name, welcome: bool = False) -> None:
+    def open_settings(self, cfg, on_save, open_models, model_name, welcome: bool = False,
+                      check_update=None) -> None:
         from .settings_ui import SettingsWindow
 
         if self._settings is not None:
@@ -361,7 +362,7 @@ class UI:
             self._settings = None
 
         self._settings = SettingsWindow(self.root, cfg, on_save, open_models, model_name,
-                                        welcome=welcome, on_close=closed)
+                                        welcome=welcome, on_close=closed, check_update=check_update)
         bring_to_front(self._settings.win)
 
     def refresh_models(self) -> None:

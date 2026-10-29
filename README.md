@@ -32,8 +32,11 @@ Download the installer for your system from the
 | Ubuntu, Debian, Mint, Pop!_OS | `speechify_<version>_amd64.deb` | Open it with Software Install, or `sudo apt install ./speechify_*.deb`. |
 | Any other Linux | `Speechify-<version>-x86_64.AppImage` | Make it executable (`chmod +x`) and run it. |
 
-To update, download and install the new version over the old one. Your
-recordings, corrections, settings and models are kept. Nightly builds are on the
+To update, click **Update to …** in Speechify's tray menu (or **Check for
+updates** in Settings). Speechify downloads the new version, checks it against
+the release's checksums, installs it and restarts. Your recordings,
+corrections, settings and models are kept. Installing a new version over the
+old one by hand works too. Nightly builds are on the
 [releases page](https://github.com/Sumedhbhat/speechify/releases) as
 prereleases; see [docs/releases.md](docs/releases.md).
 

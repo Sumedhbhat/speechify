@@ -70,6 +70,9 @@ keep_all_audio = true
 llm_url = ""               # e.g. "http://localhost:11434/v1/chat/completions"
 llm_model = ""             # e.g. "qwen2.5:3b-instruct"
 
+# Check GitHub for a newer release once a day; the tray menu offers it.
+check_updates = true
+
 # --- Getting better on its own ------------------------------------------------
 # While you're away and the computer is plugged in, a bigger "teacher" model
 # re-transcribes your saved recordings to make training labels, and the
@@ -234,6 +237,7 @@ class Config:
     keep_all_audio: bool = True
     llm_url: str = ""
     llm_model: str = ""
+    check_updates: bool = True
     learn_auto: bool = True
     teacher: str = "auto"
     idle_minutes: float = 5

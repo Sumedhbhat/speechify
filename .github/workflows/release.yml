@@ -322,6 +322,6 @@ jobs:
           - **Ubuntu, Debian**: [speechify_${deb_version}_amd64.deb]($url/speechify_${deb_version}_amd64.deb)
           - **Other Linux**: [Speechify-$VERSION-x86_64.AppImage]($url/Speechify-$VERSION-x86_64.AppImage)
 
-          To update, install the new version over the old one. Your recordings, corrections and settings are kept. See docs/releases.md for channels."
+          Already have Speechify? Click **Update to $VERSION…** in its tray menu, or install the new version over the old one. Your recordings, corrections and settings are kept. See docs/releases.md for channels."
           gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "Speechify $VERSION" \
             --notes "$notes" --generate-notes $prerelease
