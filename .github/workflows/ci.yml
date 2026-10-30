@@ -1,67 +1,96 @@
 name: CI
 
+# Behavioral tests on every platform, then a gate that requires full coverage.
+# Pull requests run this directly; pushes to main and release branches run it
+# from release.yml, so a release is published only after it passes.
+
 on:
-  push:
-    branches: [main, "release/**"]
   pull_request:
+  workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  # Superseded pull request runs stop; release runs always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
+  coverage:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025, macos-15]
-
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    defaults:
+      run:
+        shell: bash
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          version: "0.12.23"
-
-      - name: Install dependencies
-        run: uv sync --frozen
-
-      - name: Compile
-        run: uv run --frozen python -m compileall -q src scripts
-
-      # Lets tests/test_platforms.py type through a uinput virtual keyboard
-      # and read it back from /dev/input: the path Speechify uses on Wayland.
-      # The setup linuxsetup.py does, minus logging out and in (sg applies the group).
-      - name: Give the input group /dev/uinput
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install Linux desktop prerequisites
         if: runner.os == 'Linux'
         run: |
-          sudo modprobe uinput || { sudo apt-get install -y "linux-modules-extra-$(uname -r)" && sudo modprobe uinput; }
-          sudo chgrp input /dev/uinput
-          sudo chmod 0660 /dev/uinput
-          sudo usermod -aG input "$USER"
-
-      - name: Test
-        if: runner.os != 'Linux'
-        run: uv run --frozen pytest -q
-
-      - name: Test (with the input group)
+          sudo apt-get update -qq
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libx11-dev libxtst-dev xvfb xauth xclip xdotool dbus libglib2.0-bin
+      - name: Install coverage tools
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --version 0.9.1 --locked
+          cargo install rustfilt --version 0.2.0 --locked
+          npm ci
+          python -m pip install --only-binary=:all: -r requirements-dev.txt
+      - name: Check source formatting
+        run: npm run format:check
+      - name: Prepare isolated Wayland keyboard directory
         if: runner.os == 'Linux'
+        run: |
+          test ! -e /dev/input/by-id
+          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 700 /dev/input/by-id
+      - name: Exercise application behavior and collect native coverage
         env:
-          SPEECHIFY_REQUIRE_UINPUT: "1"
-        run: sg input -c "uv run --frozen pytest -q"
+          PYTHON: python
+          SPEECHIFY_TEST_DISPOSABLE_DESKTOP: '1'
+          SPEECHIFY_TEST_VIRTUAL_KEYBOARD: '1'
+        run: bash scripts/test-coverage.sh --collect-only
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage/
+          if-no-files-found: error
+          retention-days: 14
 
-      - name: CLI starts
+  coverage-gate:
+    name: Tauri full coverage gate
+    needs: coverage
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require passing behavioral suites on every platform
+        env:
+          COVERAGE_RESULT: ${{ needs.coverage.result }}
+        run: test "$COVERAGE_RESULT" = success
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: coverage-*
+          path: coverage-results
+      - name: Require full coverage across supported platforms
         run: |
-          uv run --frozen speechify --version
-          uv run --frozen speechify models
-          uv run --frozen speechify bench --help
-          # The whole app, including the platform's keyboard and window code.
-          uv run --frozen python -c "import speechify.app, speechify.history, speechify.models_ui"
+          cargo install rustfilt --version 0.2.0 --locked
+          python3 scripts/check-coverage.py \
+            --frontend coverage-results/coverage-ubuntu-24.04/coverage-final.json \
+            --backend coverage-results/coverage-*/rust.info

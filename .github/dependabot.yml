@@ -2,12 +2,24 @@
 # every other new version waits 14 days after release.
 version: 2
 updates:
-  - package-ecosystem: uv
+  - package-ecosystem: npm
     directory: /
     schedule:
       interval: daily        # checked daily so a version is proposed soon after its 14 days are up
     cooldown:
       default-days: 14       # all semver levels; Dependabot's own default is only 3
+    labels: [dependencies]
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: daily
+    cooldown:
+      default-days: 14
     labels: [dependencies]
     groups:
       minor-and-patch:

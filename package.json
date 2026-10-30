@@ -1,0 +1,27 @@
+{
+  "name": "speechify",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "build": "tsc --noEmit && vite build",
+    "dev": "vite --host 127.0.0.1",
+    "tauri": "tauri",
+    "format": "prettier --write src tests/interface.test.ts index.html tsconfig.json vitest.config.ts .prettierrc.json && ruff format scripts tests src-tauri/resources && cargo fmt --manifest-path src-tauri/Cargo.toml",
+    "format:check": "prettier --check src tests/interface.test.ts index.html tsconfig.json vitest.config.ts .prettierrc.json && ruff format --check scripts tests src-tauri/resources && cargo fmt --check --manifest-path src-tauri/Cargo.toml",
+    "check": "bash scripts/check.sh"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.3"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.2",
+    "@vitest/coverage-v8": "5.0.3",
+    "jsdom": "30.1.2",
+    "prettier": "3.9.10",
+    "typescript": "7.0.2",
+    "vite": "8.3.4",
+    "vitest": "5.0.3"
+  }
+}
