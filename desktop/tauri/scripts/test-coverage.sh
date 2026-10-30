@@ -10,6 +10,7 @@ fi
 "$PYTHON" scripts/check-coverage.py --snapshot .build/coverage-source.json
 "$PYTHON" tests/coverage-gate.test.py
 "$PYTHON" tests/coverage-runtime.test.py
+"$PYTHON" scripts/test-optional-installer.py
 npm run test:coverage
 npm run build
 "$PYTHON" scripts/prepare-native.py

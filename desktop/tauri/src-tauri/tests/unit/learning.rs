@@ -152,6 +152,80 @@ fn rejected_failed_and_malformed_training_never_replace_the_current_model() {
 }
 
 #[test]
+fn cancelling_an_active_trainer_reaps_it_preserves_the_previous_model_and_allows_retry() {
+    let home = Home::new();
+    let service = fake_service(&home, "");
+    let before = service.config.lock().unwrap().clone();
+    let versions = json!([{"name":"whisper-ft-test","path":home.0.join("models/whisper-ft-test")}]);
+    service
+        .store
+        .lock()
+        .unwrap()
+        .state("versions", &versions)
+        .unwrap();
+    let candidate = home.0.join("models/whisper-ft-after-cancel");
+    std::fs::create_dir_all(&candidate).unwrap();
+    std::fs::write(candidate.join("model.bin"), "new weights").unwrap();
+    let report = json!({"status":"accepted","model":candidate,"gate1":{"passed":true},"gate2":{"passed":true}});
+    training_environment(&home, &report.to_string());
+    std::fs::write(home.0.join("trainer-wait"), "").unwrap();
+    start_training_on_power(service.clone(), true).unwrap();
+    wait_until(|| {
+        home.0.join("trainer-started").exists() && service.training_pid.load(Ordering::SeqCst) != 0
+    });
+    let pid = service.training_pid.load(Ordering::SeqCst);
+    assert_ne!(pid, 0);
+    service.cancel_work();
+    wait_until(|| !service.learning_busy.load(Ordering::SeqCst));
+    assert_eq!(service.training_pid.load(Ordering::SeqCst), 0);
+    #[cfg(unix)]
+    assert_eq!(
+        unsafe { libc::kill(pid as i32, 0) },
+        -1,
+        "trainer survived cancellation"
+    );
+    #[cfg(windows)]
+    unsafe {
+        use std::ffi::c_void;
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut c_void;
+            fn GetExitCodeProcess(process: *mut c_void, code: *mut u32) -> i32;
+            fn CloseHandle(handle: *mut c_void) -> i32;
+        }
+        let process = OpenProcess(0x1000, 0, pid);
+        if !process.is_null() {
+            let mut code = 259;
+            assert_ne!(GetExitCodeProcess(process, &mut code), 0);
+            CloseHandle(process);
+            assert_ne!(code, 259, "trainer survived cancellation");
+        }
+    }
+    assert!(!home.0.join("training-report.json").exists());
+    assert_eq!(*service.config.lock().unwrap(), before);
+    assert_eq!(crate::config::load(&home.0).unwrap(), before);
+    assert_eq!(
+        service.store.lock().unwrap().get_state("versions").unwrap(),
+        versions
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.0.join("models/whisper-ft-test/model.bin")).unwrap(),
+        "fixture model"
+    );
+    std::fs::remove_file(home.0.join("trainer-wait")).unwrap();
+    start_training_on_power(service.clone(), true).unwrap();
+    wait_until(|| !service.learning_busy.load(Ordering::SeqCst));
+    assert_eq!(
+        crate::config::load(&home.0).unwrap()["model"],
+        "ft:whisper-ft-after-cancel"
+    );
+    assert_eq!(
+        service.config.lock().unwrap()["model"],
+        "ft:whisper-ft-after-cancel"
+    );
+}
+
+#[test]
 fn accepted_training_adopts_only_candidate_owned_models_and_prunes_old_versions() {
     let home = Home::new();
     let service = fake_service(&home, "");

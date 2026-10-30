@@ -130,7 +130,10 @@ pub(crate) static DESKTOP: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub(crate) struct Home(pub PathBuf);
 impl Home {
     pub(crate) fn new() -> Self {
-        let p = std::env::temp_dir().join(format!(
+        Self::in_directory(&std::env::temp_dir())
+    }
+    fn in_directory(parent: &Path) -> Self {
+        let p = parent.join(format!(
             "speechify-behavior-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
@@ -1196,7 +1199,6 @@ impl Drop for IoGate {
 
 #[test]
 fn missing_bundle_resources_fall_back_to_the_runtime_beside_the_executable() {
-    let home = Home::new();
     if let Some(root) = std::env::var_os("SPEECHIFY_TEST_STAGED_EXECUTABLE") {
         let root = PathBuf::from(root);
         assert_eq!(
@@ -1207,13 +1209,16 @@ fn missing_bundle_resources_fall_back_to_the_runtime_beside_the_executable() {
         );
         return;
     }
+    let current = std::env::current_exe().unwrap();
+    let home = Home::in_directory(current.parent().unwrap());
     let executable = home.0.join(if cfg!(windows) {
         "candidate-tests.exe"
     } else {
         "candidate-tests"
     });
-    std::fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
-    std::fs::create_dir_all(home.0.join("resources/native")).unwrap();
+    // A concurrent fork can retain a copy's writable fd and make exec fail
+    // with ETXTBSY. A same-filesystem hard link never opens a writer.
+    std::fs::hard_link(current, &executable).unwrap();
     let output = std::process::Command::new(executable)
         .args(["--exact", "behavior_tests::missing_bundle_resources_fall_back_to_the_runtime_beside_the_executable"])
         .env("SPEECHIFY_TEST_STAGED_EXECUTABLE", &home.0).env_remove("SPEECHIFY_NATIVE_DIR").output().unwrap();

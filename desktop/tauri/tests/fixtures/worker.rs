@@ -7,6 +7,12 @@ fn main() {
         let report = &args[args.iter().position(|a| a=="--report").unwrap()+1];
         std::fs::write(root.join("trainer-args.txt"), args.join("\n")).unwrap();
         let result = std::fs::read_to_string(root.join("trainer-result.json")).unwrap();
+        if root.join("trainer-wait").exists() {
+            std::fs::write(root.join("trainer-started"), std::process::id().to_string()).unwrap();
+            while root.join("trainer-wait").exists() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
         if result=="exit" { std::process::exit(1); }
         std::fs::write(report,result).unwrap();
         return;
