@@ -4,6 +4,7 @@ Usage: python3 tests/cli.test.py /absolute/path/to/speechify-tauri-candidate
 Inherited LLVM_PROFILE_FILE lets cargo-llvm-cov include these real processes.
 """
 import json
+from contextlib import closing
 import os
 from pathlib import Path
 import shutil
@@ -122,7 +123,7 @@ class CliBehavior(unittest.TestCase):
             self.assertEqual([r["iteration"] for r in rows], list(range(count)))
             self.assertTrue(all(r["result"]["text"] == "get hub" for r in rows))
         import sqlite3
-        with sqlite3.connect(data / "learning.db") as db:
+        with closing(sqlite3.connect(data / "learning.db")) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM samples").fetchone()[0], 0)
         self.assertTrue((data / "config.toml").is_file())
 
@@ -145,6 +146,41 @@ class CliBehavior(unittest.TestCase):
         result = self.run_cli("install-model", "unknown", extra_env={"SPEECHIFY_CANDIDATE_PARENT": occupied})
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(occupied.read_text(), "file")
+
+    def test_failed_model_download_reports_progress_and_preserves_the_installed_file(self):
+        import http.server
+        import threading
+        requests = []
+
+        class Proxy(http.server.BaseHTTPRequestHandler):
+            def do_CONNECT(self):
+                requests.append(self.path)
+                self.send_error(502, "Test network unavailable")
+
+            def log_message(self, *_):
+                pass
+
+        data = self.root / self._testMethodName / "speechify-tauri-candidate"
+        models = data / "models"
+        models.mkdir(parents=True)
+        installed = models / "moonshine-base.gguf"
+        installed.write_bytes(b"Existing installation")
+        with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Proxy) as proxy:
+            server = threading.Thread(target=proxy.serve_forever)
+            server.start()
+            try:
+                address = f"http://127.0.0.1:{proxy.server_port}"
+                env = {key: address for key in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]}
+                env.update(NO_PROXY="", no_proxy="")
+                result = self.run_cli("install-model", "moonshine-base", extra_env=env)
+            finally:
+                proxy.shutdown()
+                server.join(timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('"stage":"Downloading"', result.stderr)
+        self.assertTrue(requests)
+        self.assertTrue(all(target == "huggingface.co:443" for target in requests))
+        self.assertEqual(installed.read_bytes(), b"Existing installation")
 
     def test_worker_keeps_serving_after_a_bad_clip(self):
         result = self.worker(messages=[{}, {"wav": "/does/not/exist.wav"}, {"wav": str(self.wav)}])
@@ -392,7 +428,7 @@ class CliBehavior(unittest.TestCase):
         time.sleep(.3)
         import sqlite3
         data = Path(env["SPEECHIFY_CANDIDATE_PARENT"]) / "speechify-tauri-candidate"
-        with sqlite3.connect(data / "learning.db") as db:
+        with closing(sqlite3.connect(data / "learning.db")) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM samples").fetchone()[0], 0)
         self.assertEqual(list((data / "audio").iterdir()), [])
         activate("Quit candidate")

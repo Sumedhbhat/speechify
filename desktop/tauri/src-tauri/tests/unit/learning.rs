@@ -1,6 +1,53 @@
 use super::*;
 use crate::behavior_tests::{fake_service, training_environment, wait_until, Home};
 
+#[cfg(unix)]
+#[test]
+fn teacher_selection_uses_the_first_reported_gpu_and_refuses_unavailable_gpu_information() {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = match std::env::var_os("SPEECHIFY_TEST_GPU_QUERY") {
+        Some(bin) => std::path::PathBuf::from(bin),
+        None => {
+            let home = Home::new();
+            let bin = home.0.join("tools");
+            std::fs::create_dir(&bin).unwrap();
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "learning::behavior::teacher_selection_uses_the_first_reported_gpu_and_refuses_unavailable_gpu_information"])
+                .env("SPEECHIFY_TEST_GPU_QUERY", &bin).env("PATH", &bin).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+    };
+    let query = bin.join("nvidia-smi");
+    for (body, expected) in [
+        ("printf '6144\\n16384\\n'", Some(6.)),
+        ("printf 'not available'", None),
+        ("printf '\\377'", None),
+        ("exit 0", None),
+        ("exit 1", None),
+    ] {
+        std::fs::write(&query, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&query, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let memory = gpu_memory();
+        assert_eq!(memory, expected);
+        match memory {
+            Some(_) => assert_eq!(
+                choose_teacher("auto", memory, false).unwrap(),
+                ("qwen3-asr-1.7b".into(), "cuda")
+            ),
+            None => assert!(choose_teacher("auto", memory, false).is_err()),
+        }
+    }
+    std::fs::remove_file(query).unwrap();
+    assert!(gpu_memory().is_none());
+    assert!(choose_teacher("auto", gpu_memory(), false).is_err());
+}
+
 #[test]
 fn retraining_requires_enough_new_labels_or_elapsed_time_with_new_labels() {
     let cfg = crate::config::defaults();
