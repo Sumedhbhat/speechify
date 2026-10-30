@@ -1,11 +1,11 @@
-__pycache__/
-*.pyc
-.venv/
+node_modules/
 dist/
-*.egg-info/
-.pytest_cache/
-# Stamped by release builds.
-src/speechify/VERSION
-
-# Installer builds (packaging/build.sh).
-packaging/build/
+.build/
+src-tauri/target/
+src-tauri/resources/native/
+artifacts/
+coverage/
+*.profraw
+*.profdata
+__pycache__/
+.ruff_cache/

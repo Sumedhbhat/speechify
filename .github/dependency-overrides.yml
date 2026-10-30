@@ -1,11 +1,11 @@
 # Every dependency override must have an entry here, added in the same commit.
-# The dependency-overrides workflow removes overrides once upstream no longer
-# needs them. See the policy in the dependency-updates skill.
+# Remove an override, and its entry, once upstream no longer needs it. See the
+# policy in the dependency-updates skill.
 #
 # overrides:
-#   - package: some-lib              # exactly as written in override-dependencies
-#     ecosystem: uv
-#     manifest: pyproject.toml
+#   - package: some-lib              # exactly as written in the manifest
+#     ecosystem: npm                 # npm overrides or cargo [patch]
+#     manifest: package.json
 #     override: "some-lib>=3.1.4,<4" # the requirement written in the manifest
 #     fixed_in: 3.1.4                # lowest version that is not vulnerable
 #     advisory: GHSA-xxxx-xxxx-xxxx

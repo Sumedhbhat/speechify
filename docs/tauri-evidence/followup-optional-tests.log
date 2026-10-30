@@ -1,9 +1,0 @@
-test_dependency_failure_leaves_no_ready_marker (__main__.InstallerTests.test_dependency_failure_leaves_no_ready_marker) ... ok
-test_hash_failure_never_commits_and_retry_recovers (__main__.InstallerTests.test_hash_failure_never_commits_and_retry_recovers) ... ok
-test_oversized_download_rejected (__main__.InstallerTests.test_oversized_download_rejected) ... ok
-test_verified_completion_and_retry_after_interruption (__main__.InstallerTests.test_verified_completion_and_retry_after_interruption) ... ok
-
-----------------------------------------------------------------------
-Ran 4 tests in 0.008s
-
-OK
