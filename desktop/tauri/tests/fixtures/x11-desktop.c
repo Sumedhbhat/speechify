@@ -3,14 +3,17 @@
 #include <X11/Xlib.h>
 #include <dlfcn.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
 static void *self_handle, *fixes_handle;
 static bool grabbed, startup_event, claimed;
 static int pending_event, event_base;
-static void *(*lookup)(void *, const char *);
-static void *(*open_library)(const char *, int);
+typedef void *(*lookup_fn)(void *, const char *);
+typedef void *(*open_library_fn)(const char *, int);
+static _Atomic(lookup_fn) lookup;
+static _Atomic(open_library_fn) open_library;
 static bool scenario(const char *name) {
     const char *value = getenv("SPEECHIFY_TEST_X11_SCENARIO");
     return value && !strcmp(value, name);
@@ -102,7 +105,6 @@ void XFixesSelectSelectionInput(Display *display, Window window, Atom selection,
 
 /* Delay one completed IO operation so cancellation can overlap a late result. */
 #include <fcntl.h>
-#include <stdatomic.h>
 #include <stdio.h>
 #include <sys/stat.h>
 #include <unistd.h>
