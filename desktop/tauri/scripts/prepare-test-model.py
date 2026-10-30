@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Cache the smallest pinned GGUF for the real model-reuse behavior test."""
+
 import hashlib
 import json
 from pathlib import Path

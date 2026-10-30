@@ -1,5 +1,10 @@
 # Behavioral tests
 
+For a local refactor check, install the formatting tools with
+`python -m pip install -r requirements-dev.txt` and run `npm run check`.
+Use `npm run format` to apply Prettier, Ruff and rustfmt. The native coverage
+matrix also checks formatting before collecting coverage.
+
 The TypeScript tests use rendered controls and the Tauri command boundary. They
 assert visible text, saved form values, navigation, and requests received by the
 Rust service. Run them with `npm run test:coverage`. Every application TypeScript

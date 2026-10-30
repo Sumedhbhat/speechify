@@ -1,0 +1,2 @@
+# Formatting only. Published 2026-10-15; meets the 14-day dependency policy.
+ruff==0.17.1

@@ -3600,6 +3600,12 @@
       "name": "vite",
       "version": "8.3.4",
       "published": "2026-10-08T12:07:04.441Z"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "prettier",
+      "version": "3.9.10",
+      "published": "2026-10-10T08:35:28.472Z"
     }
   ],
   "too_new": []

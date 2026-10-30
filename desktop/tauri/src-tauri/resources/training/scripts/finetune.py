@@ -93,15 +93,26 @@ class GateError(Exception):
 
 def gate1(current: float, candidate: float, held_out: int, source: str, base: float) -> dict:
     """Your audio: the new model must beat the model in use now, strictly."""
-    return {"current": current, "base": base, "candidate": candidate, "held_out": held_out,
-            "source": source, "passed": candidate < current}
+    return {
+        "current": current,
+        "base": base,
+        "candidate": candidate,
+        "held_out": held_out,
+        "source": source,
+        "passed": candidate < current,
+    }
 
 
 def gate2(base: float, candidate: float, max_points: float, clips: int) -> dict:
     """LibriSpeech: at most `max_points` WER points worse than the base model."""
     allowed = max_points / 100
-    return {"base": base, "candidate": candidate, "max_increase": allowed, "clips": clips,
-            "passed": candidate <= base + allowed + 1e-9}
+    return {
+        "base": base,
+        "candidate": candidate,
+        "max_increase": allowed,
+        "clips": clips,
+        "passed": candidate <= base + allowed + 1e-9,
+    }
 
 
 def load_samples(root: Path, min_confidence: float, corrected_only: bool):
@@ -127,7 +138,9 @@ def regression_set(root: Path, log=print) -> list[tuple[Path, str]]:
     folder = root / "regression" / "librispeech-test-clean"
     index = folder / "transcripts.tsv"
     if index.exists():
-        rows = [line.split("\t", 1) for line in index.read_text(encoding="utf-8").splitlines() if line]
+        rows = [
+            line.split("\t", 1) for line in index.read_text(encoding="utf-8").splitlines() if line
+        ]
         if len(rows) >= REGRESSION_CLIPS:
             return [(folder / f"{uid}.wav", text) for uid, text in rows]
     import numpy as np
@@ -141,7 +154,10 @@ def regression_set(root: Path, log=print) -> list[tuple[Path, str]]:
             texts: dict[str, str] = {}
             flacs: dict[str, bytes] = {}
             chosen: list[tuple[str, str]] = []
-            with urllib.request.urlopen(url, timeout=60) as resp, tarfile.open(fileobj=resp, mode="r|gz") as tar:
+            with (
+                urllib.request.urlopen(url, timeout=60) as resp,
+                tarfile.open(fileobj=resp, mode="r|gz") as tar,
+            ):
                 for member in tar:
                     if member.name.endswith(".trans.txt"):
                         for line in tar.extractfile(member).read().decode().splitlines():
@@ -151,7 +167,11 @@ def regression_set(root: Path, log=print) -> list[tuple[Path, str]]:
                         flacs[Path(member.name).stem] = tar.extractfile(member).read()
                     for uid in [u for u in flacs if u in texts]:
                         audio, rate = soundfile.read(io.BytesIO(flacs.pop(uid)), dtype="float32")
-                        if rate == SAMPLE_RATE and audio.ndim == 1 and audio.size <= 20 * SAMPLE_RATE:
+                        if (
+                            rate == SAMPLE_RATE
+                            and audio.ndim == 1
+                            and audio.size <= 20 * SAMPLE_RATE
+                        ):
                             save_wav(np.asarray(audio), folder / f"{uid}.wav")
                             chosen.append((uid, texts[uid]))
                     if len(chosen) >= REGRESSION_CLIPS:
@@ -180,25 +200,44 @@ def default_current(cfg: Config, base: str) -> str:
 def main() -> None:
     cfg = Config.load()
     default_base = BASE_MODELS.get(cfg.model, "openai/whisper-large-v3-turbo")
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("--base", default=default_base, help="Hugging Face model to start from")
-    p.add_argument("--base-id", help="Speechify's id for the base model (recorded with the new model)")
-    p.add_argument("--current", help="the model to beat: a Hugging Face repo or a saved hf-* folder "
-                                     "(default: the model Speechify uses now)")
+    p.add_argument(
+        "--base-id", help="Speechify's id for the base model (recorded with the new model)"
+    )
+    p.add_argument(
+        "--current",
+        help="the model to beat: a Hugging Face repo or a saved hf-* folder "
+        "(default: the model Speechify uses now)",
+    )
     p.add_argument("--epochs", type=int, default=3)
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--batch-size", type=int, default=4)
     p.add_argument("--rank", type=int, default=32, help="LoRA rank")
     p.add_argument("--min-samples", type=int, default=50)
-    p.add_argument("--min-confidence", type=float, default=cfg.teacher_min_confidence,
-                   help="teacher labels below this confidence aren't used")
-    p.add_argument("--max-regression", type=float, default=cfg.max_regression_wer,
-                   help="WER points the new model may lose on LibriSpeech against the base model")
+    p.add_argument(
+        "--min-confidence",
+        type=float,
+        default=cfg.teacher_min_confidence,
+        help="teacher labels below this confidence aren't used",
+    )
+    p.add_argument(
+        "--max-regression",
+        type=float,
+        default=cfg.max_regression_wer,
+        help="WER points the new model may lose on LibriSpeech against the base model",
+    )
     p.add_argument("--no-regression", action="store_true", help="skip the LibriSpeech gate")
-    p.add_argument("--corrected-only", action="store_true", help="only train on recordings you corrected")
+    p.add_argument(
+        "--corrected-only", action="store_true", help="only train on recordings you corrected"
+    )
     p.add_argument("--force", action="store_true", help="save even if a gate fails")
     p.add_argument("--apply", action="store_true", help="update config.toml to use the new model")
-    p.add_argument("--auto", action="store_true", help=argparse.SUPPRESS)  # started by Speechify itself
+    p.add_argument(
+        "--auto", action="store_true", help=argparse.SUPPRESS
+    )  # started by Speechify itself
     p.add_argument("--report", type=Path, help="write the outcome here as JSON")
     args = p.parse_args()
 
@@ -227,19 +266,35 @@ def train(args, cfg: Config, report: dict, finish) -> None:
     train_set, eval_set, eval_source = load_samples(root, args.min_confidence, args.corrected_only)
     total = len(train_set) + len(eval_set)
     if total < args.min_samples:
-        finish("error", f"Only {total} labelled recordings; need at least {args.min_samples}. Keep "
-               "dictating: recordings you don't correct get labels from the teacher model while you're "
-               "away, and the ones you correct are labelled already.", 1)
+        finish(
+            "error",
+            f"Only {total} labelled recordings; need at least {args.min_samples}. Keep "
+            "dictating: recordings you don't correct get labels from the teacher model while you're "
+            "away, and the ones you correct are labelled already.",
+            1,
+        )
     if len(eval_set) < 5:
-        finish("error", f"Only {len(eval_set)} recordings to hold out for evaluation; need at least 5.", 1)
+        finish(
+            "error",
+            f"Only {len(eval_set)} recordings to hold out for evaluation; need at least 5.",
+            1,
+        )
     print(f"{len(train_set)} training recordings, {len(eval_set)} held out ({eval_source} labels)")
-    report["train"] = {"recordings": len(train_set), "held_out": len(eval_set), "held_out_source": eval_source}
+    report["train"] = {
+        "recordings": len(train_set),
+        "held_out": len(eval_set),
+        "held_out_source": eval_source,
+    }
 
     import torch
 
     if not torch.cuda.is_available():
-        finish("error", "Fine-tuning needs an NVIDIA GPU, and CUDA isn't available to PyTorch here. "
-               "Run it on a PC with one and copy the model folder over; any OS can use it.", 1)
+        finish(
+            "error",
+            "Fine-tuning needs an NVIDIA GPU, and CUDA isn't available to PyTorch here. "
+            "Run it on a PC with one and copy the model folder over; any OS can use it.",
+            1,
+        )
 
     from peft import LoraConfig, get_peft_model
     from transformers import (
@@ -273,8 +328,12 @@ def train(args, cfg: Config, report: dict, finish) -> None:
         hyps = []
         for i in range(0, len(clips), args.batch_size):
             batch = clips[i : i + args.batch_size]
-            out = m.generate(input_features=features(batch), language=language,
-                             task="transcribe", max_new_tokens=220)
+            out = m.generate(
+                input_features=features(batch),
+                language=language,
+                task="transcribe",
+                max_new_tokens=220,
+            )
             hyps += processor.batch_decode(out, skip_special_tokens=True)
         return wer([t for _, t in clips], hyps)
 
@@ -291,8 +350,10 @@ def train(args, cfg: Config, report: dict, finish) -> None:
     start_token = model.config.decoder_start_token_id
     base_wer = evaluate(model, eval_set)
     base_ls = evaluate(model, regression) if regression else None
-    print(f"Base model WER on your held-out audio: {base_wer:.1%}"
-          + (f", on LibriSpeech: {base_ls:.1%}" if base_ls is not None else ""))
+    print(
+        f"Base model WER on your held-out audio: {base_wer:.1%}"
+        + (f", on LibriSpeech: {base_ls:.1%}" if base_ls is not None else "")
+    )
     if Path(current).name == Path(args.base).name or current == args.base:
         current_wer = base_wer
     else:
@@ -309,12 +370,15 @@ def train(args, cfg: Config, report: dict, finish) -> None:
         width = max(len(x) for x in ids)
         return torch.tensor([x + [-100] * (width - len(x)) for x in ids], device=device)
 
-    model = get_peft_model(model, LoraConfig(
-        r=args.rank,
-        lora_alpha=args.rank * 2,
-        lora_dropout=0.05,
-        target_modules=["q_proj", "k_proj", "v_proj", "out_proj"],
-    ))
+    model = get_peft_model(
+        model,
+        LoraConfig(
+            r=args.rank,
+            lora_alpha=args.rank * 2,
+            lora_dropout=0.05,
+            target_modules=["q_proj", "k_proj", "v_proj", "out_proj"],
+        ),
+    )
     model.print_trainable_parameters()
 
     params = [p for p in model.parameters() if p.requires_grad]
@@ -340,18 +404,26 @@ def train(args, cfg: Config, report: dict, finish) -> None:
             optim.zero_grad(set_to_none=True)
             sched.step()
             total_loss += loss.item() * len(batch)
-        print(f"epoch {epoch + 1}/{args.epochs}  loss {total_loss / len(train_set):.4f}  "
-              f"({time.time() - t0:.0f}s)")
+        print(
+            f"epoch {epoch + 1}/{args.epochs}  loss {total_loss / len(train_set):.4f}  "
+            f"({time.time() - t0:.0f}s)"
+        )
 
     tuned_wer = evaluate(model, eval_set)
     g1 = report["gate1"] = gate1(current_wer, tuned_wer, len(eval_set), eval_source, base_wer)
-    print(f"Gate 1, your audio: {tuned_wer:.1%} vs {current_wer:.1%} for the current model "
-          f"({'pass' if g1['passed'] else 'fail'})")
+    print(
+        f"Gate 1, your audio: {tuned_wer:.1%} vs {current_wer:.1%} for the current model "
+        f"({'pass' if g1['passed'] else 'fail'})"
+    )
     passed = g1["passed"]
     if regression:
-        g2 = report["gate2"] = gate2(base_ls, evaluate(model, regression), args.max_regression, len(regression))
-        print(f"Gate 2, LibriSpeech: {g2['candidate']:.1%} vs {base_ls:.1%} for the base model, "
-              f"{args.max_regression:g} points allowed ({'pass' if g2['passed'] else 'fail'})")
+        g2 = report["gate2"] = gate2(
+            base_ls, evaluate(model, regression), args.max_regression, len(regression)
+        )
+        print(
+            f"Gate 2, LibriSpeech: {g2['candidate']:.1%} vs {base_ls:.1%} for the base model, "
+            f"{args.max_regression:g} points allowed ({'pass' if g2['passed'] else 'fail'})"
+        )
         passed = passed and g2["passed"]
     if not passed and not args.force:
         finish("rejected", "The new model didn't pass, so it wasn't saved.")
@@ -362,17 +434,24 @@ def train(args, cfg: Config, report: dict, finish) -> None:
     merged = model.merge_and_unload()
     merged.save_pretrained(hf_dir)
     processor.save_pretrained(hf_dir)
-    AutoTokenizer.from_pretrained(args.base).save_pretrained(hf_dir)  # fast tokenizer writes tokenizer.json
+    AutoTokenizer.from_pretrained(args.base).save_pretrained(
+        hf_dir
+    )  # fast tokenizer writes tokenizer.json
 
     from ctranslate2.converters import TransformersConverter
 
     TransformersConverter(
         str(hf_dir), copy_files=["tokenizer.json", "preprocessor_config.json"]
     ).convert(str(out_dir), quantization="float16", force=True)
-    info = {"base_repo": args.base, "base_id": args.base_id or next(
-                (k for k, v in BASE_MODELS.items() if v == args.base), args.base),
-            "created": time.time(), "train": report["train"],
-            "gate1": report.get("gate1"), "gate2": report.get("gate2")}
+    info = {
+        "base_repo": args.base,
+        "base_id": args.base_id
+        or next((k for k, v in BASE_MODELS.items() if v == args.base), args.base),
+        "created": time.time(),
+        "train": report["train"],
+        "gate1": report.get("gate1"),
+        "gate2": report.get("gate2"),
+    }
     for d in (hf_dir, out_dir):
         (d / VERSION_FILE).write_text(json.dumps(info, indent=2), encoding="utf-8")
     print(f"Saved faster-whisper model to {out_dir}")
@@ -382,7 +461,9 @@ def train(args, cfg: Config, report: dict, finish) -> None:
         set_value("model", out_dir.as_posix())
         print("Switched Speechify to it. Restart Speechify, or pick it with Ctrl+Alt+M.")
     elif not args.auto:
-        print("It's listed in the model window (Ctrl+Alt+M), or rerun with --apply to switch to it.")
+        print(
+            "It's listed in the model window (Ctrl+Alt+M), or rerun with --apply to switch to it."
+        )
     finish("accepted", "Done.")
 
 

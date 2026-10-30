@@ -52,6 +52,9 @@ jobs:
           cargo install cargo-llvm-cov --version 0.9.1 --locked
           cargo install rustfilt --version 0.2.0 --locked
           npm ci
+          python -m pip install --only-binary=:all: -r requirements-dev.txt
+      - name: Check source formatting
+        run: npm run format:check
       - name: Prepare isolated Wayland keyboard directory
         if: runner.os == 'Linux'
         run: |

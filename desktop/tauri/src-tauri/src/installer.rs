@@ -59,7 +59,10 @@ pub fn install(s: &Arc<Service>, id: &str) -> Result<()> {
     let (tx, rx) = std::sync::mpsc::sync_channel(8);
     let stdout = child.stdout.take().unwrap();
     std::thread::spawn(move || {
-        for line in BufReader::new(stdout).split(b'\n').map_while(std::result::Result::ok) {
+        for line in BufReader::new(stdout)
+            .split(b'\n')
+            .map_while(std::result::Result::ok)
+        {
             if let Ok(value) = serde_json::from_slice::<Value>(&line) {
                 if value.get("stage").is_some_and(Value::is_string) && tx.send(value).is_err() {
                     break;

@@ -19,7 +19,10 @@ fn clipboard_helper_protocol_reports_refusals_corrupt_output_and_timeouts_then_a
             &format!("echo $$ > '{}'; read request; {reply}", pid_file.display()),
         ]);
         let error = begin_using(command, "Dictation 🦀", Duration::from_millis(100)).unwrap_err();
-        assert!(error.to_lowercase().contains(&reason.to_lowercase()), "{error}");
+        assert!(
+            error.to_lowercase().contains(&reason.to_lowercase()),
+            "{error}"
+        );
         let pid = std::fs::read_to_string(&pid_file)
             .unwrap()
             .trim()

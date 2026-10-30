@@ -33,8 +33,7 @@ pub fn root() -> Result<PathBuf> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700))
-            .map_err(err)?;
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700)).map_err(err)?;
     }
     for sub in ["audio", "models", "logs", "exports"] {
         std::fs::create_dir_all(p.join(sub)).map_err(err)?;
@@ -143,9 +142,7 @@ pub fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let partial = path.with_extension("tmp");
     let mut f = std::fs::File::create(&partial).map_err(err)?;
-    f.write_all(bytes)
-        .and_then(|_| f.sync_all())
-        .map_err(err)?;
+    f.write_all(bytes).and_then(|_| f.sync_all()).map_err(err)?;
     std::fs::rename(partial, path).map_err(err)
 }
 pub fn owned(root: &Path, name: &str) -> Result<PathBuf> {

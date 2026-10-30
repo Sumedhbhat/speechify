@@ -180,7 +180,9 @@ fn download(
                     return Err("Cancelled".into());
                 }
                 let want = remaining.min(buf.len() as u64) as usize;
-                let n = response.read(&mut buf[..want]).map_err(crate::config::err)?;
+                let n = response
+                    .read(&mut buf[..want])
+                    .map_err(crate::config::err)?;
                 if n == 0 {
                     return Err("Download was truncated".into());
                 }
@@ -223,7 +225,15 @@ pub fn list(root: &Path) -> Vec<Value> {
                 && d.file_name().to_string_lossy().starts_with("whisper-ft-")
             {
                 let name = d.file_name().to_string_lossy().into_owned();
-                items.push(json!({"id":format!("ft:{name}"),"name":format!("Your trained Whisper ({name})"),"repo":p,"languages":"as trained","runtime":"Optional Python exception","installed":true,"finetune":true}));
+                items.push(json!({
+                    "id": format!("ft:{name}"),
+                    "name": format!("Your trained Whisper ({name})"),
+                    "repo": p,
+                    "languages": "as trained",
+                    "runtime": "Optional Python exception",
+                    "installed": true,
+                    "finetune": true,
+                }));
             }
         }
     }

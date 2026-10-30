@@ -62,7 +62,7 @@ def _tokens(text: str) -> list[_Token]:
     out: list[_Token] = []
     for piece in re.split(r"[\s\-–—]+", text):
         word = piece.lower().translate(_DROP)
-        tail = piece[len(piece.rstrip(string.punctuation + "”’»")):]
+        tail = piece[len(piece.rstrip(string.punctuation + "”’»")) :]
         mark = "." if _END & set(tail) else "," if _PAUSE & set(tail) else ""
         if mark == "." and word in _ABBREVIATIONS and tail.startswith("."):
             mark = "." if _END & set(tail[1:]) else ""
@@ -85,7 +85,10 @@ def _aligned(ref: list[_Token], hyp: list[_Token]) -> list[tuple[_Token, _Token]
             pairs.append((ref[i - 1], hyp[j - 1]))
             i, j = i - 1, j - 1
         elif table[i][j] == table[i - 1][j - 1] + 1:
-            i, j = i - 1, j - 1  # a different word: neither its case nor its punctuation is comparable
+            i, j = (
+                i - 1,
+                j - 1,
+            )  # a different word: neither its case nor its punctuation is comparable
         elif table[i][j] == table[i - 1][j] + 1:
             i -= 1
         else:
