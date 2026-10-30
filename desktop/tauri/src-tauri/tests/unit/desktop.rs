@@ -1012,3 +1012,128 @@ fn a_full_dictation_queue_reports_backpressure_and_cancel_or_shutdown_discards_o
             .starts_with("pending-")));
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Requires CI's isolated /dev/input/by-id directory"]
+fn wayland_keyboard_disconnect_cancels_recording_without_saving_partial_audio() {
+    use crate::behavior_tests::{fake_service, wait_until};
+    use std::io::Write;
+    assert_eq!(
+        std::env::var("SPEECHIFY_TEST_VIRTUAL_KEYBOARD").as_deref(),
+        Ok("1")
+    );
+    if std::env::var_os("SPEECHIFY_TEST_WAYLAND_CHILD").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "desktop::behavior::wayland_keyboard_disconnect_cancels_recording_without_saving_partial_audio", "--include-ignored"])
+            .env("SPEECHIFY_TEST_WAYLAND_CHILD", "1").env("WAYLAND_DISPLAY", "isolated-test-session").env("XDG_SESSION_TYPE", "wayland").output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let path = std::path::PathBuf::from(format!(
+        "/dev/input/by-id/speechify-{}-event-kbd",
+        std::process::id()
+    ));
+    struct Fifo(std::path::PathBuf);
+    impl Drop for Fifo {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _fifo = Fifo(path.clone());
+    assert_eq!(
+        unsafe {
+            libc::mkfifo(
+                std::ffi::CString::new(path.to_str().unwrap())
+                    .unwrap()
+                    .as_ptr(),
+                0o600,
+            )
+        },
+        0
+    );
+    let mut writer = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    let poller = platform::Poller::new().unwrap();
+    assert!(poller.down().unwrap().is_empty());
+    assert!(poller.focus().unwrap_err().contains("Wayland"));
+    drop(poller);
+    let home = Home::new();
+    let service = fake_service(&home, "");
+    let runtime = Running::new(service.clone());
+    let event = libc::input_event {
+        time: libc::timeval {
+            tv_sec: 0,
+            tv_usec: 0,
+        },
+        type_: 1,
+        code: 97,
+        value: 1,
+    };
+    let bytes = unsafe {
+        std::slice::from_raw_parts(
+            (&event as *const libc::input_event).cast::<u8>(),
+            std::mem::size_of_val(&event),
+        )
+    };
+    writer.write_all(bytes).unwrap();
+    wait_until(|| runtime.visibility.lock().unwrap().last() == Some(&true));
+    drop(writer);
+    wait_until(|| {
+        service.snapshot()["state"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("Keyboard disconnected"))
+    });
+    assert!(!service.recording.load(Ordering::SeqCst));
+    wait_until(|| runtime.visibility.lock().unwrap().last() == Some(&false));
+    assert!(service
+        .store
+        .lock()
+        .unwrap()
+        .history("", "")
+        .unwrap()
+        .is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Requires the synthetic ALSA input and isolated Xvfb"]
+fn failed_recognition_is_reported_without_saving_a_guess_or_leaving_temporary_audio() {
+    use crate::behavior_tests::{fake_service, wait_until};
+    let _desktop = crate::behavior_tests::DESKTOP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let home = Home::new();
+    let service = fake_service(&home, "error");
+    let mut cfg = service.config.lock().unwrap().clone();
+    cfg["input_device"] = json!("Speechify float input");
+    cfg["min_hold_ms"] = json!(1);
+    service.update(cfg).unwrap();
+    let runtime = Running::new(service.clone());
+    runtime.start();
+    wait_until(|| service.snapshot()["state"]["level"].as_f64().unwrap_or(0.) > 0.);
+    std::thread::sleep(Duration::from_millis(100));
+    dispatch(&service, "manual_stop", &json!({})).unwrap();
+    wait_until(|| service.snapshot()["state"]["error"] == "bad clip");
+    assert!(service
+        .store
+        .lock()
+        .unwrap()
+        .history("", "")
+        .unwrap()
+        .is_empty());
+    assert_eq!(service.snapshot()["state"]["recent"], "");
+    assert!(!std::fs::read_dir(&home.0).unwrap().any(|entry| entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .starts_with("pending-")));
+}

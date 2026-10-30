@@ -510,7 +510,7 @@ fn clipboard_failures_are_reported_and_later_writes_can_recover() {
         (
             "EmptyClipboard",
             clipboard_clear_failed as *const (),
-            "clear",
+            "busy",
         ),
         ("SetClipboardData", clipboard_set_failed as *const (), "set"),
     ] {

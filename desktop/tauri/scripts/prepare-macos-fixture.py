@@ -8,6 +8,6 @@ root = Path(__file__).resolve().parents[1]
 destination = root / ".build/macos-desktop.dylib"
 destination.parent.mkdir(parents=True, exist_ok=True)
 subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-dynamiclib", "-Wall", "-Wextra", "-Werror",
-                str(root / "tests/fixtures/macos-desktop.c"), "-framework", "ApplicationServices",
-                "-framework", "CoreFoundation", "-o", str(destination)], check=True)
+                str(root / "tests/fixtures/macos-desktop.m"), "-framework", "ApplicationServices",
+                "-framework", "CoreFoundation", "-framework", "AppKit", "-o", str(destination)], check=True)
 print(destination)

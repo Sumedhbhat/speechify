@@ -105,5 +105,42 @@ fn native_permission_focus_key_state_and_paste_outcomes_follow_the_desktop_contr
         assert!(paste(target, "Cannot create a paste event").is_err());
         assert_eq!(events(), 0);
         wait_until(|| read() == "Earlier copy 🦀");
+        reset(128);
+        assert!(paste(target, "Focus changed before the key event").is_err());
+        assert_eq!(events(), 0);
+        wait_until(|| read() == "Earlier copy 🦀");
+        let clipboard_mode = fixture
+            .get::<unsafe extern "C" fn(u32)>(b"fixture_clipboard_mode\0")
+            .unwrap();
+        let writes = fixture
+            .get::<unsafe extern "C" fn() -> usize>(b"fixture_clipboard_writes\0")
+            .unwrap();
+        let bytes = fixture
+            .get::<unsafe extern "C" fn() -> usize>(b"fixture_clipboard_bytes\0")
+            .unwrap();
+        for (mode, message) in [
+            (1, "unavailable"),
+            (2, "exceeds 32 MB"),
+            (4, "Invalid pasteboard type"),
+            (8, "write failed"),
+            (16, "data refused"),
+            (32, "changed during snapshot"),
+        ] {
+            clipboard_mode(128 | mode);
+            let error = match crate::mac_clipboard::snapshot_and_write("Must report failure") {
+                Err(error) => error,
+                Ok(_) => panic!("pasteboard failure {mode} was ignored"),
+            };
+            assert!(error.contains(message), "{mode}: {error}");
+        }
+        clipboard_mode(128 | 64);
+        let restore = crate::mac_clipboard::snapshot_and_write("Temporary").unwrap();
+        assert_eq!(writes(), 1);
+        assert_eq!(bytes(), 9);
+        restore().unwrap();
+        assert_eq!(writes(), 2);
+        assert_eq!(bytes(), 0);
+        clipboard_mode(0);
+        assert_eq!(read(), "Earlier copy 🦀");
     }
 }

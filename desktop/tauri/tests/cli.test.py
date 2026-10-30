@@ -485,7 +485,9 @@ os._exit(0)
         for hotkey in ["ctrl+alt+f", "ctrl+alt+h", "ctrl+alt+m"]:
             close_settings()
             wait(lambda: not windows(True))
-            subprocess.run(["xdotool", "key", hotkey], check=True, env=env)
+            subprocess.run(["xdotool", "keydown", hotkey], check=True, env=env)
+            time.sleep(.1)
+            subprocess.run(["xdotool", "keyup", hotkey], check=True, env=env)
             wait(lambda: windows(True))
 
         # A short global talk-key tap must never create a dictation or audio.

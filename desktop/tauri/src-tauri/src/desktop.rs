@@ -308,7 +308,9 @@ fn start_runtime(
             })();
             let _ = std::fs::remove_file(path);
             if let Err(e) = result {
-                infer.error(e);
+                if infer.generation.load(Ordering::SeqCst) == generation {
+                    infer.error(e);
+                }
             }
         }
     });

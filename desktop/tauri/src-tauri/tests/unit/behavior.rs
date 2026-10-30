@@ -1114,3 +1114,17 @@ fn settings_with_an_unserializable_extra_value_are_rejected_without_losing_valid
     assert_eq!(*service.config.lock().unwrap(), before);
     assert_eq!(config::load(&home.0).unwrap(), before);
 }
+
+#[test]
+fn learned_case_insensitive_rules_handle_unicode_equivalents_without_chaining() {
+    let home = Home::new();
+    let mut store = home.store();
+    let sample = store
+        .record(&[], "see the key", "see the key", false)
+        .unwrap();
+    store.edit(sample, "C the KeyName").unwrap();
+    assert_eq!(
+        store.apply("ſee the Key; SEE the KEY", 1).unwrap(),
+        "C the KeyName; C the KeyName"
+    );
+}

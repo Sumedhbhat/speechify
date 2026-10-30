@@ -51,10 +51,16 @@ jobs:
           cargo install cargo-llvm-cov --version 0.9.1 --locked
           cargo install rustfilt --version 0.2.0 --locked
           npm ci
+      - name: Prepare isolated Wayland keyboard directory
+        if: runner.os == 'Linux'
+        run: |
+          test ! -e /dev/input/by-id
+          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 700 /dev/input/by-id
       - name: Exercise application behavior and collect native coverage
         env:
           PYTHON: python
           SPEECHIFY_TEST_DISPOSABLE_DESKTOP: '1'
+          SPEECHIFY_TEST_VIRTUAL_KEYBOARD: '1'
         run: bash scripts/test-coverage.sh --collect-only
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()

@@ -122,3 +122,73 @@ fn x11_key_state_focus_guards_and_copy_match_the_native_contract() {
         assert!(poller.focus().is_err());
     }
 }
+
+#[test]
+fn clipboard_and_paste_commands_preserve_payloads_and_report_missing_or_failed_helpers() {
+    use crate::behavior_tests::Home;
+    use std::os::unix::fs::PermissionsExt;
+    let home = Home::new();
+    let tools = match std::env::var_os("SPEECHIFY_TEST_CLIPBOARD_TOOLS") {
+        Some(tools) => std::path::PathBuf::from(tools),
+        None => {
+            let tools = home.0.join("tools");
+            std::fs::create_dir(&tools).unwrap();
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "platform::behavior::clipboard_and_paste_commands_preserve_payloads_and_report_missing_or_failed_helpers"])
+                .env("SPEECHIFY_TEST_CLIPBOARD_TOOLS", &tools).env("PATH", &tools).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+    };
+    let output = tools.join("payload");
+    for (wayland, helper) in [(true, "wl-copy"), (false, "xclip")] {
+        if wayland {
+            std::env::set_var("WAYLAND_DISPLAY", "isolated-test-session");
+        } else {
+            std::env::remove_var("WAYLAND_DISPLAY");
+        }
+        assert!(write_clipboard("No helper installed").is_err());
+        for status in [0, 3] {
+            let script = format!(
+                "#!/bin/sh\n/bin/cat > '{}'\nexit {status}\n",
+                output.display()
+            );
+            let path = tools.join(helper);
+            std::fs::write(&path, script).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let result = write_clipboard("Copied text 🦀\nsecond line");
+            assert_eq!(result.is_ok(), status == 0);
+            assert_eq!(
+                std::fs::read_to_string(&output).unwrap(),
+                "Copied text 🦀\nsecond line"
+            );
+        }
+    }
+    assert!(os::paste_keys().unwrap_err().contains("Install xdotool"));
+    for status in [0, 3] {
+        let path = tools.join("xdotool");
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexit {status}\n",
+                output.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(os::paste_keys().is_ok(), status == 0);
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "key\n--clearmodifiers\nctrl+v\n"
+        );
+    }
+    std::env::remove_var("WAYLAND_DISPLAY");
+    std::env::set_var("XDG_SESSION_TYPE", "x11");
+    std::env::set_var("DISPLAY", ":65530");
+    assert!(Poller::new().is_err());
+}

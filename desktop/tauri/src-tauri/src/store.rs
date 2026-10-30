@@ -213,24 +213,21 @@ impl Store {
         if rows.is_empty() {
             return Ok(text.into());
         }
-        let mut mapping = std::collections::HashMap::new();
+        let mut seen = std::collections::HashSet::new();
         let mut patterns = Vec::new();
+        let mut replacements = Vec::new();
         for (a, b) in rows {
-            if mapping.contains_key(&a) {
+            if !seen.insert(a.clone()) {
                 continue;
             }
-            patterns.push(regex::escape(&a).replace(' ', r"\s+"));
-            mapping.insert(a, b);
+            patterns.push(format!("({})", regex::escape(&a).replace(' ', r"\s+")));
+            replacements.push(b);
         }
         let re = regex::Regex::new(&format!(r"(?i)\b(?:{})\b", patterns.join("|"))).map_err(err)?;
         Ok(re
             .replace_all(text, |cap: &regex::Captures| {
-                let key = cap[0]
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    .to_lowercase();
-                mapping.get(&key).cloned().unwrap_or_else(|| cap[0].into())
+                let rule = cap.iter().skip(1).position(|group| group.is_some()).unwrap();
+                replacements[rule].as_str()
             })
             .into_owned())
     }

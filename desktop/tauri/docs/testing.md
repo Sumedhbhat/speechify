@@ -38,6 +38,14 @@ with `SPEECHIFY_TEST_DISPOSABLE_DESKTOP=1` and `--include-ignored`.
 The macOS adapter scenarios use an isolated child process with controlled
 Quartz permission, focus and key-state responses. Paste events are observed at
 the OS boundary, while clipboard snapshots use the real native pasteboard.
+Windows error scenarios replace individual imported OS functions in an isolated
+test child, then restore them before checking that clipboard and worker startup
+can recover. macOS uses native objects with controlled pasteboard responses.
+The Linux CI runner also creates a private, empty `/dev/input/by-id` directory;
+a FIFO in that directory exercises the real Wayland keyboard adapter and
+recording cancellation on disconnect. Local runs omit that scenario unless
+`SPEECHIFY_TEST_VIRTUAL_KEYBOARD=1` is explicitly set with the same isolated
+fixture available. The full gate still requires those paths to be covered.
 It writes reports under `coverage/` and runs the coverage gate. Use
 `--collect-only` to collect an individual platform's report before combining it
 with the other platforms.
@@ -68,7 +76,9 @@ python3 scripts/check-coverage.py \
 
 Tests and their fixtures live outside application source directories. Build
 scripts, generated type declarations, and the legacy Python desktop application
-are outside this Rust/TypeScript coverage gate. Tauri's optional Python model
+are outside this Rust/TypeScript coverage gate. The legacy application is still
+built and tested by the repository CI and release workflows, so removing it
+requires a separate release migration. Tauri's optional Python model
 and training resources remain runtime dependencies; the existing optional
 installer tests run with `python3 scripts/test-optional-installer.py`.
 
