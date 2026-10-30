@@ -229,6 +229,173 @@ fn trainer_cannot_adopt_a_model_outside_candidate_data() {
 }
 
 #[test]
+fn malformed_accepted_reports_and_damaged_training_environments_preserve_the_current_model() {
+    for problem in [
+        "missing-model",
+        "root-path",
+        "missing-directory",
+        "external-missing",
+        "invalid-ledger",
+        "damaged-executable",
+    ] {
+        let home = Home::new();
+        let outside = Home::new();
+        let service = fake_service(&home, "");
+        let before = service.config.lock().unwrap().clone();
+        let destination = home.0.join("models/whisper-ft-candidate");
+        if problem != "missing-directory" {
+            std::fs::create_dir_all(&destination).unwrap();
+            std::fs::write(destination.join("model.bin"), "weights").unwrap();
+        }
+        let mut report = json!({"status":"accepted","model":destination,"gate1":{"passed":true},"gate2":{"passed":true}});
+        match problem {
+            "missing-model" => {
+                report.as_object_mut().unwrap().remove("model");
+            }
+            "root-path" => report["model"] = json!("/"),
+            "external-missing" => report["model"] = json!(outside.0.join("whisper-ft-candidate")),
+            "invalid-ledger" => service
+                .store
+                .lock()
+                .unwrap()
+                .state("versions", &json!({"damaged":true}))
+                .unwrap(),
+            _ => (),
+        }
+        training_environment(&home, &report.to_string());
+        if problem == "damaged-executable" {
+            let executable = home.0.join(if cfg!(windows) {
+                "environments/training/Scripts/python.exe"
+            } else {
+                "environments/training/bin/python"
+            });
+            std::fs::write(executable, "This is not an executable").unwrap();
+        }
+        start_training_on_power(service.clone(), true).unwrap();
+        wait_until(|| !service.learning_busy.load(Ordering::SeqCst));
+        assert_eq!(*service.config.lock().unwrap(), before, "adopted {problem}");
+        assert_eq!(crate::config::load(&home.0).unwrap(), before);
+        assert!(service
+            .store
+            .lock()
+            .unwrap()
+            .get_state("training_status")
+            .unwrap()
+            .is_string());
+        assert_eq!(service.training_pid.load(Ordering::SeqCst), 0);
+        assert!(home.0.join("models/whisper-ft-test/model.bin").exists());
+    }
+}
+
+#[test]
+fn version_retention_protects_the_active_model_and_refuses_damaged_directory_entries() {
+    let home = Home::new();
+    let service = fake_service(&home, "");
+    let active = json!({"name":"whisper-ft-test","path":home.0.join("models/whisper-ft-test")});
+    service
+        .store
+        .lock()
+        .unwrap()
+        .state("versions", &json!([active, active]))
+        .unwrap();
+    prune(&service, 1).unwrap();
+    assert_eq!(
+        service
+            .store
+            .lock()
+            .unwrap()
+            .get_state("versions")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let damaged = home.0.join("models/old-version");
+    std::fs::write(&damaged, "An unrelated file").unwrap();
+    for path in [damaged.clone(), std::path::PathBuf::from("/")] {
+        let ledger = json!([{"name":"old-version","path":path}, active]);
+        service
+            .store
+            .lock()
+            .unwrap()
+            .state("versions", &ledger)
+            .unwrap();
+        assert!(prune(&service, 1).is_err());
+        assert_eq!(
+            service.store.lock().unwrap().get_state("versions").unwrap(),
+            ledger
+        );
+        assert_eq!(
+            std::fs::read_to_string(&damaged).unwrap(),
+            "An unrelated file"
+        );
+        assert!(home.0.join("models/whisper-ft-test/model.bin").exists());
+    }
+}
+
+#[test]
+fn the_background_scheduler_starts_due_training_and_preserves_a_rejected_models_predecessor() {
+    let home = Home::new();
+    let service = fake_service(&home, "");
+    training_environment(
+        &home,
+        r#"{"status":"rejected","gate1":{"passed":false},"gate2":{"passed":true}}"#,
+    );
+    let before = service.config.lock().unwrap()["model"].clone();
+    service.config.lock().unwrap()["teacher"] = json!("off");
+    {
+        let mut store = service.store.lock().unwrap();
+        for _ in 0..50 {
+            let id = store
+                .record(&[0.1; 160], "old words", "old words", true)
+                .unwrap();
+            store.edit(id, "human correction").unwrap();
+        }
+        store
+            .state("last_training", &json!({"count":0,"ts":now()-10.*86400.}))
+            .unwrap();
+    }
+    *service.last_activity.lock().unwrap() = Instant::now() - Duration::from_secs(600);
+    let on_mains = mains();
+    let task = scheduler(service.clone());
+    if on_mains {
+        wait_until(|| {
+            service
+                .store
+                .lock()
+                .unwrap()
+                .get_state("last_training")
+                .unwrap()["count"]
+                == 50
+        });
+        assert_eq!(
+            service
+                .store
+                .lock()
+                .unwrap()
+                .get_state("training_status")
+                .unwrap()["status"],
+            "rejected"
+        );
+        assert_eq!(service.config.lock().unwrap()["model"], before);
+    } else {
+        std::thread::sleep(Duration::from_secs(6));
+        assert_eq!(
+            service
+                .store
+                .lock()
+                .unwrap()
+                .get_state("last_training")
+                .unwrap()["count"],
+            0
+        );
+    }
+    service.shutdown();
+    task.join().unwrap();
+}
+
+#[test]
 fn rollback_uses_the_previous_adopted_version_and_keeps_the_version_ledger() {
     let home = Home::new();
     let service = fake_service(&home, "");
