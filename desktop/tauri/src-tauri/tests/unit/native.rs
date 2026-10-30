@@ -52,9 +52,12 @@ fn incomplete_native_installations_are_rejected_before_a_model_can_become_ready(
     ] {
         let home = Home::new();
         let source = home.0.join("incomplete.rs");
+        let symbol = regex::Regex::new(&format!(r"\b{missing}\b")).unwrap();
         std::fs::write(
             &source,
-            original.replace(missing, &format!("fixture_missing_{missing}")),
+            symbol
+                .replace_all(&original, format!("fixture_missing_{missing}"))
+                .into_owned(),
         )
         .unwrap();
         let filename = fixtures().native.file_name().unwrap();
@@ -76,9 +79,9 @@ fn incomplete_native_installations_are_rejected_before_a_model_can_become_ready(
         );
         let result =
             crate::native::Native::open(&home.0, Path::new("whisper-vocab-prompt"), "cpu", 2);
-        assert!(
-            result.is_err(),
-            "model became ready despite missing {missing}"
-        );
+        let error = result
+            .err()
+            .expect("model became ready despite a missing export");
+        assert!(symbol.is_match(&error), "{missing}: {error}");
     }
 }

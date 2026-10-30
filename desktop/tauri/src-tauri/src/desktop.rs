@@ -263,12 +263,13 @@ fn show(app: &tauri::AppHandle, page: &str) {
 fn runtime(app: tauri::AppHandle, s: Arc<Service>, indicator: tauri::WebviewWindow) {
     start_runtime(s, move |page| show(&app, page), move |visible| {
         if visible { let _ = indicator.show(); } else { let _ = indicator.hide(); }
-    });
+    }, Capture::open);
 }
 fn start_runtime(
     s: Arc<Service>,
     navigate: impl Fn(&str) + Send + 'static,
     indicator: impl Fn(bool) + Send + 'static,
+    open_capture: impl Fn(&str) -> Result<Capture> + Send + 'static,
 ) -> [std::thread::JoinHandle<()>; 3] {
     let (tx, rx) = mpsc::sync_channel::<(Vec<f32>, u64, u64)>(4);
     let infer = s.clone();
@@ -337,7 +338,7 @@ fn start_runtime(
                         active_target = target;
                         active_generation = generation;
                         if capture.is_none() {
-                            match Capture::open(input) {
+                            match open_capture(input) {
                                 Ok(c) => {
                                     recorder.state.lock().unwrap()["actual_input"] =
                                         json!(&c.actual_device);
@@ -376,7 +377,9 @@ fn start_runtime(
                         }
                         active_capture = false;
                         if let Some(c) = &capture {
-                            let queued = c.audio.take().and_then(|audio| {
+                            let taken = c.audio.take();
+                            let stream_failed = taken.is_err();
+                            let queued = taken.and_then(|audio| {
                                 if audio.len() < 160 {
                                     return Err("Microphone was not ready before release; try holding longer".into());
                                 }
@@ -387,6 +390,9 @@ fn start_runtime(
                                 Ok(()) => recorder.set_stage("Queued"),
                                 Err(e) => recorder.error(e),
                             }
+                            if stream_failed {
+                                capture = None;
+                            }
                         }
                         if !keep {
                             capture = None;
@@ -396,7 +402,7 @@ fn start_runtime(
                 }
             }
             if keep && capture.is_none() && !recorder.recording.load(Ordering::SeqCst) {
-                match Capture::open(input) {
+                match open_capture(input) {
                     Ok(c) => {
                         recorder.state.lock().unwrap()["actual_input"] = json!(&c.actual_device);
                         capture = Some(c);

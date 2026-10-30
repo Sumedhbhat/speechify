@@ -444,6 +444,12 @@ struct Running {
 #[cfg(target_os = "linux")]
 impl Running {
     fn new(service: Arc<Service>) -> Self {
+        Self::with_capture(service, Capture::open)
+    }
+    fn with_capture(
+        service: Arc<Service>,
+        open: impl Fn(&str) -> Result<Capture> + Send + 'static,
+    ) -> Self {
         let visibility = Arc::new(std::sync::Mutex::new(Vec::new()));
         let changes = visibility.clone();
         let navigation = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -454,6 +460,7 @@ impl Running {
             move |visible| {
                 changes.lock().unwrap().push(visible);
             },
+            open,
         )
         .into_iter()
         .collect();
@@ -1442,4 +1449,120 @@ fn empty_recognition_does_not_save_a_guess_or_offer_to_paste_empty_text() {
         .history("", "")
         .unwrap()
         .is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Requires the synthetic ALSA input"]
+fn a_disconnect_consumed_by_submit_reopens_the_microphone_before_the_next_recording() {
+    use crate::behavior_tests::{fake_service, io_child, wait_until};
+    let _desktop = crate::behavior_tests::DESKTOP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if !io_child("submit-stream-error") {
+        return;
+    }
+    let home = Home::new();
+    let service = fake_service(&home, "empty");
+    let mut cfg = service.config.lock().unwrap().clone();
+    cfg["keep_mic_open"] = json!(true);
+    cfg["input_device"] = json!("Speechify float disconnect");
+    cfg["min_hold_ms"] = json!(1);
+    service.update(cfg).unwrap();
+    let (opened, sources) = mpsc::channel();
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let runtime = Running::with_capture(service.clone(), move |_| {
+        let first = calls.fetch_add(1, Ordering::SeqCst) == 0;
+        let name = if first {
+            "Speechify float disconnect"
+        } else {
+            "Speechify float input"
+        };
+        let mut capture = Capture::open(name)?;
+        if first {
+            // Model an input whose callback delivers one terminal error and
+            // then stops producing, independently of ALSA's repeated errors.
+            capture.audio = crate::audio::capture::CapturedAudio::new(16000, 1);
+            capture.audio.push(&[0.25f32; 160]);
+        }
+        opened.send(capture.audio.clone()).unwrap();
+        Ok(capture)
+    });
+    runtime.start();
+    let audio = sources.recv_timeout(Duration::from_secs(5)).unwrap();
+    let sender = service.capture_tx.lock().unwrap().as_ref().unwrap().clone();
+    let generation = service.generation.load(Ordering::SeqCst);
+    let mut delivered = false;
+    for attempt in 0..10 {
+        let cfg = service.config.lock().unwrap();
+        service.manual_started.lock().unwrap().take();
+        service.recording.store(false, Ordering::SeqCst);
+        let before = runtime
+            .visibility
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|visible| !**visible)
+            .count();
+        sender.try_send((Action::Submit, 0, generation)).unwrap();
+        for _ in 0..31 {
+            sender.try_send((Action::Cancel, 0, generation)).unwrap();
+        }
+        let start = Instant::now();
+        // A freed slot proves the recorder has received Submit and is waiting
+        // for the setting transaction to release its configuration lock.
+        while start.elapsed() < Duration::from_millis(100) {
+            if sender.try_send((Action::Cancel, 0, generation)).is_ok() {
+                delivered = true;
+                break;
+            }
+            std::thread::yield_now();
+        }
+        if delivered {
+            audio.fail("Microphone disconnected or unavailable: terminal fixture error".into());
+            drop(cfg);
+            wait_until(|| service.snapshot()["state"]["actual_input"] == "Speechify float input");
+            wait_until(|| {
+                runtime
+                    .visibility
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|visible| !**visible)
+                    .count()
+                    >= before + 32
+            });
+            break;
+        }
+        drop(cfg);
+        wait_until(|| {
+            runtime
+                .visibility
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|visible| !**visible)
+                .count()
+                >= before + 31
+        });
+        assert!(
+            attempt < 9,
+            "recorder never received Submit during the setting transaction"
+        );
+        runtime.start();
+    }
+    assert!(delivered);
+    assert!(service
+        .store
+        .lock()
+        .unwrap()
+        .history("", "")
+        .unwrap()
+        .is_empty());
+    runtime.start();
+    wait_until(|| service.snapshot()["state"]["level"].as_f64().unwrap_or(0.) > 0.);
+    std::thread::sleep(Duration::from_millis(100));
+    dispatch(&service, "manual_stop", &json!({})).unwrap();
+    wait_until(|| service.snapshot()["state"]["stage"] == "Ready");
+    assert!(service.snapshot()["state"]["error"].is_null());
 }

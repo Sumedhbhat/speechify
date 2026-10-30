@@ -6,18 +6,40 @@ Inherited LLVM_PROFILE_FILE lets cargo-llvm-cov include these real processes.
 import json
 from contextlib import closing
 import os
+import queue
 from pathlib import Path
 import shutil
 import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import wave
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(sys.argv.pop(1)).resolve()
+
+
+def read_line(process, timeout=10):
+    """Bound complete protocol lines on both Windows and POSIX pipes."""
+    result = queue.Queue(maxsize=1)
+    def read():
+        try:
+            result.put((True, process.stdout.readline()))
+        except Exception as error:
+            result.put((False, error))
+    threading.Thread(target=read, daemon=True).start()
+    try:
+        success, value = result.get(timeout=timeout)
+    except queue.Empty:
+        process.kill()
+        process.wait(timeout=5)
+        raise subprocess.TimeoutExpired(process.args, timeout) from None
+    if not success:
+        raise value
+    return value
 
 
 class CliBehavior(unittest.TestCase):
@@ -32,12 +54,12 @@ class CliBehavior(unittest.TestCase):
         command = ["rustc", "--edition=2021", "--crate-type", "cdylib", str(source), "-o", str(cls.root / library)]
         if linker := os.environ.get("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"):
             command += ["-C", f"linker={linker}"]
-        subprocess.run(command, check=True, capture_output=True)
+        subprocess.run(command, check=True, capture_output=True, timeout=300)
         cls.worker_peer = cls.root / ("peer.exe" if os.name == "nt" else "peer")
         command = ["rustc", "--edition=2021", str(ROOT / "tests/fixtures/worker.rs"), "-o", str(cls.worker_peer)]
         if linker := os.environ.get("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"):
             command += ["-C", f"linker={linker}"]
-        subprocess.run(command, check=True, capture_output=True)
+        subprocess.run(command, check=True, capture_output=True, timeout=300)
         cls.wav = cls.root / "speech.wav"
         with wave.open(str(cls.wav), "wb") as wav:
             wav.setnchannels(1)
@@ -51,8 +73,10 @@ class CliBehavior(unittest.TestCase):
                 [os.environ.get("SPEECHIFY_TEST_XVFB", "Xvfb"), "-displayfd", "1", "-screen", "0", "800x600x24", "-nolisten", "tcp"],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
-            number = cls.xserver.stdout.readline().strip()
+            number = read_line(cls.xserver, timeout=15).strip()
             if not number:
+                cls.xserver.kill()
+                cls.xserver.wait(timeout=5)
                 raise RuntimeError(f"Xvfb failed: {cls.xserver.stderr.read()}")
             cls.display = f":{number}"
 
@@ -86,6 +110,23 @@ class CliBehavior(unittest.TestCase):
     def worker(self, model="plain", device="cpu", messages=None):
         messages = messages if messages is not None else [{"wav": str(self.wav), "language": "en", "prompt": "GitHub"}]
         return self.run_cli("--native-worker", self.root, model, device, "2", text="".join(json.dumps(m) + "\n" for m in messages))
+
+    def test_a_silent_protocol_helper_times_out_and_is_terminated(self):
+        for output in ["", "partial line"]:
+            with self.subTest(output=output):
+                script = f"import time; print({output!r}, end='', flush=True); time.sleep(60)"
+                helper = subprocess.Popen([sys.executable, "-c", script],
+                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        read_line(helper, timeout=.1)
+                    self.assertIsNotNone(helper.poll())
+                finally:
+                    if helper.poll() is None:
+                        helper.kill()
+                    helper.wait(timeout=5)
+                    helper.stdout.close()
+                    helper.stderr.close()
 
     def test_diagnostics_reports_the_os_and_permission_guidance(self):
         result = self.run_cli("diagnostics")
@@ -267,12 +308,12 @@ os._exit(0)
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                   text=True, env=self.environment())
         try:
-            self.assertTrue(json.loads(worker.stdout.readline())["ready"])
+            self.assertTrue(json.loads(read_line(worker))["ready"])
             time.sleep(1.2)
             self.assertIsNone(worker.poll())
             worker.stdin.write(json.dumps({"wav": str(self.wav)}) + "\n")
             worker.stdin.flush()
-            self.assertTrue(json.loads(worker.stdout.readline())["text"].startswith("160|en|"))
+            self.assertTrue(json.loads(read_line(worker))["text"].startswith("160|en|"))
             worker.stdin.close()
             self.assertEqual(worker.wait(timeout=5), 0)
         finally:
@@ -298,7 +339,6 @@ os._exit(0)
                               capture_output=True, env=self.environment(), timeout=5)
 
     def clipboard_worker(self, text, extra_env=None):
-        import select
         worker = subprocess.Popen([str(BINARY), "--clipboard-worker"], stdin=subprocess.PIPE,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={**self.environment(), **(extra_env or {})}, text=True)
         def close_worker():
@@ -311,8 +351,7 @@ os._exit(0)
         self.addCleanup(close_worker)
         worker.stdin.write(json.dumps(text) + "\n")
         worker.stdin.flush()
-        self.assertTrue(select.select([worker.stdout], [], [], 10)[0], "Clipboard worker did not respond")
-        ready = json.loads(worker.stdout.readline())
+        ready = json.loads(read_line(worker))
         return worker, ready
 
     @unittest.skipUnless(sys.platform == "linux", "X11 clipboard contract")
@@ -512,7 +551,7 @@ os._exit(0)
 
     @unittest.skipUnless(sys.platform == "linux", "Desktop lifecycle on an isolated X11/D-Bus session")
     def test_desktop_records_into_a_target_survives_closing_settings_and_quits_cleanly(self):
-        bus = subprocess.check_output(["dbus-daemon", "--session", "--fork", "--print-address=1", "--print-pid=1"], text=True).splitlines()
+        bus = subprocess.check_output(["dbus-daemon", "--session", "--fork", "--print-address=1", "--print-pid=1"], text=True, timeout=10).splitlines()
         self.addCleanup(lambda: os.kill(int(bus[1]), 15))
         env = self.environment()
         env.update(DBUS_SESSION_BUS_ADDRESS=bus[0], LIBGL_ALWAYS_SOFTWARE="1", WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS="1")
@@ -553,7 +592,7 @@ os._exit(0)
 
         def windows(visible=False):
             args = ["xdotool", "search"] + (["--onlyvisible"] if visible else []) + ["--name", "^Speechify Tauri Candidate$"]
-            found = subprocess.run(args, capture_output=True, text=True, env=env)
+            found = subprocess.run(args, capture_output=True, text=True, env=env, timeout=5)
             return found.stdout.split()
 
         window = wait(lambda: windows(True))[0]
@@ -630,16 +669,16 @@ os._exit(0)
         for hotkey in ["ctrl+alt+f", "ctrl+alt+h", "ctrl+alt+m"]:
             close_settings()
             wait(lambda: not windows(True))
-            subprocess.run(["xdotool", "keydown", hotkey], check=True, env=env)
+            subprocess.run(["xdotool", "keydown", hotkey], check=True, env=env, timeout=5)
             time.sleep(.1)
-            subprocess.run(["xdotool", "keyup", hotkey], check=True, env=env)
+            subprocess.run(["xdotool", "keyup", hotkey], check=True, env=env, timeout=5)
             wait(lambda: windows(True))
 
         # A short global talk-key tap must never create a dictation or audio.
         # Physical right-Control avoids xdotool's automatic left modifiers.
-        subprocess.run(["xdotool", "keydown", "105"], check=True, env=env)
+        subprocess.run(["xdotool", "keydown", "105"], check=True, env=env, timeout=5)
         time.sleep(.06)
-        subprocess.run(["xdotool", "keyup", "105"], check=True, env=env)
+        subprocess.run(["xdotool", "keyup", "105"], check=True, env=env, timeout=5)
         time.sleep(.3)
         import sqlite3
         with closing(sqlite3.connect(data / "learning.db")) as db:
@@ -682,9 +721,9 @@ os._exit(0)
             x.XSync(target_display, 0)
             previous = "Keep my earlier copy 🦀"
             self.write_clipboard(previous)
-            subprocess.run(["xdotool", "keydown", "105"], check=True, env=env)
+            subprocess.run(["xdotool", "keydown", "105"], check=True, env=env, timeout=5)
             time.sleep(.4)
-            subprocess.run(["xdotool", "keyup", "105"], check=True, env=env)
+            subprocess.run(["xdotool", "keyup", "105"], check=True, env=env, timeout=5)
             received = []
             def consume_paste():
                 while x.XPending(target_display):

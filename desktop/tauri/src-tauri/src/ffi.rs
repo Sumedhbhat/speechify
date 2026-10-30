@@ -215,10 +215,10 @@ pub fn verify(lib: &libloading::Library) -> Result<(), String> {
     unsafe {
         let size: libloading::Symbol<unsafe extern "C" fn(i32) -> usize> = lib
             .get(b"transcribe_abi_struct_size\0")
-            .map_err(crate::config::err)?;
+            .map_err(|error| format!("Missing transcribe_abi_struct_size: {error}"))?;
         let align: libloading::Symbol<unsafe extern "C" fn(i32) -> usize> = lib
             .get(b"transcribe_abi_struct_align\0")
-            .map_err(crate::config::err)?;
+            .map_err(|error| format!("Missing transcribe_abi_struct_align: {error}"))?;
         if size(12) != std::mem::size_of::<transcribe_ext>()
             || align(12) != std::mem::align_of::<transcribe_ext>()
         {

@@ -552,19 +552,18 @@ mod os {
     impl Clip {
         fn committed_generation(&mut self) -> Result<u32> {
             unsafe {
-                // CloseClipboard commits synthesized text formats and advances
-                // the sequence. Retain our unique owner window, then reacquire
-                // the lock and prove no other writer took ownership meanwhile.
+                // Closing commits synthesized formats and advances the sequence.
+                // These queries do not require reopening the clipboard, so a
+                // reader cannot make us discard the saved snapshot after writing.
                 CloseClipboard();
                 self.locked = false;
-                if OpenClipboard(self.window) == 0 {
-                    return Err("Clipboard is busy; retry".into());
-                }
-                self.locked = true;
+                let generation = GetClipboardSequenceNumber();
+                // A newer copy either fails this owner check or advances the
+                // restore's sequence guard. Read the sequence before the owner.
                 if GetClipboardOwner() != self.window {
                     return Err("Clipboard changed before paste; transcript saved".into());
                 }
-                Ok(GetClipboardSequenceNumber())
+                Ok(generation)
             }
         }
     }

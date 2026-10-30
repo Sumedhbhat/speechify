@@ -544,6 +544,35 @@ fn clipboard_failures_are_reported_and_later_writes_can_recover() {
 
 static ORIGINAL_OPEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static OPEN_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static ORIGINAL_SEQUENCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+unsafe extern "system" fn copy_after_reading_generation() -> u32 {
+    let original: unsafe extern "system" fn() -> u32 =
+        std::mem::transmute(ORIGINAL_SEQUENCE.load(std::sync::atomic::Ordering::SeqCst));
+    let generation = original();
+    write_clipboard("A newer copy during commit").unwrap();
+    generation
+}
+
+#[test]
+#[ignore = "Controls a native clipboard race on a disposable desktop"]
+fn a_new_copy_during_dictation_commit_is_never_overwritten() {
+    let _desktop = CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner());
+    if !failure_child() {
+        return;
+    }
+    write_clipboard("Previous copy").unwrap();
+    let hook = unsafe {
+        os_hooks::Hook::new(
+            "GetClipboardSequenceNumber",
+            copy_after_reading_generation as *const (),
+        )
+    };
+    ORIGINAL_SEQUENCE.store(hook.original(), std::sync::atomic::Ordering::SeqCst);
+    assert!(super::os::snapshot_and_write("Temporary dictation").is_err());
+    drop(hook);
+    assert_eq!(read(), "A newer copy during commit");
+}
+
 unsafe extern "system" fn busy_after_clipboard_commit(window: *mut std::ffi::c_void) -> i32 {
     use std::sync::atomic::Ordering;
     if OPEN_CALLS.fetch_add(1, Ordering::SeqCst) != 0 {
@@ -599,8 +628,10 @@ fn late_clipboard_refusals_and_closed_targets_release_resources_and_allow_recove
     let hook =
         unsafe { os_hooks::Hook::new("OpenClipboard", busy_after_clipboard_commit as *const ()) };
     ORIGINAL_OPEN.store(hook.original(), Ordering::SeqCst);
-    assert!(super::os::snapshot_and_write("Temporary").is_err());
+    let restore = super::os::snapshot_and_write("Temporary").unwrap();
     drop(hook);
+    restore().unwrap();
+    assert_eq!(read(), "Previous copy");
     write_clipboard("Recovered").unwrap();
     assert_eq!(read(), "Recovered");
 

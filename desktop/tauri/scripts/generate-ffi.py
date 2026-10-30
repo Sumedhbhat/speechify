@@ -13,7 +13,7 @@ out=['// Generated from transcribe.cpp 0.3.1; PUBLIC_HEADER_HASH '+m.PUBLIC_HEAD
 for name in m.STRUCT_LAYOUT:
  cls=getattr(m,name)
  out+=['#[repr(C)]',f'pub struct {name} {{']+[f'    pub {n}: {typ(t)},' for n,t in cls._fields_]+['}']
-out+=['pub fn verify(lib: &libloading::Library) -> Result<(), String> {','unsafe {','let size: libloading::Symbol<unsafe extern "C" fn(i32)->usize> = lib.get(b"transcribe_abi_struct_size\\0").map_err(crate::config::err)?;','let align: libloading::Symbol<unsafe extern "C" fn(i32)->usize> = lib.get(b"transcribe_abi_struct_align\\0").map_err(crate::config::err)?;']
+out+=['pub fn verify(lib: &libloading::Library) -> Result<(), String> {','unsafe {','let size: libloading::Symbol<unsafe extern "C" fn(i32)->usize> = lib.get(b"transcribe_abi_struct_size\\0").map_err(|error| format!("Missing transcribe_abi_struct_size: {error}"))?;','let align: libloading::Symbol<unsafe extern "C" fn(i32)->usize> = lib.get(b"transcribe_abi_struct_align\\0").map_err(|error| format!("Missing transcribe_abi_struct_align: {error}"))?;']
 for name,i in m.ABI_STRUCT_IDS.items():out+=[f'if size({i}) != std::mem::size_of::<{name}>() || align({i}) != std::mem::align_of::<{name}>() {{ return Err("native ABI mismatch: {name}".into()); }}']
 out+=['} Ok(()) }']
 (root/'src-tauri/src/ffi.rs').write_text('\n'.join(out)+'\n')
