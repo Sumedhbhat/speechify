@@ -9,7 +9,7 @@ tauri-build = { version = "=2.7.2", features = [] }
 tauri = { version = "=2.12.3", features = ["tray-icon", "image-png"], optional = true }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.152" }
-toml = { version = "=0.9.8" }
+toml = { version = "=1.1.8" }
 rusqlite = { version = "=0.40.2", features = ["bundled", "backup"] }
 reqwest = { version = "=0.13.5", features = ["blocking", "json", "rustls"], default-features = false }
 sha2 = { version = "=0.11.0" }
