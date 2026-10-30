@@ -7,6 +7,50 @@ fn script(home: &Home, body: &str) {
 const WAIT:&str="import pathlib,sys,time\nr=pathlib.Path(sys.argv[sys.argv.index('--root')+1])\nprint('installer log before progress',flush=True)\nprint('{\"stage\":\"Installing test environment\"}',flush=True)\nwhile not (r/'finish').exists():time.sleep(.01)\n(r/'installed').write_text('ready')\n";
 
 #[test]
+fn installer_log_noise_never_panics_or_hides_subsequent_valid_progress() {
+    for noise in ["json-scalars", "non-utf8"] {
+        let home = Home::new();
+        let service = home.service();
+        std::fs::write(home.0.join("noise"), noise).unwrap();
+        script(
+            &home,
+            r#"import pathlib,sys,time
+r=pathlib.Path(sys.argv[sys.argv.index('--root')+1])
+print('{"stage":"Starting fixture"}',flush=True)
+if (r/'noise').read_text() == 'non-utf8':
+ sys.stdout.buffer.write(b'\xff\n');sys.stdout.buffer.flush()
+else:
+ for value in ['42','null','[]','true','"a log"','{}','{"stage":9}']:print(value,flush=True)
+print('{"stage":"Fixture ready","percent":50,"id":"another job"}',flush=True)
+while not (r/'finish').exists():time.sleep(.01)
+"#,
+        );
+        let background = service.clone();
+        let job = std::thread::spawn(move || install(&background, "training"));
+        let start = Instant::now();
+        while !job.is_finished()
+            && service.snapshot()["state"]["download"]["stage"] != "Fixture ready"
+            && start.elapsed() < Duration::from_secs(3)
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let progress = service.snapshot()["state"]["download"].clone();
+        std::fs::write(home.0.join("finish"), "").unwrap();
+        let result = job.join();
+        assert!(result.is_ok(), "installer panicked on {noise}");
+        result.unwrap().unwrap();
+        assert_eq!(
+            progress["stage"], "Fixture ready",
+            "lost progress after {noise}"
+        );
+        assert_eq!(progress["percent"], 50);
+        assert_eq!(progress["id"], "training");
+        assert_eq!(service.install_pid.load(Ordering::SeqCst), 0);
+        assert!(service.installing_family.lock().unwrap().is_none());
+    }
+}
+
+#[test]
 fn optional_install_reports_progress_then_releases_its_family_and_process() {
     let home = Home::new();
     let service = home.service();

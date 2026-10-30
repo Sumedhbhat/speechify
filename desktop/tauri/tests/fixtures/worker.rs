@@ -16,11 +16,13 @@ fn main() {
         "load-error" => { println!("{{\"error\":\"model rejected\"}}"); return; }
         "not-ready" => { println!("{{\"ready\":false}}"); return; }
         "invalid" => { println!("invalid JSON"); return; }
+        "invalid-utf8" => { std::io::stdout().write_all(b"\xff\n").unwrap(); std::io::stdout().flush().unwrap(); return; }
         "exit" => return,
         _ => (),
     }
     println!("{{\"ready\":true,\"device\":\"cpu\",\"load_ms\":1}}");
     std::io::stdout().flush().unwrap();
+    if mode.trim() == "exit-after-ready" { return; }
     for line in std::io::stdin().lock().lines() {
         let line = line.unwrap(); std::fs::write(model.join("request.json"), &line).unwrap();
         if mode.trim() == "slow" { std::thread::sleep(std::time::Duration::from_secs(60)); }

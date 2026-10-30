@@ -49,7 +49,18 @@ extern "system" {
     ) -> i32;
     fn TranslateMessage(message: *const Message) -> i32;
     fn DispatchMessageW(message: *const Message) -> isize;
+    fn keybd_event(key: u8, scan: u8, flags: u32, extra: usize);
+    fn GetWindowLongPtrW(window: WindowHandle, index: i32) -> isize;
+    fn SetWindowLongPtrW(window: WindowHandle, index: i32, value: isize) -> isize;
+    fn CallWindowProcW(
+        procedure: WindowProcedure,
+        window: WindowHandle,
+        message: u32,
+        w: usize,
+        l: isize,
+    ) -> isize;
 }
+type WindowProcedure = unsafe extern "system" fn(WindowHandle, u32, usize, isize) -> isize;
 #[link(name = "kernel32")]
 extern "system" {
     fn GetCurrentThreadId() -> u32;
@@ -139,6 +150,146 @@ impl Drop for Window {
             DestroyWindow(self.0);
         }
     }
+}
+
+struct SelectionChange<'a> {
+    window: &'a Window,
+    state: Box<SelectionState>,
+}
+struct SelectionState {
+    original: WindowProcedure,
+    change: bool,
+}
+unsafe extern "system" fn change_during_selection(
+    window: WindowHandle,
+    message: u32,
+    w: usize,
+    l: isize,
+) -> isize {
+    let state = GetWindowLongPtrW(window, -21) as *mut SelectionState;
+    let original = (*state).original;
+    let change = message == 0x00b1 && (*state).change;
+    if change {
+        (*state).change = false;
+    }
+    let result = CallWindowProcW(original, window, message, w, l);
+    if change {
+        SendMessageW(
+            window,
+            0x000c,
+            0,
+            wide("The user typed during the guard").as_ptr() as isize,
+        );
+    }
+    result
+}
+impl<'a> SelectionChange<'a> {
+    fn new(window: &'a Window) -> Self {
+        unsafe {
+            let original =
+                std::mem::transmute::<isize, WindowProcedure>(GetWindowLongPtrW(window.0, -4));
+            let mut state = Box::new(SelectionState {
+                original,
+                change: true,
+            });
+            SetWindowLongPtrW(window.0, -21, state.as_mut() as *mut _ as isize);
+            SetWindowLongPtrW(window.0, -4, change_during_selection as *const () as isize);
+            Self { window, state }
+        }
+    }
+}
+impl Drop for SelectionChange<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            SetWindowLongPtrW(self.window.0, -4, self.state.original as *const () as isize);
+            SetWindowLongPtrW(self.window.0, -21, 0);
+        }
+    }
+}
+
+#[test]
+#[ignore = "Uses native windows and key events; requires a disposable desktop"]
+fn native_key_state_includes_right_modifiers_function_keys_and_unmapped_keys() {
+    assert_eq!(
+        std::env::var("SPEECHIFY_TEST_DISPOSABLE_DESKTOP").as_deref(),
+        Ok("1")
+    );
+    let _desktop = CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner());
+    let window = Window::new("Edit");
+    window.focus();
+    struct HeldKeys;
+    impl Drop for HeldKeys {
+        fn drop(&mut self) {
+            for key in [0xa3, 0x41, 0x87, 0xba] {
+                unsafe {
+                    keybd_event(key, 0, if key == 0xa3 { 3 } else { 2 }, 0);
+                }
+            }
+        }
+    }
+    let held = HeldKeys;
+    for key in [0xa3, 0x41, 0x87, 0xba] {
+        unsafe {
+            keybd_event(key, 0, if key == 0xa3 { 1 } else { 0 }, 0);
+        }
+    }
+    let poller = Poller::new().unwrap();
+    let expected = ["ctrl_r".into(), "a".into(), "f24".into(), "key-186".into()]
+        .into_iter()
+        .collect();
+    wait_until(|| {
+        window.pump();
+        poller.down().unwrap() == expected
+    });
+    drop(held);
+    wait_until(|| {
+        window.pump();
+        poller.down().unwrap().is_empty()
+    });
+    unsafe {
+        SetFocus(std::ptr::null_mut());
+    }
+    assert!(poller.focus().is_err());
+}
+
+#[test]
+#[ignore = "Uses native windows; requires a disposable desktop"]
+fn correction_refuses_a_target_that_changes_after_the_range_guard() {
+    assert_eq!(
+        std::env::var("SPEECHIFY_TEST_DISPOSABLE_DESKTOP").as_deref(),
+        Ok("1")
+    );
+    let _desktop = CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner());
+    let window = Window::new("Edit");
+    let receipt = window.pasted();
+    {
+        let _change = SelectionChange::new(&window);
+        assert!(replacement::replace(&receipt, "must not overwrite the user").is_err());
+    }
+    assert_eq!(window.text(), "The user typed during the guard");
+}
+
+#[test]
+#[ignore = "Uses native windows; requires a disposable desktop"]
+fn correction_refuses_a_busy_target_without_waiting_for_it_to_resume() {
+    assert_eq!(
+        std::env::var("SPEECHIFY_TEST_DISPOSABLE_DESKTOP").as_deref(),
+        Ok("1")
+    );
+    let _desktop = CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner());
+    let (ready, receipt) = std::sync::mpsc::channel();
+    let (resume, waiting) = std::sync::mpsc::channel();
+    let owner = std::thread::spawn(move || {
+        let window = Window::new("Edit");
+        ready.send(window.pasted()).unwrap();
+        let _ = waiting.recv_timeout(Duration::from_secs(5));
+        assert_eq!(window.text(), "A 🦀 new Z");
+    });
+    let receipt = receipt.recv_timeout(Duration::from_secs(5)).unwrap();
+    let result = replacement::replace(&receipt, "must not replace");
+    let _ = resume.send(());
+    owner.join().unwrap();
+    assert!(result.is_err());
 }
 
 #[test]

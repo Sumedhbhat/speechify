@@ -35,6 +35,9 @@ float, signed and unsigned samples, setup/start failures, and disconnects;
 it never opens microphone hardware. macOS/Windows clipboard tests are opt-in because
 they modify the system clipboard: the CI job runs them on disposable runners
 with `SPEECHIFY_TEST_DISPOSABLE_DESKTOP=1` and `--include-ignored`.
+The macOS adapter scenarios use an isolated child process with controlled
+Quartz permission, focus and key-state responses. Paste events are observed at
+the OS boundary, while clipboard snapshots use the real native pasteboard.
 It writes reports under `coverage/` and runs the coverage gate. Use
 `--collect-only` to collect an individual platform's report before combining it
 with the other platforms.

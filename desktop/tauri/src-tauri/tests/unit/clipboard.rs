@@ -4,6 +4,9 @@ static CLIPBOARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(windows)]
 #[path = "windows.rs"]
 mod desktop_behavior;
+#[cfg(target_os = "macos")]
+#[path = "macos.rs"]
+mod desktop_behavior;
 
 #[cfg(target_os = "macos")]
 fn read() -> String {

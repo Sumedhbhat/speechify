@@ -31,6 +31,9 @@ if [[ "$(uname -s)" == Linux ]]; then
   env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 ALSA_CONFIG_PATH="$PWD/tests/fixtures/alsa.conf" SPEECHIFY_TEST_SYNTHETIC_ALSA=1 xvfb-run -a \
     cargo llvm-cov --manifest-path src-tauri/Cargo.toml --features behavioral-tests --locked --no-report -- --include-ignored
 else
+  if [[ "$(uname -s)" == Darwin ]]; then
+    "$PYTHON" scripts/prepare-macos-fixture.py
+  fi
   cargo llvm-cov --manifest-path src-tauri/Cargo.toml --features behavioral-tests --locked --no-report -- --include-ignored
 fi
 cargo llvm-cov run --manifest-path src-tauri/Cargo.toml --features behavioral-tests --locked --no-clean --json --output-path coverage/rust.json -- diagnostics

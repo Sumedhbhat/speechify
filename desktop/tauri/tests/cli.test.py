@@ -127,6 +127,50 @@ class CliBehavior(unittest.TestCase):
             self.assertEqual(db.execute("SELECT count(*) FROM samples").fetchone()[0], 0)
         self.assertTrue((data / "config.toml").is_file())
 
+    def test_native_model_fixture_uses_a_supervised_child_without_adding_history(self):
+        data = self.root / self._testMethodName / "speechify-tauri-candidate"
+        models = data / "models"
+        models.mkdir(parents=True)
+        shutil.copyfile(ROOT / ".build/fixtures/moonshine-base.gguf", models / "moonshine-base.gguf")
+        result = self.run_cli("fixture", "moonshine-base", self.wav, "2", "cpu", extra_env={"SPEECHIFY_NATIVE_DIR": self.root})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = list(map(json.loads, result.stdout.splitlines()))
+        self.assertEqual([row["iteration"] for row in rows], [0, 1])
+        self.assertEqual([row["result"]["text"] for row in rows], ["160|en|||pnc=2"] * 2)
+        self.assertTrue(all(row["result"]["device"] == "cpu" for row in rows))
+        import sqlite3
+        with closing(sqlite3.connect(data / "learning.db")) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM samples").fetchone()[0], 0)
+
+    @unittest.skipUnless(os.name != "nt", "Unix native-worker parent watchdog")
+    def test_native_worker_exits_when_its_parent_disappears_even_with_stdin_still_open(self):
+        reader, writer = os.pipe()
+        helper = r'''
+import json,os,subprocess,sys
+child=subprocess.Popen([sys.argv[1],"--native-worker",sys.argv[2],"plain","cpu","2"],
+    stdin=int(sys.argv[3]),stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True,text=True)
+ready=json.loads(child.stdout.readline())
+print(json.dumps({"pid":child.pid,"ready":ready}),flush=True)
+os._exit(0)
+'''
+        try:
+            parent = subprocess.run([sys.executable, "-c", helper, str(BINARY), str(self.root), str(reader)],
+                                    pass_fds=(reader,), capture_output=True, text=True, timeout=5, env=self.environment())
+            self.assertEqual(parent.returncode, 0, parent.stderr)
+            child = json.loads(parent.stdout)
+            self.assertTrue(child["ready"]["ready"])
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                status = subprocess.run(["ps", "-p", str(child["pid"]), "-o", "stat="], capture_output=True, text=True, timeout=2)
+                if not status.stdout.strip() or status.stdout.strip().startswith("Z"):
+                    break
+                time.sleep(.02)
+            else:
+                self.fail("Native worker kept running after its parent disappeared")
+        finally:
+            os.close(reader)
+            os.close(writer)
+
     def test_data_root_override_is_private_and_does_not_touch_legacy_speechify(self):
         result = self.run_cli("install-model", "unknown")
         self.assertNotEqual(result.returncode, 0)

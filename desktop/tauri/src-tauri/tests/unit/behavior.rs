@@ -952,6 +952,54 @@ fn worker_protocol_reports_bad_startup_errors_timeouts_and_releases_children() {
 }
 
 #[test]
+fn invalid_worker_text_is_reported_and_a_later_retry_can_save_a_transcript() {
+    let home = Home::new();
+    let service = fake_service(&home, "invalid-utf8");
+    assert!(service.preload().is_err());
+    assert_eq!(service.pid.load(Ordering::SeqCst), 0);
+    assert_eq!(service.snapshot()["state"]["ready"], false);
+    std::fs::write(home.0.join("models/whisper-ft-test/scenario"), "").unwrap();
+    let path = home.0.join("speech.wav");
+    audio::save(&path, &[0.25; 160]).unwrap();
+    assert_eq!(service.infer_path(&path, true).unwrap()["text"], "get hub");
+    assert_eq!(
+        service.store.lock().unwrap().history("", "").unwrap().len(),
+        1
+    );
+}
+
+#[test]
+fn sending_audio_to_a_worker_that_exited_after_readiness_returns_an_error_and_releases_ownership() {
+    let home = Home::new();
+    let service = fake_service(&home, "exit-after-ready");
+    let python = home.0.join(if cfg!(windows) {
+        "environments/whisper/Scripts/python.exe"
+    } else {
+        "environments/whisper/bin/python"
+    });
+    let pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let mut worker = crate::worker::Worker::start(
+        &service.native,
+        &home.0.join("models/whisper-ft-test"),
+        "cpu",
+        2,
+        "fixture".into(),
+        pid.clone(),
+        Some(&python),
+        &service.config.lock().unwrap().clone(),
+    )
+    .unwrap();
+    wait_until(|| !worker.alive());
+    let path = home.0.join("speech.wav");
+    audio::save(&path, &[0.25; 160]).unwrap();
+    assert!(worker
+        .run(&path, "en", "", std::time::Duration::from_secs(1))
+        .is_err());
+    drop(worker);
+    assert_eq!(pid.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn failed_retained_audio_save_is_retryable_without_leaking_files_or_learning() {
     let home = Home::new();
     let mut store = home.store();
