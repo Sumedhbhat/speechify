@@ -12,6 +12,8 @@ pub(super) fn set_enabled(enabled: bool) -> Result<()> {
             })
             .ok_or("HOME or XDG_CONFIG_HOME missing")?;
         let path = base.join("autostart/org.sumedhbhat.speechify.desktop");
+        // Supersede the entry written by builds before the rename.
+        let _ = std::fs::remove_file(path.with_file_name("speechify-tauri-candidate.desktop"));
         if enabled {
             std::fs::create_dir_all(path.parent().unwrap()).map_err(crate::config::err)?;
             let exe = exe
@@ -39,6 +41,8 @@ pub(super) fn set_enabled(enabled: bool) -> Result<()> {
     {
         let path = std::path::PathBuf::from(std::env::var_os("HOME").ok_or("HOME missing")?)
             .join("Library/LaunchAgents/org.sumedhbhat.speechify.plist");
+        // Supersede the agent written by builds before the rename.
+        let _ = std::fs::remove_file(path.with_file_name("org.sumedhbhat.speechify.tauri.plist"));
         if enabled {
             std::fs::create_dir_all(path.parent().unwrap()).map_err(crate::config::err)?;
             let exe = exe
@@ -63,6 +67,10 @@ pub(super) fn set_enabled(enabled: bool) -> Result<()> {
     #[cfg(windows)]
     {
         let key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+        // Supersede the value written by builds before the rename.
+        let _ = std::process::Command::new("reg")
+            .args(["delete", key, "/v", "SpeechifyTauriCandidate", "/f"])
+            .output();
         let status = if enabled {
             std::process::Command::new("reg")
                 .args([

@@ -753,7 +753,11 @@ fn login_startup_respects_xdg_and_home_and_reports_filesystem_failures() {
     };
     let parent = base.join("autostart");
     let entry = parent.join("org.sumedhbhat.speechify.desktop");
+    let legacy = parent.join("speechify-tauri-candidate.desktop");
+    std::fs::create_dir_all(&parent).unwrap();
+    std::fs::write(&legacy, "[Desktop Entry]\n").unwrap();
     toggle(false).unwrap();
+    assert!(!legacy.exists());
     toggle(true).unwrap();
     let first = std::fs::read_to_string(&entry).unwrap();
     assert!(first.contains("Name=Speechify\n"));

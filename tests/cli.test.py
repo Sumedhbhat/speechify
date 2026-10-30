@@ -331,6 +331,18 @@ os._exit(0)
         self.assertNotEqual(self.run_cli("install-model", "unknown").returncode, 0)
         self.assertTrue(previous.is_dir())
         self.assertEqual((data / "config.toml").read_text(), "kept")
+        if os.name != "nt" and os.geteuid() != 0:
+            blocked = self.root / "blocked"
+            (blocked / "speechify-tauri-candidate").mkdir(parents=True)
+            blocked.chmod(0o500)
+            try:
+                result = self.run_cli(
+                    "install-model", "unknown", extra_env={"SPEECHIFY_DATA_PARENT": blocked}
+                )
+            finally:
+                blocked.chmod(0o700)
+            self.assertIn("Quit any older Speechify build", result.stderr)
+            self.assertTrue((blocked / "speechify-tauri-candidate").is_dir())
 
     def test_unwritable_data_location_is_reported_as_an_error(self):
         occupied = self.root / "occupied"

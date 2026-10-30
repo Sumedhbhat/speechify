@@ -17,7 +17,7 @@ Download the file for your system from the
 | --- | --- |
 | Windows 10 and 11, x64 | `Speechify-<version>-windows-x64-installer.exe` |
 | macOS 12+, Apple silicon | `Speechify-<version>-mac-arm64.dmg` |
-| Ubuntu 24.04+, Debian-based | `Speechify-<version>-linux-amd64.deb` (`sudo apt install ./Speechify-*.deb`) |
+| Ubuntu 24.04+, and distributions with its `t64` GTK and ALSA packages | `Speechify-<version>-linux-amd64.deb` (`sudo apt install ./Speechify-*.deb`) |
 | Other Linux, x86_64 | `Speechify-<version>-linux-x86_64.tar.gz` (portable; needs system GTK, WebKitGTK and ALSA) |
 
 Nightly builds from `main` are prereleases on the
@@ -60,7 +60,7 @@ Recordings, history, settings, models and learning data live in one folder:
 
 | System | Folder |
 | --- | --- |
-| Linux | `~/.local/share/org.sumedhbhat.speechify` |
+| Linux | `$XDG_DATA_HOME/org.sumedhbhat.speechify`, or `~/.local/share/org.sumedhbhat.speechify` when `XDG_DATA_HOME` isn't set |
 | macOS | `~/Library/Application Support/org.sumedhbhat.speechify` |
 | Windows | `%APPDATA%\org.sumedhbhat.speechify` |
 
@@ -78,7 +78,7 @@ with **Settings > Copy existing Speechify data**.
 
 ```sh
 npm ci
-python3 scripts/prepare-native.py
+python3 scripts/prepare-native.py   # `python` on Windows
 npm run tauri dev       # run the app
 npm run check           # formatting, tests, build
 ```

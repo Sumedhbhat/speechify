@@ -1,6 +1,6 @@
 # Building Speechify
 
-Every build needs Rust stable, Node 24 (or 22.12+) with npm, and Python 3.
+Every build needs Rust stable, Node 24.15+ (or 22.22.2+) with npm, and Python 3.
 Python is used at build time to fetch the pinned native inference libraries;
 ordinary dictation doesn't use it. Run everything from the repository root.
 
@@ -20,7 +20,7 @@ Install a C/C++ compiler, pkg-config, and the GTK 3, WebKitGTK 4.1, ALSA and
 Ayatana appindicator development packages. On Ubuntu:
 
 ```sh
-sudo apt-get install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libx11-dev libxtst-dev
+sudo apt-get install build-essential pkg-config libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libx11-dev libxtst-dev
 ```
 
 Then build the Debian package and the portable archive:

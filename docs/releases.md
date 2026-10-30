@@ -6,7 +6,7 @@ since.
 
 | Channel | Branch | Version | GitHub release |
 | --- | --- | --- | --- |
-| Nightly | `main` | `<Cargo.toml version>-nightly.<CI run>` | Prerelease such as `v0.2.0-nightly.57`, one per push to `main` |
+| Nightly | `main` | `<Cargo.toml version>-nightly.<CI run>` | Prerelease such as `v0.2.0-nightly.57`, one per push to `main` (except `[no-release]` merges) |
 | Stable | `release/X.Y` | The `Cargo.toml` version, always `X.Y.Z` | `vX.Y.Z`, published when that version first lands on the branch |
 
 The version is written in one place: `version` in

@@ -37,7 +37,13 @@ pub fn root() -> Result<PathBuf> {
     // Builds before the rename kept their data in "speechify-tauri-candidate".
     let previous = parent.join("speechify-tauri-candidate");
     if !p.exists() && previous.is_dir() {
-        std::fs::rename(&previous, &p).map_err(err)?;
+        std::fs::rename(&previous, &p).map_err(|e| {
+            format!(
+                "Cannot move existing data from {} to {}: {e}. Quit any older Speechify build and start again.",
+                previous.display(),
+                p.display()
+            )
+        })?;
     }
     std::fs::create_dir_all(&p).map_err(err)?;
     #[cfg(unix)]
