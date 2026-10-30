@@ -29,7 +29,10 @@ The script prepares the pinned native runtime, builds the frontend, runs the
 full desktop tests, and drives the built CLI through its stdin/stdout protocol.
 Linux needs Xvfb, xauth, xclip, xdotool, D-Bus and gdbus in addition to the desktop
 build prerequisites. Its desktop tests use private display and D-Bus sessions
-and a synthetic audio device. macOS/Windows clipboard tests are opt-in because
+and a synthetic audio device. The coverage runner compiles an ALSA fixture
+with the existing C compiler and ALSA development headers. This driver supplies
+float, signed and unsigned samples, setup/start failures, and disconnects;
+it never opens microphone hardware. macOS/Windows clipboard tests are opt-in because
 they modify the system clipboard: the CI job runs them on disposable runners
 with `SPEECHIFY_TEST_DISPOSABLE_DESKTOP=1` and `--include-ignored`.
 It writes reports under `coverage/` and runs the coverage gate. Use
@@ -46,6 +49,9 @@ remain separate. Source and dependency fingerprints prevent combining reports
 from different versions of the application.
 Source locations keep same-named platform implementations separate, so running
 the X11 poller cannot satisfy the Windows or macOS poller's function coverage.
+LLVM can attribute Tauri SDK serialization closures to the closing bracket of
+`#[tauri::command]`. The gate omits that non-executable annotation; the authored
+command handler and its error handling remain in the coverage inventory.
 Linux uses continuous LLVM profiling so pre-exec child setup and cancelled
 helpers retain their execution counts. A standalone collector test verifies
 this behavior before the application run. Add `--details` to the gate command

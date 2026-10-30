@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn missing_or_invalid_native_libraries_cannot_make_a_model_ready() {
+    let home = Home::new();
+    for directory in [&home.0, &home.0.join("missing")] {
+        assert!(crate::native::Native::open(directory, Path::new("model"), "cpu", 2).is_err());
+    }
+    std::fs::write(
+        home.0.join(fixtures().native.file_name().unwrap()),
+        "Not a native library",
+    )
+    .unwrap();
+    assert!(crate::native::Native::open(&home.0, Path::new("model"), "cpu", 2).is_err());
+}
+
+#[test]
 fn invalid_native_model_paths_are_refused_before_calling_the_engine() {
     let home = Home::new();
     std::fs::copy(

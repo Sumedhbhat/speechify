@@ -66,6 +66,21 @@ class CoverageGate(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no source location"):
             gate.check(self.frontend, [backend])
 
+    def test_sdk_macro_metadata_cannot_hide_an_uncovered_authored_command(self):
+        (self.root / "src-tauri/src/main.rs").write_text("#[tauri::command]\nasync fn request() {}\n")
+        backend = self.root / "macro.info"
+        backend.write_text("SF:src-tauri/src/main.rs\nDA:1,0\nDA:2,1\nFN:1,sdk_generated_closure\nFNDA:0,sdk_generated_closure\nFN:2,request\nFNDA:1,request\nend_of_record\n")
+        mac = self.backend("mac.info", "src-tauri/src/mac_clipboard.rs", [(1, 1)])
+        self.assertEqual(gate.check(self.frontend, [backend, mac]), [])
+        backend.write_text(backend.read_text().replace("FNDA:1,request", "FNDA:0,request"))
+        self.assertEqual(gate.check(self.frontend, [backend, mac]), ["src-tauri/src/main.rs: 1/1 functions uncovered"])
+
+    def test_unimported_rust_sources_in_subdirectories_are_still_required(self):
+        source = self.root / "src-tauri/src/feature/unused.rs"
+        source.parent.mkdir()
+        source.write_text("fn unused() {}")
+        self.assertIn("src-tauri/src/feature/unused.rs: not measured (run on its supported OS)", gate.check(self.frontend, []))
+
     def test_generic_instantiations_merge_but_distinct_closure_bodies_do_not(self):
         first = "app::download::<app::install<first::Callback>>::{closure#0}"
         second = "app::download::<second::Callback>::{closure#0}"
@@ -73,6 +88,8 @@ class CoverageGate(unittest.TestCase):
         self.assertEqual(gate.function_definition(first), gate.function_definition(second))
         self.assertNotEqual(gate.function_definition(first), gate.function_definition(second.replace("closure#0", "closure#1")))
         self.assertEqual(gate.function_definition("<app::Capture>::open"), "<app::Capture>::open")
+        self.assertEqual(gate.function_definition('app::resolve::<unsafe extern "C" fn(i32) -> bool>'), "app::resolve")
+        self.assertEqual(gate.function_definition("app::resolve::<fn() -> Option<Vec<u8>>>"), "app::resolve")
 
     def test_source_fingerprints_detect_changes_and_normalize_platform_line_endings(self):
         path = self.root / "src/main.ts"
@@ -84,6 +101,11 @@ class CoverageGate(unittest.TestCase):
         self.assertNotEqual(gate.source_fingerprints(), before)
         before = gate.source_fingerprints()
         (self.root / "package-lock.json").write_text('{"version":"changed"}')
+        self.assertNotEqual(gate.source_fingerprints(), before)
+        before = gate.source_fingerprints()
+        helper = self.root / "src-tauri/resources/training/helper.py"
+        helper.parent.mkdir(parents=True)
+        helper.write_text("changed bundled runtime helper")
         self.assertNotEqual(gate.source_fingerprints(), before)
 
 

@@ -18,8 +18,10 @@ def source_fingerprints() -> dict[str, str]:
     paths = list((ROOT / "src").rglob("*.ts")) + list((ROOT / "src").rglob("*.css"))
     paths += list((ROOT / "src-tauri/src").rglob("*.rs"))
     paths += list((ROOT / "src-tauri/resources").glob("*.json"))
+    for pattern in ["*.py", "*.in", "*.lock"]:
+        paths += list((ROOT / "src-tauri/resources").rglob(pattern))
     paths += list((ROOT / "src-tauri/capabilities").glob("*.json"))
-    paths += [ROOT / name for name in ["index.html", "package.json", "package-lock.json", "src-tauri/build.rs", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock", "src-tauri/tauri.conf.json", "src-tauri/tauri.macos.conf.json", "src-tauri/tauri.windows.conf.json"]]
+    paths += [ROOT / name for name in ["index.html", "package.json", "package-lock.json", "src-tauri/build.rs", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock", "src-tauri/tauri.conf.json", "src-tauri/tauri.macos.conf.json", "src-tauri/tauri.windows.conf.json", "src-tauri/Entitlements.plist"]]
     return {p.relative_to(ROOT).as_posix(): hashlib.sha256(p.read_text(encoding="utf-8").encode()).hexdigest()
             for p in sorted(paths) if p.is_file()}
 
@@ -39,7 +41,7 @@ def function_definition(name: str) -> str:
         depth = 1
         end = start + 3
         while end < len(name) and depth:
-            depth += (name[end] == "<") - (name[end] == ">")
+            depth += (name[end] == "<") - (name[end] == ">" and name[end - 1] != "-")
             end += 1
         if depth:
             raise ValueError(f"Unbalanced demangled function name: {name}")
@@ -101,15 +103,24 @@ def check(frontend: Path, backends: list[Path], details: bool = False) -> list[s
         if len(names) != len(batch):
             raise ValueError("rustfilt did not return one name per function")
         canonical.update(zip(batch, names))
-    for report in files.values():
+    for filename, report in files.items():
+        source = ROOT / filename
+        annotations = {number for number, line in enumerate(source.read_text(encoding="utf-8").splitlines(), 1)
+                       if line.strip() == "#[tauri::command]"} if source.is_file() else set()
+        # LLVM attributes SDK-generated serialization closures to the closing
+        # bracket of this non-executable annotation. The authored handler starts
+        # on the following line and remains fully measured.
+        report["lines"] = {line: count for line, count in report["lines"].items() if int(line) not in annotations}
         merged = {}
         for (name, line), count in report["functions"].items():
+            if line in annotations:
+                continue
             # cfg-specific bodies can have identical Rust names. Their source
             # locations distinguish e.g. Windows and X11 Poller::new().
             key = f"{function_definition(canonical.get(name, name))} [line {line}]"
             merged[key] = max(merged.get(key, 0), count)
         report["functions"] = merged
-    for source in sorted((ROOT / "src-tauri/src").glob("*.rs")):
+    for source in sorted((ROOT / "src-tauri/src").rglob("*.rs")):
         name = source.relative_to(ROOT).as_posix()
         report = files.get(name)
         if report is None:

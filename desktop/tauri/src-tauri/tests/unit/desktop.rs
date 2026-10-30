@@ -21,7 +21,13 @@ fn ipc_commands_parse_requests_return_saved_settings_and_report_background_failu
                 cmd: "request".into(),
                 callback: tauri::ipc::CallbackFn(0),
                 error: tauri::ipc::CallbackFn(1),
-                url: "tauri://localhost".parse().unwrap(),
+                url: if cfg!(windows) {
+                    "http://tauri.localhost"
+                } else {
+                    "tauri://localhost"
+                }
+                .parse()
+                .unwrap(),
                 body: tauri::ipc::InvokeBody::Json(body),
                 headers: Default::default(),
                 invoke_key: tauri::test::INVOKE_KEY.into(),
@@ -353,7 +359,7 @@ fn reuse_model_validates_and_copies_the_real_artifact_without_losing_it_on_disk_
 }
 
 #[test]
-fn load_and_train_commands_keep_the_current_model_when_training_is_rejected() {
+fn load_and_train_commands_keep_the_current_model_when_training_is_refused_or_rejected() {
     use crate::behavior_tests::{fake_service, training_environment, wait_until};
     let home = Home::new();
     let service = fake_service(&home, "");
@@ -364,7 +370,15 @@ fn load_and_train_commands_keep_the_current_model_when_training_is_rejected() {
         r#"{"status":"rejected","gate1":{"passed":false},"gate2":{"passed":true}}"#,
     );
     let before = service.config.lock().unwrap().clone();
-    dispatch(&service, "train", &json!({})).unwrap();
+    if let Err(error) = dispatch(&service, "train", &json!({})) {
+        assert!(
+            error.contains("battery"),
+            "unexpected training refusal: {error}"
+        );
+        assert!(!service.learning_busy.load(Ordering::SeqCst));
+        assert_eq!(crate::config::load(&home.0).unwrap(), before);
+        return;
+    }
     wait_until(|| !service.learning_busy.load(Ordering::SeqCst));
     assert_eq!(
         service

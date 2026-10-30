@@ -70,6 +70,7 @@ fn key(action: &str, name: &str) {
 }
 
 #[test]
+#[ignore = "Requires the isolated Xvfb display supplied by test-coverage.sh"]
 fn x11_key_state_focus_guards_and_copy_match_the_native_contract() {
     let _desktop = crate::behavior_tests::DESKTOP
         .lock()

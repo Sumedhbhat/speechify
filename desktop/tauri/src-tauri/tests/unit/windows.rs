@@ -66,7 +66,7 @@ impl Window {
                 0,
                 wide(class).as_ptr(),
                 wide("Speechify behavior test").as_ptr(),
-                0x10cf0044,
+                0x10cf00c4,
                 20,
                 20,
                 400,
@@ -172,6 +172,7 @@ fn standard_edit_corrections_preserve_surrounding_text_support_undo_and_refuse_s
     let other = Window::new("STATIC");
     assert!(replacement::capture(other.id(), "new").is_none());
     window.send(0x00c5, 2_000_000, 0); // EM_SETLIMITTEXT
+    window.send(0x000b, 0, 0); // WM_SETREDRAW: avoid painting the oversized fixture
     window.set(&"x".repeat(1_000_001));
     assert!(replacement::capture(window.id(), "new").is_none());
     let closed = window.pasted();
