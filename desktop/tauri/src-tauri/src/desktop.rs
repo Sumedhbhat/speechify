@@ -653,10 +653,8 @@ fn autostart(enabled: bool) -> Result<()> {
     {
         let base = std::env::var_os("XDG_CONFIG_HOME")
             .map(std::path::PathBuf::from)
-            .unwrap_or(
-                std::path::PathBuf::from(std::env::var_os("HOME").ok_or("HOME missing")?)
-                    .join(".config"),
-            );
+            .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config")))
+            .ok_or("HOME or XDG_CONFIG_HOME missing")?;
         let path = base.join("autostart/speechify-tauri-candidate.desktop");
         if enabled {
             std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;

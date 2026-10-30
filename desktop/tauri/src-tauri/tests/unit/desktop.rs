@@ -482,3 +482,76 @@ fn a_correction_is_saved_when_the_platform_cannot_replace_the_original_target() 
     );
     assert!(service.replacement.lock().unwrap().is_none());
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn login_startup_respects_xdg_and_home_and_reports_filesystem_failures() {
+    let root = match std::env::var_os("SPEECHIFY_TEST_AUTOSTART_ROOT") {
+        Some(path) => std::path::PathBuf::from(path),
+        None => {
+            let home = Home::new();
+            for mode in ["xdg", "home", "xdg_without_home", "missing"] {
+                let root = home.0.join(mode);
+                std::fs::create_dir(&root).unwrap();
+                let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+                child.args(["--exact", "desktop::behavior::login_startup_respects_xdg_and_home_and_reports_filesystem_failures"])
+                    .env("SPEECHIFY_TEST_AUTOSTART_ROOT", &root)
+                    .env_remove("HOME").env_remove("XDG_CONFIG_HOME");
+                if ["xdg", "xdg_without_home"].contains(&mode) {
+                    child.env("XDG_CONFIG_HOME", &root);
+                }
+                if ["home", "xdg"].contains(&mode) {
+                    child.env("HOME", &root);
+                }
+                let output = child.output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{mode}: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            return;
+        }
+    };
+    let home = Home::new();
+    let service = home.service();
+    let toggle = |enabled| dispatch(&service, "autostart", &json!({"enabled":enabled}));
+    if std::env::var_os("HOME").is_none() && std::env::var_os("XDG_CONFIG_HOME").is_none() {
+        assert!(toggle(true).is_err());
+        assert!(std::fs::read_dir(root).unwrap().next().is_none());
+        return;
+    }
+    let base = if std::env::var_os("XDG_CONFIG_HOME").is_some() {
+        root
+    } else {
+        root.join(".config")
+    };
+    let parent = base.join("autostart");
+    let entry = parent.join("speechify-tauri-candidate.desktop");
+    toggle(false).unwrap();
+    toggle(true).unwrap();
+    let first = std::fs::read_to_string(&entry).unwrap();
+    assert!(first.contains("Name=Speechify Tauri Candidate\n"));
+    assert!(first.contains(&format!(
+        "Exec=\"{}\"\n",
+        std::env::current_exe().unwrap().display()
+    )));
+    toggle(true).unwrap();
+    assert_eq!(std::fs::read_to_string(&entry).unwrap(), first);
+    toggle(false).unwrap();
+    toggle(false).unwrap();
+    assert!(!entry.exists());
+    std::fs::remove_dir(&parent).unwrap();
+    std::fs::write(&parent, "unrelated user configuration").unwrap();
+    assert!(toggle(true).is_err());
+    assert_eq!(
+        std::fs::read_to_string(&parent).unwrap(),
+        "unrelated user configuration"
+    );
+    std::fs::remove_file(&parent).unwrap();
+    std::fs::create_dir_all(&entry).unwrap();
+    assert!(toggle(true).is_err());
+    assert!(toggle(false).is_err());
+    assert!(entry.is_dir());
+}
