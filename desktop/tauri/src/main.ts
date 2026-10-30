@@ -54,7 +54,9 @@ async function render() {
     view.innerHTML = `<div class="toolbar"><label class="search">Search recordings<input id="search" type="search" value="${esc(search)}"></label><label>Show<select id="filter">${[['', 'All'], ['edited', 'Edited'], ['unedited', 'Unedited'], ['excluded', 'Excluded']].map(([v, l]) => `<option value="${v}" ${filter === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>${button('export', 'Export labelled WAVs')}</div><div class="history-split"><div id="history-list" aria-label="Recordings"></div><section id="history-detail"></section></div>`;
     await history();
   } else if (page === 'Learning') {
-    const data = await api<Obj>('learning');
+    let data: Obj;
+    try { data = await api<Obj>('learning'); }
+    catch (e) { if (version === renderVersion) throw e; return; }
     if (version !== renderVersion) return;
     view.innerHTML = `<p>Corrections become vocabulary hints immediately. Repeated word-level fixes become automatic rules after ${snapshot.config.autocorrect_after} corrections.</p><section><h2>Background learning</h2><div id="download-progress" role="status"></div><dl><dt>Teacher</dt><dd>${esc(typeof data.teacher === 'string' ? data.teacher : JSON.stringify(data.teacher))}</dd><dt>Training</dt><dd>${esc(typeof data.training === 'string' ? data.training : JSON.stringify(data.training))}</dd></dl><p class="quiet">Runs while idle and on mains. Human corrections take precedence over confident teacher labels. Uncorrected dictation guesses are never training labels.</p><div class="actions">${button('install', 'Install training environment', 'data-id="training"')}${button('train', 'Run fine-tuning')}${button('cancel', 'Pause current job')}${button('rollback', 'Roll back version')}</div><p class="quiet">Training uses the optional Python/CUDA environment. Adoption requires improved held-out personal WER and the LibriSpeech regression gate.</p></section><section><h2>Word rules</h2>${data.rules.length ? data.rules.map((r: Obj) => `<div class="learning-row"><span>${esc(r.wrong)} → <strong>${esc(r.right)}</strong><small>${r.count} corrections</small></span>${button('forget-rule', 'Forget', `data-key="${esc(r.wrong)}"`)}</div>`).join('') : '<p class="empty">No rules yet. Correct a recording in History to start learning.</p>'}</section><section><h2>Vocabulary</h2>${data.vocab.length ? data.vocab.map((v: Obj) => `<div class="learning-row"><span>${esc(v.term)}</span>${button('forget-vocab', 'Forget', `data-key="${esc(v.term)}"`)}</div>`).join('') : '<p class="empty">Your corrected words will appear here.</p>'}</section><section><h2>Trained versions</h2>${data.versions.length ? data.versions.map((v: Obj) => `<details><summary>${esc(v.name)}</summary><pre>${esc(JSON.stringify({ personal: v.gate1, regression: v.gate2 }, null, 2))}</pre></details>`).join('') : '<p class="empty">No trained versions. The original model remains active.</p>'}</section>`;
   } else settings(view);
@@ -62,8 +64,11 @@ async function render() {
 }
 async function history() {
   const version = renderVersion, request = ++historyRequest;
-  const data = await api<Obj[]>('history', { search, filter });
-  if (version !== renderVersion || request !== historyRequest || page !== 'History') return;
+  const current = () => version === renderVersion && request === historyRequest && page === 'History';
+  let data: Obj[];
+  try { data = await api<Obj[]>('history', { search, filter }); }
+  catch (e) { if (current()) throw e; return; }
+  if (!current()) return;
   rows = data;
   if (!rows.some(r => r.id === selected)) selected = rows[0]?.id ?? null; document.querySelector('#history-list')!.innerHTML = rows.length ? rows.map(r => `<button class="sample ${r.id === selected ? 'selected' : ''}" data-sample="${r.id}"><span>${esc((r.corrected ?? r.pasted).slice(0, 150))}</span><small>${new Date(r.ts * 1000).toLocaleString()}${r.corrected ? ' · Edited' : ''}${r.excluded ? ' · Excluded' : ''}</small></button>`).join('') : '<p class="empty">No recordings match. Dictate to start your history.</p>'; detail();
 }
@@ -118,6 +123,8 @@ async function refresh() {
     snapshot = await api('snapshot');
     status();
     if (!initialized) {
+      const message = document.querySelector('#message');
+      if (message) { message.textContent = ''; message.classList.remove('visible'); }
       await render();
       await listen<string>('navigate', e => { if (dirty) return; page = e.payload; void render().catch(error); });
       initialized = true;

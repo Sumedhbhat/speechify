@@ -183,6 +183,8 @@ describe('dictation', () => {
     expect(element('#message').textContent).toContain('Cannot connect to the Rust service: service stopped');
     await vi.advanceTimersByTimeAsync(700);
     expect(element('#readiness').textContent).toBe('Ready');
+    expect(element('#message').textContent).toBe('');
+    expect(element('#message').classList.contains('visible')).toBe(false);
     await action('manual-record');
     expect(operations).toContainEqual(['manual_start', {}]);
     await action('manual-record');
@@ -192,6 +194,18 @@ describe('dictation', () => {
     bridge.invoke.mockRejectedValueOnce('connection lost');
     await vi.advanceTimersByTimeAsync(700);
     expect(element('#message').textContent).toBe('connection lost');
+  });
+
+  it('shows a current page error after reconnecting instead of keeping the connection error', async () => {
+    bridge.invoke.mockRejectedValueOnce('service stopped');
+    await start(); await page('Settings');
+    const original = bridge.invoke.getMockImplementation()!;
+    bridge.invoke.mockImplementation((command, args) => args.op === 'devices'
+      ? Promise.reject('Microphone enumeration failed') : original(command, args));
+    await vi.advanceTimersByTimeAsync(700);
+    expect(element('#settings')).toBeDefined();
+    expect(element('#message').textContent).toBe('Microphone enumeration failed');
+    expect(element('#message').classList.contains('visible')).toBe(true);
   });
 
   it.each(['Recording', 'Ready'])('renders the overlay in state %s without settings controls', async stage => {
@@ -498,19 +512,47 @@ describe('settings', () => {
     expect(element('#message').textContent).toBe('');
   });
 
-  it('keeps the newest history search when older results arrive later', async () => {
+  it.each(['Learning', 'History'])('reports a failed current %s request', async name => {
+    await start();
+    bridge.invoke.mockRejectedValueOnce(`${name} unavailable`);
+    await page(name);
+    expect(element('#heading').textContent).toBe(name);
+    expect(element('#message').textContent).toBe(`${name} unavailable`);
+    expect(element('#message').classList.contains('visible')).toBe(true);
+  });
+
+  it.each(['Learning', 'History'])('ignores a failed %s request after navigating to Settings', async name => {
+    await start();
+    let reject!: (reason: string) => void;
+    const original = bridge.invoke.getMockImplementation()!;
+    bridge.invoke.mockImplementation((command, args) => args.op === name.toLowerCase()
+      ? new Promise((_done, fail) => { reject = fail; }) : original(command, args));
+    await page(name);
+    await page('Settings');
+    await change('[name="language"]', 'fr', 'input');
+    reject(`${name} unavailable`); await settle();
+    expect(element('#heading').textContent).toBe('Settings');
+    expect(element<HTMLInputElement>('[name="language"]').value).toBe('fr');
+    expect(element('#message').textContent).toBe('');
+    expect(element('#message').classList.contains('visible')).toBe(false);
+  });
+
+  it.each(['success', 'failure'])('keeps the newest history search when the older request completes with %s', async outcome => {
     await start(); await page('History');
-    const replies: ((value: Obj[]) => void)[] = [];
+    const replies: { resolve: (value: Obj[]) => void, reject: (reason: string) => void }[] = [];
     const original = bridge.invoke.getMockImplementation()!;
     bridge.invoke.mockImplementation((command, args) => args.op === 'history'
-      ? new Promise(done => { replies.push(done); }) : original(command, args));
+      ? new Promise((resolve, reject) => { replies.push({ resolve, reject }); }) : original(command, args));
     await change('#search', 'old', 'input');
     await change('#search', 'new', 'input');
-    replies[1]([sample(3, { pasted: 'new result' })]); await settle();
-    replies[0]([sample(4, { pasted: 'old result' })]); await settle();
+    replies[1].resolve([sample(3, { pasted: 'new result' })]); await settle();
+    if (outcome === 'success') replies[0].resolve([sample(4, { pasted: 'old result' })]);
+    else replies[0].reject('Old search unavailable');
+    await settle();
     expect(element('#history-list').textContent).toContain('new result');
     expect(element('#history-list').textContent).not.toContain('old result');
     expect(element<HTMLTextAreaElement>('#correction').value).toBe('new result');
+    expect(element('#message').textContent).toBe('');
   });
 
   it('keeps Settings usable when a history deletion finishes after navigation', async () => {
