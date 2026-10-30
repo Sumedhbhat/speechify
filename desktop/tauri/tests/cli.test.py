@@ -250,6 +250,11 @@ os._exit(0)
             result = self.worker("bad-load", device)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("21", result.stderr)
+        result = self.worker("gpu-run-fails-cpu-load-fails", "vulkan", messages=[{"wav": str(self.wav)}, {"wav": str(self.wav)}])
+        rows = list(map(json.loads, result.stdout.splitlines()))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("21", rows[1]["error"])
+        self.assertEqual(rows[2]["error"], "Engine unavailable")
         result = self.worker("bad-run")
         self.assertEqual(json.loads(result.stdout.splitlines()[-1])["error"], "transcribe.cpp status 26")
         for text, message in [("invalid\n", "expected value"), ("x" * 32769 + "\n", "Worker message too large")]:
@@ -291,6 +296,9 @@ os._exit(0)
         worker, ready = self.clipboard_worker("A new dictation 🦀")
         self.assertEqual(ready, {"Ok": None})
         self.assertEqual(self.read_clipboard().stdout.decode(), "A new dictation 🦀")
+        targets = self.read_clipboard("TARGETS")
+        self.assertEqual(targets.returncode, 0, targets.stderr)
+        self.assertIn(b"UTF8_STRING", targets.stdout)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             restored = self.read_clipboard("text/html")
@@ -473,6 +481,12 @@ os._exit(0)
         second = subprocess.run([str(BINARY)], capture_output=True, env=env, timeout=10)
         self.assertEqual(second.returncode, 0, second.stderr)
         wait(lambda: windows(True))
+
+        for hotkey in ["ctrl+alt+f", "ctrl+alt+h", "ctrl+alt+m"]:
+            close_settings()
+            wait(lambda: not windows(True))
+            subprocess.run(["xdotool", "key", hotkey], check=True, env=env)
+            wait(lambda: windows(True))
 
         # A short global talk-key tap must never create a dictation or audio.
         # Physical right-Control avoids xdotool's automatic left modifiers.

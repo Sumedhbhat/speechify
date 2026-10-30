@@ -300,8 +300,7 @@ fn start_runtime(
                         return Ok(());
                     }
                     let receipt = platform::paste(target, text)?;
-                    *infer.replacement.lock().unwrap() =
-                        receipt.and_then(|r| result["sample_id"].as_i64().map(|id| (id, r)));
+                    *infer.replacement.lock().unwrap() = result["sample_id"].as_i64().zip(receipt);
                     infer.set_stage("Pasted");
                     infer.log("paste_ack", json!({"clock_ms":crate::store::now()*1000.}));
                 }
@@ -324,6 +323,7 @@ fn start_runtime(
         let mut last_input = String::new();
         let mut hide_at = None;
         while !recorder.stopping.load(Ordering::SeqCst) {
+            let command = capture_rx.recv_timeout(Duration::from_millis(15));
             let cfg = recorder.config.lock().unwrap().clone();
             let keep = cfg["keep_mic_open"] == true;
             let input = cfg["input_device"].as_str().unwrap_or("");
@@ -331,7 +331,6 @@ fn start_runtime(
                 capture = None;
                 last_input = input.into();
             }
-            let command = capture_rx.recv_timeout(Duration::from_millis(15));
             if let Ok((action, target, generation)) = command {
                 match action {
                     Action::Start => {
@@ -427,6 +426,8 @@ fn start_runtime(
                     capture = None;
                     recorder.recording.store(false, Ordering::SeqCst);
                 }
+            } else {
+                recorder.state.lock().unwrap()["level"] = json!(0.);
             }
             if hide_at.is_some_and(|t| Instant::now() > t)
                 && ["Ready", "Pasted", "Error", "Cancelled"].contains(

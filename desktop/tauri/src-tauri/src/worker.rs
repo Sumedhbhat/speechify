@@ -252,7 +252,7 @@ pub fn native_dir(resource: Option<PathBuf>) -> PathBuf {
     candidates
         .into_iter()
         .find(|p| p.is_dir())
-        .unwrap_or_else(|| parent.join("resources/native"))
+        .unwrap_or(parent.join("resources/native"))
 }
 #[cfg(all(test, unix))]
 mod tests {

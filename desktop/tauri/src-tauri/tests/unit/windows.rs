@@ -358,3 +358,169 @@ fn native_paste_inserts_into_the_focused_edit_and_restores_the_previous_clipboar
     replacement::replace(&receipt, "GitHub").unwrap();
     assert_eq!(window.text(), "A GitHub Z");
 }
+
+#[path = "../../../tests/fixtures/windows-hooks.rs"]
+mod os_hooks;
+
+fn failure_child() -> bool {
+    let name = std::thread::current().name().unwrap().to_owned();
+    if std::env::var("SPEECHIFY_TEST_WINDOWS_FAILURE_CHILD").as_deref() == Ok(&name) {
+        return true;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &name, "--include-ignored"])
+        .env("SPEECHIFY_TEST_WINDOWS_FAILURE_CHILD", &name)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    false
+}
+unsafe extern "system" fn no_handle(_: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
+    std::ptr::null_mut()
+}
+unsafe extern "system" fn allocation_failed(_: u32, _: usize) -> *mut std::ffi::c_void {
+    std::ptr::null_mut()
+}
+unsafe extern "system" fn clipboard_busy(_: *mut std::ffi::c_void) -> i32 {
+    0
+}
+unsafe extern "system" fn clipboard_clear_failed() -> i32 {
+    0
+}
+unsafe extern "system" fn clipboard_set_failed(
+    _: u32,
+    _: *mut std::ffi::c_void,
+) -> *mut std::ffi::c_void {
+    std::ptr::null_mut()
+}
+unsafe extern "system" fn clipboard_data_missing(_: u32) -> *mut std::ffi::c_void {
+    std::ptr::null_mut()
+}
+unsafe extern "system" fn no_owner() -> *mut std::ffi::c_void {
+    std::ptr::null_mut()
+}
+unsafe extern "system" fn no_job(_: *mut std::ffi::c_void, _: *const u16) -> *mut std::ffi::c_void {
+    std::ptr::null_mut()
+}
+unsafe extern "system" fn no_job_configuration(
+    _: *mut std::ffi::c_void,
+    _: i32,
+    _: *const std::ffi::c_void,
+    _: u32,
+) -> i32 {
+    0
+}
+unsafe extern "system" fn no_assignment(_: *mut std::ffi::c_void, _: *mut std::ffi::c_void) -> i32 {
+    0
+}
+unsafe extern "system" fn no_resume(_: *mut std::ffi::c_void) -> i32 {
+    -1
+}
+
+#[cfg(test)]
+#[test]
+fn worker_startup_refuses_every_failed_ownership_step_without_starting_an_unsupervised_engine() {
+    if !failure_child() {
+        return;
+    }
+    for (symbol, replacement, message) in [
+        ("CreateJobObjectW", no_job as *const (), "create"),
+        (
+            "SetInformationJobObject",
+            no_job_configuration as *const (),
+            "configure",
+        ),
+        (
+            "AssignProcessToJobObject",
+            no_assignment as *const (),
+            "establish",
+        ),
+        ("NtResumeProcess", no_resume as *const (), "establish"),
+    ] {
+        let home = crate::behavior_tests::Home::new();
+        let service = crate::behavior_tests::fake_service(&home, "");
+        let hook = unsafe { os_hooks::Hook::new(symbol, replacement) };
+        let error = service.preload().unwrap_err();
+        drop(hook);
+        assert!(error.contains(message), "{symbol}: {error}");
+        assert_eq!(service.pid.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(service.snapshot()["state"]["ready"], false);
+        assert!(!home.0.join("models/whisper-ft-test/started").exists());
+        service.preload().unwrap();
+        assert_eq!(service.snapshot()["state"]["ready"], true);
+    }
+}
+
+#[test]
+#[ignore = "Simulates clipboard OS failures in an isolated disposable desktop process"]
+fn clipboard_failures_are_reported_and_later_writes_can_recover() {
+    let _desktop = CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner());
+    if !failure_child() {
+        return;
+    }
+    for (symbol, replacement, message) in [
+        ("OpenClipboard", clipboard_busy as *const (), "busy"),
+        ("GlobalAlloc", allocation_failed as *const (), "allocation"),
+        ("GlobalLock", no_handle as *const (), "lock"),
+        ("SetClipboardData", clipboard_set_failed as *const (), "set"),
+    ] {
+        write_clipboard("Previous copy").unwrap();
+        let hook = unsafe { os_hooks::Hook::new(symbol, replacement) };
+        let error = write_clipboard("Cannot complete").unwrap_err();
+        drop(hook);
+        assert!(error.contains(message), "{symbol}: {error}");
+        write_clipboard("Recovered café 🦀").unwrap();
+        assert_eq!(read(), "Recovered café 🦀");
+    }
+    for (symbol, replacement, message) in [
+        (
+            "GetClipboardData",
+            clipboard_data_missing as *const (),
+            "snapshot unavailable",
+        ),
+        ("GlobalLock", no_handle as *const (), "snapshot"),
+        ("GlobalAlloc", allocation_failed as *const (), "allocation"),
+        (
+            "EmptyClipboard",
+            clipboard_clear_failed as *const (),
+            "clear",
+        ),
+        ("SetClipboardData", clipboard_set_failed as *const (), "set"),
+        ("GetClipboardOwner", no_owner as *const (), "changed"),
+    ] {
+        write_clipboard("Previous copy").unwrap();
+        let hook = unsafe { os_hooks::Hook::new(symbol, replacement) };
+        let error = match super::os::snapshot_and_write("Cannot complete") {
+            Ok(_) => panic!("{symbol} failed silently"),
+            Err(error) => error,
+        };
+        drop(hook);
+        assert!(error.contains(message), "{symbol}: {error}");
+        write_clipboard("Recovered").unwrap();
+        assert_eq!(read(), "Recovered");
+    }
+    for (symbol, replacement, message) in [
+        ("GlobalAlloc", allocation_failed as *const (), "allocation"),
+        ("GlobalLock", no_handle as *const (), "lock"),
+        (
+            "EmptyClipboard",
+            clipboard_clear_failed as *const (),
+            "clear",
+        ),
+        ("SetClipboardData", clipboard_set_failed as *const (), "set"),
+    ] {
+        write_clipboard("Previous copy").unwrap();
+        let restore = super::os::snapshot_and_write("Temporary dictation").unwrap();
+        let hook = unsafe { os_hooks::Hook::new(symbol, replacement) };
+        let error = restore().unwrap_err();
+        drop(hook);
+        assert!(error.contains(message), "{symbol}: {error}");
+        write_clipboard("Recovered").unwrap();
+        assert_eq!(read(), "Recovered");
+    }
+}

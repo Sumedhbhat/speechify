@@ -48,7 +48,7 @@ struct Session { model: *mut Model, output: CString }
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_model_load_file(path: *const c_char, p: *const transcribe_model_load_params, out: *mut *mut c_void) -> i32 {
     let mode = CStr::from_ptr(path).to_string_lossy().into_owned();
-    if mode.contains("bad-load") || mode.contains("gpu-load-fails") && (*p).backend != 1 { return 21; }
+    if mode.contains("bad-load") || mode.contains("gpu-load-fails") && (*p).backend != 1 || mode.contains("gpu-run-fails-cpu-load-fails") && (*p).backend == 1 { return 21; }
     *out = Box::into_raw(Box::new(Model { mode, backend: (*p).backend })).cast(); 0
 }
 #[no_mangle]

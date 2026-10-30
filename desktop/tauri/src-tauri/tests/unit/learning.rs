@@ -645,3 +645,90 @@ fn shutdown_releases_the_background_scheduler_without_starting_work() {
         .get_state("last_training")
         .is_err());
 }
+
+#[test]
+fn retraining_a_catalog_whisper_passes_its_base_as_the_current_model_and_preserves_it_after_rejection(
+) {
+    for base in ["whisper-large-v3", "whisper-large-v3-turbo"] {
+        let home = Home::new();
+        let service = home.service();
+        service.config.lock().unwrap()["model"] = json!(base);
+        training_environment(
+            &home,
+            r#"{"status":"rejected","gate1":{"passed":false},"gate2":{"passed":true}}"#,
+        );
+        start_training_on_power(service.clone(), true).unwrap();
+        wait_until(|| !service.learning_busy.load(Ordering::SeqCst));
+        let args = std::fs::read_to_string(home.0.join("trainer-args.txt")).unwrap();
+        let args: Vec<_> = args.lines().collect();
+        for key in ["--base", "--current"] {
+            assert_eq!(
+                args[args.iter().position(|value| *value == key).unwrap() + 1],
+                format!("openai/{base}")
+            );
+        }
+        assert_eq!(service.config.lock().unwrap()["model"], base);
+        assert_eq!(
+            service
+                .store
+                .lock()
+                .unwrap()
+                .get_state("training_status")
+                .unwrap()["status"],
+            "rejected"
+        );
+    }
+}
+
+#[test]
+fn retention_drops_missing_versions_without_deleting_the_active_model() {
+    let home = Home::new();
+    let service = fake_service(&home, "");
+    let active = json!({"name":"whisper-ft-test", "path":home.0.join("models/whisper-ft-test")});
+    service
+        .store
+        .lock()
+        .unwrap()
+        .state(
+            "versions",
+            &json!([{"name":"missing-old", "path":home.0.join("models/missing-old")}, active]),
+        )
+        .unwrap();
+    prune(&service, 1).unwrap();
+    assert_eq!(
+        service.store.lock().unwrap().get_state("versions").unwrap(),
+        json!([active])
+    );
+    assert!(home.0.join("models/whisper-ft-test/model.bin").exists());
+}
+
+#[test]
+fn teacher_work_is_skipped_while_another_job_is_busy_and_failed_inference_never_creates_a_label() {
+    let home = Home::new();
+    let service = fake_service(&home, "");
+    let mut cfg = service.config.lock().unwrap().clone();
+    cfg["teacher"] = json!("distil-whisper-large-v3");
+    cfg["teacher_on_cpu"] = json!(true);
+    std::fs::write(home.0.join("models/distil-whisper-large-v3.gguf"), "marker").unwrap();
+    let model = home.0.join("models/distil-whisper-large-v3");
+    std::fs::create_dir(&model).unwrap();
+    std::fs::write(model.join("scenario"), "error").unwrap();
+    service
+        .store
+        .lock()
+        .unwrap()
+        .record(&[0.25; 16000], "a student guess", "a student guess", true)
+        .unwrap();
+    service.learning_busy.store(true, Ordering::SeqCst);
+    teacher(&service, &cfg).unwrap();
+    assert_eq!(service.pid.load(Ordering::SeqCst), 0);
+    assert!(service.store.lock().unwrap().history("", "").unwrap()[0]["teacher_text"].is_null());
+    service.learning_busy.store(false, Ordering::SeqCst);
+    assert!(teacher(&service, &cfg).unwrap_err().contains("bad clip"));
+    assert!(!service.learning_busy.load(Ordering::SeqCst));
+    assert!(service.store.lock().unwrap().history("", "").unwrap()[0]["teacher_text"].is_null());
+    assert_eq!(
+        service.store.lock().unwrap().history("", "").unwrap()[0]["pasted"],
+        "a student guess"
+    );
+}

@@ -466,7 +466,19 @@ impl Running {
     }
     fn start(&self) {
         dispatch(&self.service, "manual_start", &json!({})).unwrap();
-        crate::behavior_tests::wait_until(|| self.visibility.lock().unwrap().last() == Some(&true));
+        let started = Instant::now();
+        while self.visibility.lock().unwrap().last() != Some(&true)
+            && started.elapsed() < Duration::from_secs(10)
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            self.visibility.lock().unwrap().last().copied(),
+            Some(true),
+            "{}; config {}",
+            self.service.snapshot()["state"],
+            self.service.config.lock().unwrap()
+        );
     }
 }
 #[cfg(target_os = "linux")]
@@ -842,5 +854,161 @@ fn unsupported_macos_shortcuts_are_refused_without_changing_saved_settings() {
         assert!(dispatch(&service, "settings", &cfg).is_err());
         assert_eq!(*service.config.lock().unwrap(), before);
         assert_eq!(crate::config::load(&home.0).unwrap(), before);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Requires the synthetic ALSA input and isolated Xvfb"]
+fn microphone_open_and_disconnect_failures_are_visible_and_never_save_partial_dictations() {
+    use crate::behavior_tests::{fake_service, wait_until};
+    let _desktop = crate::behavior_tests::DESKTOP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for (input, keep) in [
+        ("Speechify float setup error", false),
+        ("Speechify float setup error", true),
+        ("Speechify float disconnect", true),
+    ] {
+        let home = Home::new();
+        let service = fake_service(&home, "");
+        let mut cfg = service.config.lock().unwrap().clone();
+        cfg["input_device"] = json!(input);
+        cfg["min_hold_ms"] = json!(1);
+        cfg["keep_mic_open"] = json!(keep);
+        service.update(cfg).unwrap();
+        let runtime = Running::new(service.clone());
+        if !keep {
+            dispatch(&service, "manual_start", &json!({})).unwrap();
+        }
+        wait_until(|| service.snapshot()["state"]["stage"] == "Error");
+        assert!(!service.recording.load(Ordering::SeqCst));
+        assert!(dispatch(&service, "history", &json!({}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty());
+        if !keep {
+            dispatch(&service, "manual_stop", &json!({})).unwrap();
+            service
+                .capture_tx
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .send((Action::Submit, 0, service.generation.load(Ordering::SeqCst)))
+                .unwrap();
+            service
+                .capture_tx
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .send((Action::Cancel, 0, service.generation.load(Ordering::SeqCst)))
+                .unwrap();
+            wait_until(|| runtime.visibility.lock().unwrap().last() == Some(&false));
+        }
+        let mut cfg = service.config.lock().unwrap().clone();
+        cfg["input_device"] = json!("Speechify float input");
+        service.update(cfg).unwrap();
+        if keep {
+            wait_until(|| service.snapshot()["state"]["actual_input"] == "Speechify float input");
+        }
+        runtime.start();
+        wait_until(|| service.snapshot()["state"]["level"].as_f64().unwrap_or(0.) > 0.);
+        std::thread::sleep(Duration::from_millis(100));
+        dispatch(&service, "manual_stop", &json!({})).unwrap();
+        wait_until(|| service.snapshot()["state"]["recent"] == "get hub");
+        assert_eq!(
+            dispatch(&service, "history", &json!({}))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Requires the synthetic ALSA input and isolated Xvfb"]
+fn a_full_dictation_queue_reports_backpressure_and_cancel_or_shutdown_discards_old_clips() {
+    use crate::behavior_tests::{fake_service, wait_until};
+    let _desktop = crate::behavior_tests::DESKTOP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for shutdown in [false, true] {
+        let home = Home::new();
+        let service = fake_service(&home, "slow");
+        let mut cfg = service.config.lock().unwrap().clone();
+        cfg["input_device"] = json!("Speechify float input");
+        cfg["min_hold_ms"] = json!(1);
+        service.update(cfg).unwrap();
+        let runtime = Running::new(service.clone());
+        let record = || {
+            dispatch(&service, "manual_start", &json!({})).unwrap();
+            wait_until(|| service.snapshot()["state"]["stage"] == "Recording");
+            wait_until(|| service.snapshot()["state"]["level"].as_f64().unwrap_or(0.) > 0.);
+            std::thread::sleep(Duration::from_millis(100));
+            dispatch(&service, "manual_stop", &json!({})).unwrap();
+        };
+        record();
+        wait_until(|| {
+            home.0.join("models/whisper-ft-test/request.json").exists()
+                || service.snapshot()["state"]["stage"] == "Error"
+        });
+        assert!(
+            home.0.join("models/whisper-ft-test/request.json").exists(),
+            "{}",
+            service.snapshot()["state"]
+        );
+        for index in 0..5 {
+            record();
+            if index < 4 {
+                wait_until(|| {
+                    ["Queued", "Error"]
+                        .iter()
+                        .any(|stage| service.snapshot()["state"]["stage"] == *stage)
+                });
+                assert_eq!(
+                    service.snapshot()["state"]["stage"],
+                    "Queued",
+                    "clip {index}: {}",
+                    service.snapshot()["state"]
+                );
+            } else {
+                wait_until(|| {
+                    service.snapshot()["state"]["error"]
+                        .as_str()
+                        .is_some_and(|error| error.contains("queue is full"))
+                });
+            }
+        }
+        assert!(service
+            .store
+            .lock()
+            .unwrap()
+            .history("", "")
+            .unwrap()
+            .is_empty());
+        if shutdown {
+            service.shutdown();
+        } else {
+            dispatch(&service, "cancel", &json!({})).unwrap();
+            std::fs::write(home.0.join("models/whisper-ft-test/scenario"), "").unwrap();
+            record();
+            wait_until(|| service.snapshot()["state"]["recent"] == "get hub");
+            assert_eq!(
+                service.store.lock().unwrap().history("", "").unwrap().len(),
+                1
+            );
+        }
+        drop(runtime);
+        assert!(!std::fs::read_dir(&home.0).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("pending-")));
     }
 }

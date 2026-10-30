@@ -161,3 +161,64 @@ fn reinstalling_an_optional_family_stops_only_workers_using_that_family() {
         assert!(service.snapshot()["state"]["ready"].as_bool().unwrap());
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn missing_runtime_and_lost_child_ownership_are_reported_without_latching_installation() {
+    let home = Home::new();
+    let mode = match std::env::var("SPEECHIFY_TEST_INSTALLER_BOUNDARY") {
+        Ok(mode) => mode,
+        Err(_) => {
+            for mode in ["missing-runtime", "reaped"] {
+                let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+                child.args(["--exact", "installer::behavior::missing_runtime_and_lost_child_ownership_are_reported_without_latching_installation"])
+                    .env("SPEECHIFY_TEST_INSTALLER_BOUNDARY", mode);
+                if mode == "missing-runtime" {
+                    child.env("PATH", &home.0);
+                }
+                let output = child.output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{mode}: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            return;
+        }
+    };
+    if mode == "reaped" {
+        unsafe {
+            libc::signal(libc::SIGCHLD, libc::SIG_IGN);
+        }
+    }
+    let service = home.service();
+    script(&home, "pass\n");
+    let error = install(&service, "distil-whisper-large-v3").unwrap_err();
+    if mode == "missing-runtime" {
+        assert!(error.contains("Python 3 and uv"), "{error}");
+    } else {
+        assert_eq!(
+            error,
+            std::io::Error::from_raw_os_error(libc::ECHILD).to_string()
+        );
+    }
+    assert_eq!(service.install_pid.load(Ordering::SeqCst), 0);
+    assert!(service.installing_family.lock().unwrap().is_none());
+}
+
+#[test]
+fn cancellation_before_setup_stops_the_installer_and_allows_a_later_retry() {
+    let home = Home::new();
+    let service = home.service();
+    script(&home, WAIT);
+    service.cancel_work();
+    assert!(install(&service, "training")
+        .unwrap_err()
+        .contains("cancelled"));
+    assert_eq!(service.install_pid.load(Ordering::SeqCst), 0);
+    assert!(!home.0.join("installed").exists());
+    service.cancel.store(false, Ordering::SeqCst);
+    script(&home, "pass\n");
+    install(&service, "training").unwrap();
+}

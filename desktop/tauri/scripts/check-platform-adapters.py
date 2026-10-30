@@ -14,14 +14,16 @@ with tempfile.TemporaryDirectory(prefix='speechify-adapter-check-') as tmp:
         text = re.sub(r',\s*kind\s*=\s*"framework"', '', text)
         (root / f'{name}.rs').write_text(text)
     fixture = (src.parent / 'tests/unit/windows.rs').read_text()
+    fixture = fixture.replace('../../../tests/fixtures/windows-hooks.rs', (src.parent.parent / 'tests/fixtures/windows-hooks.rs').as_posix())
     fixture = re.sub(r'^#\[(?:test|ignore\s*=.*?)\]\n', '', fixture, flags=re.MULTILINE)
     (root / 'windows_fixture.rs').write_text(fixture)
-    (root / 'check.rs').write_text('mod config { pub type Result<T> = std::result::Result<T,String>; }\nmod platform;\nmod replacement;\n#[cfg(candidate_macos)] mod mac_clipboard;\n'
-        'mod behavior_tests { pub fn wait_until(_: impl FnMut() -> bool) {} }\n'
-        '#[cfg(candidate_windows)] mod clipboard_fixture {\n'
-        'static CLIPBOARD: std::sync::Mutex<()> = std::sync::Mutex::new(());\n'
-        'fn read() -> String { String::new() }\nuse crate::platform::write_clipboard;\n'
-        f'#[path = "{root.as_posix()}/windows_fixture.rs"] mod behavior;\n}}\nfn main() {{}}\n')
+    with (root / 'platform.rs').open('a') as module:
+        module.write('\n#[cfg(candidate_windows)] mod clipboard_fixture {\n'
+            'static CLIPBOARD: std::sync::Mutex<()> = std::sync::Mutex::new(());\n'
+            'fn read() -> String { String::new() }\nuse super::*;\n'
+            f'#[path = "{root.as_posix()}/windows_fixture.rs"] mod behavior;\n}}\n')
+    (root / 'check.rs').write_text('mod config { pub type Result<T> = std::result::Result<T,String>; pub fn err(e: impl std::fmt::Display) -> String { e.to_string() } }\nmod platform;\nmod replacement;\n#[cfg(candidate_macos)] mod mac_clipboard;\n'
+        'mod behavior_tests { pub fn wait_until(_: impl FnMut() -> bool) {} }\nfn main() {}\n')
     for platform in ['windows', 'macos']:
         subprocess.run(['rustc', '--edition=2021', '--emit=metadata', '--cfg', f'candidate_{platform}', '-A', 'dead_code', str(root / 'check.rs'), '-o', str(root / 'check.rmeta')], check=True)
         print(f'{platform}: adapter Rust type check passed (host metadata only; no native linking/runtime)', flush=True)

@@ -126,7 +126,7 @@ pub mod capture {
             let actual_device = device
                 .description()
                 .map(|d| d.name().to_string())
-                .unwrap_or_else(|_| "System default microphone".into());
+                .unwrap_or("System default microphone".into());
             let config = device.default_input_config().map_err(crate::config::err)?;
             let rate = config.sample_rate();
             let channels = config.channels() as usize;

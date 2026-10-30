@@ -192,3 +192,37 @@ fn a_range_response_ending_before_any_bytes_arrive_is_a_retryable_download_error
     assert!(!dest.exists());
     assert_eq!(std::fs::read(dest.with_extension("partial")).unwrap(), b"");
 }
+
+#[test]
+fn cancellation_after_a_host_response_preserves_the_original_and_discards_the_partial() {
+    let home = Home::new();
+    let dest = home.0.join("models/test.gguf");
+    std::fs::write(&dest, b"old model").unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let requested = cancel.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/test.gguf", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+        }
+        requested.store(true, Ordering::SeqCst);
+        let _ = stream.write_all(GOOD.as_bytes());
+    });
+    assert_eq!(
+        install_artifact(&dest, &url, 3, ABC_SHA, &cancel, |_, _| {}).unwrap_err(),
+        "Cancelled"
+    );
+    server.join().unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), b"old model");
+    assert!(!dest.with_extension("partial").exists());
+}

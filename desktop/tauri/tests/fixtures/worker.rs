@@ -5,12 +5,14 @@ fn main() {
     if args[1].ends_with("finetune.py") {
         let root = std::path::PathBuf::from(std::env::var_os("SPEECHIFY_TAURI_TRAINING_HOME").unwrap());
         let report = &args[args.iter().position(|a| a=="--report").unwrap()+1];
+        std::fs::write(root.join("trainer-args.txt"), args.join("\n")).unwrap();
         let result = std::fs::read_to_string(root.join("trainer-result.json")).unwrap();
         if result=="exit" { std::process::exit(1); }
         std::fs::write(report,result).unwrap();
         return;
     }
     let model = Path::new(&args[2]);
+    std::fs::write(model.join("started"), "ready to run").unwrap();
     let mode = std::fs::read_to_string(model.join("scenario")).unwrap_or_default();
     match mode.trim() {
         "load-error" => { println!("{{\"error\":\"model rejected\"}}"); return; }
