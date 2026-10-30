@@ -7,6 +7,11 @@ on:
   pull_request:
     paths: ['desktop/tauri/**', '.github/workflows/tauri-candidate.yml']
   workflow_dispatch:
+    inputs:
+      coverage_only:
+        description: Run behavioral tests and coverage without building installer bundles
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -16,7 +21,78 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  coverage:
+    name: Tauri behavioral coverage (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    defaults:
+      run:
+        working-directory: desktop/tauri
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: desktop/tauri/package-lock.json
+      - name: Install Linux desktop prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libx11-dev libxtst-dev xvfb xauth xclip xdotool dbus libglib2.0-bin
+      - name: Install coverage tools
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --version 0.9.1 --locked
+          cargo install rustfilt --version 0.2.0 --locked
+          npm ci
+      - name: Prepare isolated Wayland keyboard directory
+        if: runner.os == 'Linux'
+        run: |
+          test ! -e /dev/input/by-id
+          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 700 /dev/input/by-id
+      - name: Exercise application behavior and collect native coverage
+        env:
+          PYTHON: python
+          SPEECHIFY_TEST_DISPOSABLE_DESKTOP: '1'
+          SPEECHIFY_TEST_VIRTUAL_KEYBOARD: '1'
+        run: bash scripts/test-coverage.sh --collect-only
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: tauri-coverage-${{ matrix.os }}
+          path: desktop/tauri/coverage/
+          if-no-files-found: error
+          retention-days: 14
+
+  coverage-gate:
+    name: Tauri full coverage gate
+    needs: coverage
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: tauri-coverage-*
+          path: coverage-results
+      - name: Require full coverage across supported platforms
+        run: |
+          cargo install rustfilt --version 0.2.0 --locked
+          python3 desktop/tauri/scripts/check-coverage.py \
+            --frontend coverage-results/tauri-coverage-ubuntu-24.04/coverage-final.json \
+            --backend coverage-results/tauri-coverage-*/rust.info
+
   linux:
+    if: github.event_name != 'workflow_dispatch' || !inputs.coverage_only
     name: Tauri Linux package and tests
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -57,6 +133,7 @@ jobs:
           retention-days: 14
 
   mac:
+    if: github.event_name != 'workflow_dispatch' || !inputs.coverage_only
     name: macOS candidate package (no release)
     runs-on: macos-15
     timeout-minutes: 45

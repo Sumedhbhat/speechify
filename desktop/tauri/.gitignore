@@ -4,3 +4,6 @@ dist/
 src-tauri/target/
 src-tauri/resources/native/
 artifacts/
+coverage/
+*.profraw
+*.profdata

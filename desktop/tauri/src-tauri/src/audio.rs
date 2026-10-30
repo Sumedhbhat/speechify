@@ -1,6 +1,9 @@
 use crate::config::Result;
 use std::path::Path;
 pub const RATE: u32 = 16000;
+#[cfg(all(test, feature = "desktop"))]
+#[path = "../tests/unit/capture.rs"]
+mod behavior;
 pub fn resample(input: &[f32], rate: u32, channels: usize) -> Vec<f32> {
     if rate == 0 || channels == 0 {
         return vec![];
@@ -34,30 +37,29 @@ pub fn resample(input: &[f32], rate: u32, channels: usize) -> Vec<f32> {
                 sum += mono[j as usize] as f64 * w;
                 weight += w;
             }
-            if weight.abs() > 1e-8 {
-                (sum / weight) as f32
-            } else {
-                0.
-            }
+            (sum / weight) as f32
         })
         .collect()
 }
 pub fn load(path: &Path) -> Result<Vec<f32>> {
-    let mut r = hound::WavReader::open(path).map_err(|e| e.to_string())?;
+    let mut r = hound::WavReader::open(path).map_err(crate::config::err)?;
     let s = r.spec();
-    if s.sample_rate == 0 || s.channels == 0 || r.duration() > s.sample_rate * 600 {
+    if s.sample_rate == 0
+        || s.channels == 0
+        || u64::from(r.duration()) > u64::from(s.sample_rate) * 600
+    {
         return Err("WAV must be at most 10 minutes".into());
     }
     let samples = if s.sample_format == hound::SampleFormat::Float {
         r.samples::<f32>()
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?
+            .map_err(crate::config::err)?
     } else {
         let scale = 2f32.powi(s.bits_per_sample as i32 - 1);
         r.samples::<i32>()
             .map(|x| x.map(|v| v as f32 / scale))
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?
+            .map_err(crate::config::err)?
     };
     if samples.iter().any(|x| !x.is_finite()) {
         return Err("Non-finite WAV samples".into());
@@ -74,12 +76,12 @@ pub fn save(path: &Path, audio: &[f32]) -> Result<()> {
             sample_format: hound::SampleFormat::Int,
         },
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(crate::config::err)?;
     for s in audio {
         w.write_sample((s.clamp(-1., 1.) * 32767.) as i16)
-            .map_err(|e| e.to_string())?;
+            .map_err(crate::config::err)?;
     }
-    w.finalize().map_err(|e| e.to_string())
+    w.finalize().map_err(crate::config::err)
 }
 #[cfg(feature = "desktop")]
 pub mod capture {
@@ -89,21 +91,25 @@ pub mod capture {
     pub fn devices() -> Result<Vec<String>> {
         cpal::default_host()
             .input_devices()
-            .map_err(|e| e.to_string())?
+            .map_err(crate::config::err)?
             .map(|d| {
                 d.description()
                     .map(|x| x.name().to_string())
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::config::err)
             })
             .collect()
     }
     pub struct Capture {
         pub _stream: cpal::Stream,
         pub actual_device: String,
-        pub data: Arc<Mutex<Vec<f32>>>,
-        pub rate: u32,
-        pub channels: usize,
-        pub error: Arc<Mutex<Option<String>>>,
+        pub audio: CapturedAudio,
+    }
+    #[derive(Clone)]
+    pub struct CapturedAudio {
+        data: Arc<Mutex<Vec<f32>>>,
+        error: Arc<Mutex<Option<String>>>,
+        rate: u32,
+        channels: usize,
     }
     impl Capture {
         pub fn open(name: &str) -> Result<Self> {
@@ -112,7 +118,7 @@ pub mod capture {
                 host.default_input_device()
             } else {
                 host.input_devices()
-                    .map_err(|e| e.to_string())?
+                    .map_err(crate::config::err)?
                     .find(|d| d.description().is_ok_and(|x| x.name() == name))
             }
             .or_else(|| host.default_input_device())
@@ -120,60 +126,78 @@ pub mod capture {
             let actual_device = device
                 .description()
                 .map(|d| d.name().to_string())
-                .unwrap_or_else(|_| "System default microphone".into());
-            let config = device.default_input_config().map_err(|e| e.to_string())?;
+                .unwrap_or("System default microphone".into());
+            let config = device.default_input_config().map_err(crate::config::err)?;
             let rate = config.sample_rate();
             let channels = config.channels() as usize;
-            let data = Arc::new(Mutex::new(Vec::new()));
-            let error = Arc::new(Mutex::new(None));
+            let audio = CapturedAudio::new(rate, channels);
             macro_rules! stream {
-                ($t:ty,$convert:expr) => {{
-                    let d = data.clone();
-                    let e = error.clone();
+                ($t:ty) => {{
+                    let captured = audio.clone();
                     device
                         .build_input_stream(
                             config.clone().into(),
                             move |buf: &[$t], _: &cpal::InputCallbackInfo| {
-                                let mut out = d.lock().unwrap();
-                                let max = rate as usize * channels * 600;
-                                if out.len() + buf.len() <= max {
-                                    out.extend(buf.iter().map($convert));
-                                } else {
-                                    *e.lock().unwrap() =
-                                        Some("Recording exceeds ten-minute limit".into());
-                                }
+                                captured.push(buf);
                             },
                             {
-                                let e = error.clone();
+                                let captured = audio.clone();
                                 move |err| {
-                                    *e.lock().unwrap() = Some(format!(
+                                    captured.fail(format!(
                                         "Microphone disconnected or unavailable: {err}"
                                     ));
                                 }
                             },
                             None,
                         )
-                        .map_err(|e| e.to_string())?
+                        .map_err(crate::config::err)?
                 }};
             }
             let stream = match config.sample_format() {
-                cpal::SampleFormat::F32 => stream!(f32, |x: &f32| *x),
-                cpal::SampleFormat::I16 => stream!(i16, |x: &i16| *x as f32 / 32768.),
-                cpal::SampleFormat::U16 => stream!(u16, |x: &u16| (*x as f32 - 32768.) / 32768.),
+                cpal::SampleFormat::F32 => stream!(f32),
+                cpal::SampleFormat::I16 => stream!(i16),
+                cpal::SampleFormat::U16 => stream!(u16),
                 f => return Err(format!("Unsupported microphone sample format: {f}")),
             };
-            stream.play().map_err(|e| e.to_string())?;
+            stream.play().map_err(crate::config::err)?;
             Ok(Self {
                 _stream: stream,
                 actual_device,
-                data,
-                rate,
-                channels,
-                error,
+                audio,
             })
         }
+    }
+    impl CapturedAudio {
+        pub fn new(rate: u32, channels: usize) -> Self {
+            Self {
+                data: Arc::new(Mutex::new(Vec::new())),
+                error: Arc::new(Mutex::new(None)),
+                rate,
+                channels,
+            }
+        }
+        pub fn push<T: cpal::Sample>(&self, samples: &[T])
+        where
+            f32: cpal::FromSample<T>,
+        {
+            let mut data = self.data.lock().unwrap();
+            if data.len() + samples.len() <= self.rate as usize * self.channels * 600 {
+                data.extend(samples.iter().map(|sample| sample.to_sample::<f32>()));
+            } else {
+                self.fail("Recording exceeds ten-minute limit".into());
+            }
+        }
+        pub fn fail(&self, message: String) {
+            *self.error.lock().unwrap() = Some(message);
+        }
+        pub fn take_error(&self) -> Option<String> {
+            self.error.lock().unwrap().take()
+        }
+        pub fn clear(&self) {
+            self.data.lock().unwrap().clear();
+        }
         pub fn take(&self) -> Result<Vec<f32>> {
-            if let Some(e) = self.error.lock().unwrap().take() {
+            if let Some(e) = self.take_error() {
                 return Err(e);
             }
             Ok(resample(

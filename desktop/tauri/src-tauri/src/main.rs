@@ -3,6 +3,9 @@
     windows_subsystem = "windows"
 )]
 mod audio;
+#[cfg(test)]
+#[path = "../tests/unit/behavior.rs"]
+mod behavior_tests;
 mod child_owner;
 mod config;
 #[cfg(feature = "desktop")]

@@ -2,13 +2,16 @@ use crate::config::{owned, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
 };
+#[cfg(test)]
+#[path = "../tests/unit/models.rs"]
+mod behavior;
 pub fn catalog() -> Vec<Value> {
     serde_json::from_str(include_str!("../resources/catalog.json")).unwrap()
 }
@@ -34,14 +37,14 @@ pub fn path(root: &Path, id: &str) -> Result<PathBuf> {
     owned(&root.join("models"), &format!("{id}.gguf"))
 }
 pub fn verify(path: &Path, expected: &str, cancel: &AtomicBool) -> Result<()> {
-    let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut f = std::fs::File::open(path).map_err(crate::config::err)?;
     let mut h = Sha256::new();
     let mut buf = [0u8; 1024 * 128];
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err("Cancelled".into());
         }
-        let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+        let n = f.read(&mut buf).map_err(crate::config::err)?;
         if n == 0 {
             break;
         }
@@ -69,27 +72,47 @@ pub fn install(
         return Err("This model requires the optional isolated Python environment; see candidate-testing.md".into());
     }
     let dst = path(root, id)?;
-    let tmp = dst.with_extension("partial");
+    let url = format!(
+        "https://huggingface.co/{}/resolve/{}/{}",
+        g["repo"].as_str().unwrap(),
+        g["revision"].as_str().unwrap(),
+        g["file"].as_str().unwrap()
+    );
     let total = g["size"].as_u64().unwrap();
+    install_artifact(
+        &dst,
+        &url,
+        total,
+        g["sha256"].as_str().unwrap(),
+        &cancel,
+        |stage, bytes| {
+            progress(json!({"id":id,"stage":stage,"bytes":bytes,"total":total}));
+        },
+    )
+}
+fn install_artifact(
+    dst: &Path,
+    url: &str,
+    total: u64,
+    sha256: &str,
+    cancel: &AtomicBool,
+    progress: impl Fn(&str, u64),
+) -> Result<()> {
+    let tmp = dst.with_extension("partial");
     let result = (|| {
-        let url = format!(
-            "https://huggingface.co/{}/resolve/{}/{}",
-            g["repo"].as_str().unwrap(),
-            g["revision"].as_str().unwrap(),
-            g["file"].as_str().unwrap()
-        );
-        download(&url, total, &tmp, &cancel, |bytes| {
-            progress(json!({"id":id,"stage":"Downloading","bytes":bytes,"total":total}));
+        download(url, total, &tmp, cancel, |bytes| {
+            progress("Downloading", bytes);
         })?;
-        progress(json!({"id":id,"stage":"Verifying SHA-256","bytes":total,"total":total}));
-        if let Err(error) = verify(&tmp, g["sha256"].as_str().unwrap(), &cancel) {
+        progress("Verifying SHA-256", total);
+        if let Err(error) = verify(&tmp, sha256, cancel) {
             let _ = std::fs::remove_file(&tmp);
             return Err(error);
         }
+        progress("Installing", total);
         if cancel.load(Ordering::Relaxed) {
             return Err("Cancelled".into());
         }
-        std::fs::rename(&tmp, &dst).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, dst).map_err(crate::config::err)?;
         Ok(())
     })();
     // Network/disk failures retain the resumable prefix; cancellation removes it.
@@ -109,17 +132,19 @@ fn download(
         .connect_timeout(std::time::Duration::from_secs(20))
         .timeout(std::time::Duration::from_secs(30))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(crate::config::err)?;
     let mut f = std::fs::OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
+        .truncate(false)
         .open(tmp)
-        .map_err(|e| e.to_string())?;
-    let mut bytes = f.metadata().map_err(|e| e.to_string())?.len();
+        .map_err(crate::config::err)?;
+    let mut bytes = f.metadata().map_err(crate::config::err)?.len();
     if bytes > total {
-        f.set_len(0).map_err(|e| e.to_string())?;
+        f.set_len(0).map_err(crate::config::err)?;
         bytes = 0;
     }
+    f.seek(SeekFrom::Start(bytes)).map_err(crate::config::err)?;
     progress(bytes);
     while bytes < total {
         if cancel.load(Ordering::Relaxed) {
@@ -133,7 +158,7 @@ fn download(
                 .header(reqwest::header::RANGE, format!("bytes={bytes}-{end}"))
                 .send()
                 .and_then(|r| r.error_for_status())
-                .map_err(|e| e.to_string())?;
+                .map_err(crate::config::err)?;
             if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
                 return Err(
                     "Model host did not honor a bounded range request; retry later".to_owned(),
@@ -155,11 +180,11 @@ fn download(
                     return Err("Cancelled".into());
                 }
                 let want = remaining.min(buf.len() as u64) as usize;
-                let n = response.read(&mut buf[..want]).map_err(|e| e.to_string())?;
+                let n = response.read(&mut buf[..want]).map_err(crate::config::err)?;
                 if n == 0 {
                     return Err("Download was truncated".into());
                 }
-                f.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+                f.write_all(&buf[..n]).map_err(crate::config::err)?;
                 bytes += n as u64;
                 remaining -= n as u64;
             }
@@ -174,7 +199,7 @@ fn download(
             }
         }
     }
-    f.sync_all().map_err(|e| e.to_string())
+    f.sync_all().map_err(crate::config::err)
 }
 
 pub fn list(root: &Path) -> Vec<Value> {

@@ -6,6 +6,10 @@ use std::{
     sync::{atomic::Ordering, Arc},
     time::{Duration, Instant},
 };
+#[cfg(test)]
+#[path = "../tests/unit/installer.rs"]
+mod behavior;
+const CANCELLED: &str = "Installation cancelled or timed out. Retry resumes completed environment setup and restarts incomplete model files.";
 pub fn install(s: &Arc<Service>, id: &str) -> Result<()> {
     let family = match id {
         "distil-whisper-large-v3" => "whisper",
@@ -55,12 +59,9 @@ pub fn install(s: &Arc<Service>, id: &str) -> Result<()> {
     let (tx, rx) = std::sync::mpsc::sync_channel(8);
     let stdout = child.stdout.take().unwrap();
     std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            let Ok(line) = line else {
-                break;
-            };
-            if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                if tx.send(value).is_err() {
+        for line in BufReader::new(stdout).split(b'\n').map_while(std::result::Result::ok) {
+            if let Ok(value) = serde_json::from_slice::<Value>(&line) {
+                if value.get("stage").is_some_and(Value::is_string) && tx.send(value).is_err() {
                     break;
                 }
             }
@@ -74,7 +75,7 @@ pub fn install(s: &Arc<Service>, id: &str) -> Result<()> {
         {
             crate::worker::terminate(child.id());
             let _ = child.wait();
-            break Err("Installation cancelled or timed out. Retry resumes completed environment setup and restarts incomplete model files.".into());
+            break Err(CANCELLED.into());
         }
         if let Ok(mut progress) = rx.recv_timeout(Duration::from_millis(100)) {
             progress["id"] = json!(id);
@@ -82,11 +83,14 @@ pub fn install(s: &Arc<Service>, id: &str) -> Result<()> {
         }
         match child.try_wait() {
             Ok(Some(status)) => {
+                if s.cancel.load(Ordering::SeqCst) || s.stopping.load(Ordering::SeqCst) {
+                    break Err(CANCELLED.into());
+                }
                 break if status.success() {
                     Ok(())
                 } else {
                     Err("Optional installation failed. Check Python 3, uv, available disk space and network; Retry safely repairs partial setup.".into())
-                }
+                };
             }
             Ok(None) => (),
             Err(e) => {

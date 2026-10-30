@@ -10,28 +10,13 @@ use std::{
     sync::{atomic::Ordering, Arc},
     time::{Duration, Instant},
 };
+#[cfg(test)]
+#[path = "../tests/unit/learning.rs"]
+mod behavior;
 pub fn mains() -> bool {
     #[cfg(target_os = "linux")]
     {
-        let Ok(entries) = std::fs::read_dir("/sys/class/power_supply") else {
-            return false;
-        };
-        let mut battery = false;
-        for d in entries.flatten() {
-            let p = d.path();
-            let kind = std::fs::read_to_string(p.join("type")).unwrap_or_default();
-            if kind.trim() == "Battery" {
-                battery = true;
-                let status = std::fs::read_to_string(p.join("status")).unwrap_or_default();
-                if ["Charging", "Full"].contains(&status.trim()) {
-                    return true;
-                }
-            }
-            if std::fs::read_to_string(p.join("online")).is_ok_and(|s| s.trim() == "1") {
-                return true;
-            }
-        }
-        !battery
+        linux_mains(Path::new("/sys/class/power_supply"))
     }
     #[cfg(target_os = "macos")]
     {
@@ -66,7 +51,7 @@ pub fn mains() -> bool {
         unsafe { GetSystemPowerStatus(&mut p) != 0 && p.ac == 1 }
     }
 }
-pub fn scheduler(s: Arc<Service>) {
+pub fn scheduler(s: Arc<Service>) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut retry = Instant::now();
         while !s.stopping.load(Ordering::SeqCst) {
@@ -75,55 +60,56 @@ pub fn scheduler(s: Arc<Service>) {
                 break;
             }
             let cfg = s.config.lock().unwrap().clone();
-            let idle = s.last_activity.lock().unwrap().elapsed().as_secs_f64()
-                >= cfg["idle_minutes"].as_f64().unwrap_or(5.) * 60.;
-            if !mains() {
-                if s.learning_busy.load(Ordering::SeqCst) {
-                    s.cancel_work();
-                }
-                continue;
-            }
-            if s.downloading.load(Ordering::SeqCst)
-                || !idle
-                || s.recording.load(Ordering::SeqCst)
-                || cfg["learn_auto"] != true
-                || Instant::now() < retry
-                || s.learning_busy.load(Ordering::SeqCst)
-            {
-                continue;
-            }
-            if let Err(e) = teacher(&s, &cfg) {
-                let _ = s.store.lock().unwrap().state("teacher_status", &json!(e));
-                retry = Instant::now() + Duration::from_secs(3600);
-            }
-            let counts = s
-                .store
-                .lock()
-                .unwrap()
-                .history("", "")
-                .unwrap_or_default()
-                .iter()
-                .filter(|r| {
-                    label(r, cfg["teacher_min_confidence"].as_f64().unwrap_or(0.7)).is_some()
-                })
-                .count();
-            let previous = s
-                .store
-                .lock()
-                .unwrap()
-                .get_state("last_training")
-                .unwrap_or(json!({"count":0,"ts":now()}));
-            if due(
-                counts,
-                previous["count"].as_u64().unwrap_or(0) as usize,
-                previous["ts"].as_f64().unwrap_or(now()),
-                now(),
-                &cfg,
-            ) {
-                let _ = start_training(s.clone());
-            }
+            scheduler_tick(&s, &cfg, mains(), &mut retry);
         }
-    });
+    })
+}
+fn scheduler_tick(s: &Arc<Service>, cfg: &Value, on_mains: bool, retry: &mut Instant) {
+    let idle = s.last_activity.lock().unwrap().elapsed().as_secs_f64()
+        >= cfg["idle_minutes"].as_f64().unwrap_or(5.) * 60.;
+    if !on_mains {
+        if s.learning_busy.load(Ordering::SeqCst) {
+            s.cancel_work();
+        }
+        return;
+    }
+    if s.downloading.load(Ordering::SeqCst)
+        || !idle
+        || s.recording.load(Ordering::SeqCst)
+        || cfg["learn_auto"] != true
+        || Instant::now() < *retry
+        || s.learning_busy.load(Ordering::SeqCst)
+    {
+        return;
+    }
+    if let Err(e) = teacher(s, cfg) {
+        let _ = s.store.lock().unwrap().state("teacher_status", &json!(e));
+        *retry = Instant::now() + Duration::from_secs(3600);
+    }
+    let counts = s
+        .store
+        .lock()
+        .unwrap()
+        .history("", "")
+        .unwrap_or_default()
+        .iter()
+        .filter(|r| label(r, cfg["teacher_min_confidence"].as_f64().unwrap_or(0.7)).is_some())
+        .count();
+    let previous = s
+        .store
+        .lock()
+        .unwrap()
+        .get_state("last_training")
+        .unwrap_or(json!({"count":0,"ts":now()}));
+    if due(
+        counts,
+        previous["count"].as_u64().unwrap_or(0) as usize,
+        previous["ts"].as_f64().unwrap_or(now()),
+        now(),
+        &cfg,
+    ) {
+        let _ = start_training_on_power(s.clone(), on_mains);
+    }
 }
 pub fn due(total: usize, previous: usize, ts: f64, now: f64, cfg: &Value) -> bool {
     total >= 50
@@ -191,7 +177,7 @@ fn teacher(s: &Arc<Service>, cfg: &Value) -> Result<()> {
         let text = result["text"].as_str().unwrap_or("");
         let audio = crate::audio::load(&path)?;
         let (confidence, note) = judge(text, audio.len() as f64 / 16000.);
-        s.store.lock().unwrap().db.execute("UPDATE samples SET teacher_text=?,teacher_model=?,teacher_confidence=?,teacher_ts=?,teacher_note=? WHERE id=?",rusqlite::params![text,teacher,confidence,now(),note,id]).map_err(|e|e.to_string())?;
+        s.store.lock().unwrap().db.execute("UPDATE samples SET teacher_text=?,teacher_model=?,teacher_confidence=?,teacher_ts=?,teacher_note=? WHERE id=?",rusqlite::params![text,teacher,confidence,now(),note,id]).map_err(crate::config::err)?;
         s.store.lock().unwrap().state(
             "teacher_status",
             &json!(format!("Labelled sample {id}; confidence {confidence:.2}")),
@@ -226,6 +212,9 @@ pub fn judge(text: &str, seconds: f64) -> (f64, Option<String>) {
     (confidence, None)
 }
 pub fn start_training(s: Arc<Service>) -> Result<()> {
+    start_training_on_power(s, mains())
+}
+fn start_training_on_power(s: Arc<Service>, on_mains: bool) -> Result<()> {
     if s.downloading.load(Ordering::SeqCst) || s.recording.load(Ordering::SeqCst) {
         return Err("Finish installation and recording before training".into());
     }
@@ -252,7 +241,7 @@ pub fn start_training(s: Arc<Service>) -> Result<()> {
         s.learning_busy.store(false, Ordering::SeqCst);
         return Err("Install the optional training environment first. Training needs NVIDIA CUDA and at least 10 GB VRAM.".into());
     }
-    if !mains() {
+    if !on_mains {
         s.learning_busy.store(false, Ordering::SeqCst);
         return Err("Training pauses on battery; connect mains power".into());
     }
@@ -316,7 +305,7 @@ pub fn start_training(s: Arc<Service>) -> Result<()> {
             .stderr(Stdio::null());
             let (mut child, _owner) = crate::child_owner::spawn(&mut cmd)?;
             s.training_pid.store(child.id(), Ordering::SeqCst);
-            let status = child.wait().map_err(|e| e.to_string())?;
+            let status = child.wait().map_err(crate::config::err)?;
             s.training_pid.store(0, Ordering::SeqCst);
             if !status.success() {
                 return Err(
@@ -324,8 +313,8 @@ pub fn start_training(s: Arc<Service>) -> Result<()> {
                 );
             }
             let result: Value =
-                serde_json::from_str(&std::fs::read_to_string(&report).map_err(|e| e.to_string())?)
-                    .map_err(|e| e.to_string())?;
+                serde_json::from_str(&std::fs::read_to_string(&report).map_err(crate::config::err)?)
+                    .map_err(crate::config::err)?;
             s.store.lock().unwrap().state("training_status", &result)?;
             if !gates(&result) {
                 return Ok(());
@@ -337,8 +326,8 @@ pub fn start_training(s: Arc<Service>) -> Result<()> {
                 .to_string_lossy()
                 .into_owned();
             let safe = owned(&s.root.join("models"), &name)?;
-            if safe.canonicalize().map_err(|e| e.to_string())?
-                != path.canonicalize().map_err(|e| e.to_string())?
+            if safe.canonicalize().map_err(crate::config::err)?
+                != path.canonicalize().map_err(crate::config::err)?
             {
                 return Err("Trainer returned an external path".into());
             }
@@ -399,10 +388,10 @@ fn prune(s: &Service, keep: usize) -> Result<()> {
                     .to_string_lossy();
                 let candidate = owned(&s.root.join("models"), &name)?;
                 if path.exists()
-                    && path.canonicalize().map_err(|e| e.to_string())?
-                        == candidate.canonicalize().map_err(|e| e.to_string())?
+                    && path.canonicalize().map_err(crate::config::err)?
+                        == candidate.canonicalize().map_err(crate::config::err)?
                 {
-                    std::fs::remove_dir_all(candidate).map_err(|e| e.to_string())?;
+                    std::fs::remove_dir_all(candidate).map_err(crate::config::err)?;
                 }
             }
         }
@@ -511,4 +500,27 @@ mod selection_tests {
         );
         assert!(choose_teacher("auto", Some(0.1), false).is_err());
     }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_mains(root: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return false;
+    };
+    let mut battery = false;
+    for d in entries.flatten() {
+        let p = d.path();
+        let kind = std::fs::read_to_string(p.join("type")).unwrap_or_default();
+        if kind.trim() == "Battery" {
+            battery = true;
+            let status = std::fs::read_to_string(p.join("status")).unwrap_or_default();
+            if ["Charging", "Full"].contains(&status.trim()) {
+                return true;
+            }
+        }
+        if std::fs::read_to_string(p.join("online")).is_ok_and(|s| s.trim() == "1") {
+            return true;
+        }
+    }
+    !battery
 }

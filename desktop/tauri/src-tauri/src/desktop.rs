@@ -13,6 +13,9 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{Emitter, Manager};
+#[cfg(test)]
+#[path = "../tests/unit/desktop.rs"]
+mod behavior;
 #[tauri::command]
 async fn request(
     op: String,
@@ -22,7 +25,7 @@ async fn request(
     let s = service.inner().clone();
     tauri::async_runtime::spawn_blocking(move || dispatch(&s, &op, &args))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(crate::config::err)?
 }
 fn dispatch(s: &Arc<Service>, op: &str, args: &Value) -> Result<Value> {
     match op {
@@ -126,7 +129,7 @@ fn dispatch(s: &Arc<Service>, op: &str, args: &Value) -> Result<Value> {
         "audio" => {
             use base64::Engine;
             let p = s.store.lock().unwrap().audio_path(id(args)?)?;
-            let bytes = std::fs::read(p).map_err(|e| e.to_string())?;
+            let bytes = std::fs::read(p).map_err(crate::config::err)?;
             Ok(json!(
                 base64::engine::general_purpose::STANDARD.encode(bytes)
             ))
@@ -154,14 +157,14 @@ fn dispatch(s: &Arc<Service>, op: &str, args: &Value) -> Result<Value> {
             Ok(json!(s.store.lock().unwrap().import(source)?))
         }
         "export_config" => Ok(json!(
-            toml::to_string_pretty(&*s.config.lock().unwrap()).map_err(|e| e.to_string())?
+            toml::to_string_pretty(&*s.config.lock().unwrap()).map_err(crate::config::err)?
         )),
         "import_config" => {
             let raw: toml::Value = toml::from_str(args["text"].as_str().ok_or("TOML required")?)
-                .map_err(|e| e.to_string())?;
+                .map_err(crate::config::err)?;
             let mut cfg = crate::config::defaults();
             for (k, v) in serde_json::to_value(raw)
-                .map_err(|e| e.to_string())?
+                .map_err(crate::config::err)?
                 .as_object()
                 .ok_or("TOML table required")?
             {
@@ -227,9 +230,9 @@ fn dispatch(s: &Arc<Service>, op: &str, args: &Value) -> Result<Value> {
             crate::models::verify(source, hash, &std::sync::atomic::AtomicBool::new(false))?;
             let dest = crate::models::path(&s.root, id)?;
             let tmp = dest.with_extension("partial");
-            std::fs::copy(source, &tmp).map_err(|e| e.to_string())?;
+            std::fs::copy(source, &tmp).map_err(crate::config::err)?;
             crate::models::verify(&tmp, hash, &std::sync::atomic::AtomicBool::new(false))?;
-            std::fs::rename(tmp, dest).map_err(|e| e.to_string())?;
+            std::fs::rename(tmp, dest).map_err(crate::config::err)?;
             Ok(json!(true))
         }
         "train" => {
@@ -257,10 +260,20 @@ fn show(app: &tauri::AppHandle, page: &str) {
         let _ = w.emit("navigate", page);
     }
 }
-fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
+fn runtime(app: tauri::AppHandle, s: Arc<Service>, indicator: tauri::WebviewWindow) {
+    start_runtime(s, move |page| show(&app, page), move |visible| {
+        if visible { let _ = indicator.show(); } else { let _ = indicator.hide(); }
+    }, Capture::open);
+}
+fn start_runtime(
+    s: Arc<Service>,
+    navigate: impl Fn(&str) + Send + 'static,
+    indicator: impl Fn(bool) + Send + 'static,
+    open_capture: impl Fn(&str) -> Result<Capture> + Send + 'static,
+) -> [std::thread::JoinHandle<()>; 3] {
     let (tx, rx) = mpsc::sync_channel::<(Vec<f32>, u64, u64)>(4);
     let infer = s.clone();
-    std::thread::spawn(move || {
+    let inference = std::thread::spawn(move || {
         for (audio, target, generation) in rx {
             if infer.stopping.load(Ordering::SeqCst) {
                 break;
@@ -285,8 +298,7 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                         return Ok(());
                     }
                     let receipt = platform::paste(target, text)?;
-                    *infer.replacement.lock().unwrap() =
-                        receipt.and_then(|r| result["sample_id"].as_i64().map(|id| (id, r)));
+                    *infer.replacement.lock().unwrap() = result["sample_id"].as_i64().zip(receipt);
                     infer.set_stage("Pasted");
                     infer.log("paste_ack", json!({"clock_ms":crate::store::now()*1000.}));
                 }
@@ -294,15 +306,16 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
             })();
             let _ = std::fs::remove_file(path);
             if let Err(e) = result {
-                infer.error(e);
+                if infer.generation.load(Ordering::SeqCst) == generation {
+                    infer.error(e);
+                }
             }
         }
     });
     let (capture_tx, capture_rx) = mpsc::sync_channel::<(Action, u64, u64)>(32);
     *s.capture_tx.lock().unwrap() = Some(capture_tx.clone());
     let recorder = s.clone();
-    let indicator = app.clone();
-    std::thread::spawn(move || {
+    let recording = std::thread::spawn(move || {
         let mut capture: Option<Capture> = None;
         let mut active_target = 0;
         let mut active_capture = false;
@@ -310,6 +323,7 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
         let mut last_input = String::new();
         let mut hide_at = None;
         while !recorder.stopping.load(Ordering::SeqCst) {
+            let command = capture_rx.recv_timeout(Duration::from_millis(15));
             let cfg = recorder.config.lock().unwrap().clone();
             let keep = cfg["keep_mic_open"] == true;
             let input = cfg["input_device"].as_str().unwrap_or("");
@@ -317,7 +331,6 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                 capture = None;
                 last_input = input.into();
             }
-            let command = capture_rx.recv_timeout(Duration::from_millis(15));
             if let Ok((action, target, generation)) = command {
                 match action {
                     Action::Start => {
@@ -325,7 +338,7 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                         active_target = target;
                         active_generation = generation;
                         if capture.is_none() {
-                            match Capture::open(input) {
+                            match open_capture(input) {
                                 Ok(c) => {
                                     recorder.state.lock().unwrap()["actual_input"] =
                                         json!(&c.actual_device);
@@ -343,24 +356,20 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                                 "microphone_ready",
                                 json!({"clock_ms":crate::store::now()*1000.}),
                             );
-                            if let Some(w) = indicator.get_webview_window("indicator") {
-                                let _ = w.show();
-                            }
+                            indicator(true);
                         }
                     }
                     Action::Cancel => {
                         active_capture = false;
                         if keep {
                             if let Some(c) = &capture {
-                                c.data.lock().unwrap().clear();
+                                c.audio.clear();
                             }
                         } else {
                             capture = None;
                         }
                         recorder.set_stage("Ready");
-                        if let Some(w) = indicator.get_webview_window("indicator") {
-                            let _ = w.hide();
-                        }
+                        indicator(false);
                     }
                     Action::Submit => {
                         if !active_capture {
@@ -368,20 +377,21 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                         }
                         active_capture = false;
                         if let Some(c) = &capture {
-                            match c.take() {
-                                Ok(a) => {
-                                    if a.len() < 160 {
-                                        recorder.error("Microphone was not ready before release; try holding longer");
-                                    } else if tx
-                                        .try_send((a, active_target, active_generation))
-                                        .is_err()
-                                    {
-                                        recorder.error("Dictation queue is full (4 clips); wait for transcription");
-                                    } else {
-                                        recorder.set_stage("Queued");
-                                    }
+                            let taken = c.audio.take();
+                            let stream_failed = taken.is_err();
+                            let queued = taken.and_then(|audio| {
+                                if audio.len() < 160 {
+                                    return Err("Microphone was not ready before release; try holding longer".into());
                                 }
+                                tx.try_send((audio, active_target, active_generation))
+                                    .map_err(|_| "Dictation queue is full (4 clips); wait for transcription".into())
+                            });
+                            match queued {
+                                Ok(()) => recorder.set_stage("Queued"),
                                 Err(e) => recorder.error(e),
+                            }
+                            if stream_failed {
+                                capture = None;
                             }
                         }
                         if !keep {
@@ -392,7 +402,7 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                 }
             }
             if keep && capture.is_none() && !recorder.recording.load(Ordering::SeqCst) {
-                match Capture::open(input) {
+                match open_capture(input) {
                     Ok(c) => {
                         recorder.state.lock().unwrap()["actual_input"] = json!(&c.actual_device);
                         capture = Some(c);
@@ -408,15 +418,17 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
             }
             if let Some(c) = &capture {
                 if !active_capture {
-                    c.preroll();
+                    c.audio.preroll();
                 }
-                recorder.state.lock().unwrap()["level"] = json!(c.level());
-                let err = c.error.lock().unwrap().take();
+                recorder.state.lock().unwrap()["level"] = json!(c.audio.level());
+                let err = c.audio.take_error();
                 if let Some(e) = err {
                     recorder.error(e);
                     capture = None;
                     recorder.recording.store(false, Ordering::SeqCst);
                 }
+            } else {
+                recorder.state.lock().unwrap()["level"] = json!(0.);
             }
             if hide_at.is_some_and(|t| Instant::now() > t)
                 && ["Ready", "Pasted", "Error", "Cancelled"].contains(
@@ -426,14 +438,12 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                 )
                 && !recorder.recording.load(Ordering::SeqCst)
             {
-                if let Some(w) = indicator.get_webview_window("indicator") {
-                    let _ = w.hide();
-                }
+                indicator(false);
                 hide_at = None;
             }
         }
     });
-    std::thread::spawn(move || {
+    let keyboard = std::thread::spawn(move || {
         let poll = match platform::Poller::new() {
             Ok(p) => p,
             Err(e) => {
@@ -489,7 +499,7 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
                     if n.event(&key, pressed, clock.elapsed().as_millis() as u64)
                         == Some(Action::Start)
                     {
-                        show(&app, ["History", "History", "Models"][i]);
+                        navigate(["History", "History", "Models"][i]);
                     }
                 }
                 if s.manual_started.lock().unwrap().is_some() {
@@ -521,6 +531,7 @@ fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
             std::thread::sleep(Duration::from_millis(8));
         }
     });
+    [inference, recording, keyboard]
 }
 
 pub fn run() -> Result<()> {
@@ -553,34 +564,16 @@ pub fn run() -> Result<()> {
                 32,
                 32,
             );
-            let menu = tauri::menu::Menu::with_items(
-                app,
-                &[
-                    &tauri::menu::MenuItem::with_id(
-                        app,
-                        "settings",
-                        "Settings",
-                        true,
-                        None::<&str>,
-                    )?,
-                    &tauri::menu::MenuItem::with_id(app, "history", "History", true, None::<&str>)?,
-                    &tauri::menu::MenuItem::with_id(app, "models", "Models", true, None::<&str>)?,
-                    &tauri::menu::MenuItem::with_id(
-                        app,
-                        "logs",
-                        "Log location",
-                        true,
-                        None::<&str>,
-                    )?,
-                    &tauri::menu::MenuItem::with_id(
-                        app,
-                        "quit",
-                        "Quit candidate",
-                        true,
-                        None::<&str>,
-                    )?,
-                ],
-            )?;
+            let menu = tauri::menu::Menu::new(app)?;
+            for (id, text) in [
+                ("settings", "Settings"),
+                ("history", "History"),
+                ("models", "Models"),
+                ("logs", "Log location"),
+                ("quit", "Quit candidate"),
+            ] {
+                menu.append(&tauri::menu::MenuItem::with_id(app, id, text, true, None::<&str>)?)?;
+            }
             tauri::tray::TrayIconBuilder::new()
                 .icon(icon)
                 .tooltip("Speechify Tauri Candidate")
@@ -596,7 +589,7 @@ pub fn run() -> Result<()> {
                     _ => show(app, "Settings"),
                 })
                 .build(app)?;
-            tauri::WebviewWindowBuilder::new(
+            let indicator = tauri::WebviewWindowBuilder::new(
                 app,
                 "indicator",
                 tauri::WebviewUrl::App("index.html?overlay".into()),
@@ -611,8 +604,8 @@ pub fn run() -> Result<()> {
             .focusable(false)
             .visible(false)
             .build()?;
-            runtime(app.handle().clone(), s.clone());
-            crate::learning::scheduler(s.clone());
+            runtime(app.handle().clone(), s.clone(), indicator);
+            let _ = crate::learning::scheduler(s.clone());
             std::thread::spawn(move || {
                 if let Err(e) = s.preload() {
                     s.error(e);
@@ -630,7 +623,7 @@ pub fn run() -> Result<()> {
         });
     let app = builder
         .build(tauri::generate_context!())
-        .map_err(|e| e.to_string())?;
+        .map_err(crate::config::err)?;
     app.run(|app, event| {
         if matches!(event, tauri::RunEvent::Exit) {
             app.state::<Arc<Service>>().shutdown();
@@ -639,27 +632,25 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 fn autostart(enabled: bool) -> Result<()> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = std::env::current_exe().map_err(crate::config::err)?;
     #[cfg(target_os = "linux")]
     {
         let base = std::env::var_os("XDG_CONFIG_HOME")
             .map(std::path::PathBuf::from)
-            .unwrap_or(
-                std::path::PathBuf::from(std::env::var_os("HOME").ok_or("HOME missing")?)
-                    .join(".config"),
-            );
+            .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config")))
+            .ok_or("HOME or XDG_CONFIG_HOME missing")?;
         let path = base.join("autostart/speechify-tauri-candidate.desktop");
         if enabled {
-            std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(path.parent().unwrap()).map_err(crate::config::err)?;
             let exe = exe
                 .to_string_lossy()
                 .replace('\\', "\\\\")
                 .replace('"', "\\\"")
                 .replace('`', "\\`")
                 .replace('$', "\\$");
-            std::fs::write(path,format!("[Desktop Entry]\nType=Application\nName=Speechify Tauri Candidate\nExec=\"{exe}\"\nX-GNOME-Autostart-enabled=true\n")).map_err(|e|e.to_string())?;
+            std::fs::write(path,format!("[Desktop Entry]\nType=Application\nName=Speechify Tauri Candidate\nExec=\"{exe}\"\nX-GNOME-Autostart-enabled=true\n")).map_err(crate::config::err)?;
         } else if path.exists() {
-            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+            std::fs::remove_file(path).map_err(crate::config::err)?;
         }
     }
     #[cfg(target_os = "macos")]
@@ -667,15 +658,15 @@ fn autostart(enabled: bool) -> Result<()> {
         let path = std::path::PathBuf::from(std::env::var_os("HOME").ok_or("HOME missing")?)
             .join("Library/LaunchAgents/org.sumedhbhat.speechify.tauri.plist");
         if enabled {
-            std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(path.parent().unwrap()).map_err(crate::config::err)?;
             let exe = exe
                 .to_string_lossy()
                 .replace('&', "&amp;")
                 .replace('<', "&lt;")
                 .replace('>', "&gt;");
-            std::fs::write(path,format!("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>org.sumedhbhat.speechify.tauri</string><key>ProgramArguments</key><array><string>{exe}</string></array><key>RunAtLoad</key><true/></dict></plist>")).map_err(|e|e.to_string())?;
+            std::fs::write(path,format!("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>org.sumedhbhat.speechify.tauri</string><key>ProgramArguments</key><array><string>{exe}</string></array><key>RunAtLoad</key><true/></dict></plist>")).map_err(crate::config::err)?;
         } else if path.exists() {
-            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+            std::fs::remove_file(path).map_err(crate::config::err)?;
         }
     }
     #[cfg(windows)]
@@ -700,7 +691,7 @@ fn autostart(enabled: bool) -> Result<()> {
                 .args(["delete", key, "/v", "SpeechifyTauriCandidate", "/f"])
                 .status()
         }
-        .map_err(|e| e.to_string())?;
+        .map_err(crate::config::err)?;
         if !status.success() {
             return Err("Could not update candidate login entry".into());
         }

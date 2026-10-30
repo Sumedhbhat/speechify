@@ -14,6 +14,9 @@ use std::{
     },
     time::Instant,
 };
+#[cfg(test)]
+#[path = "../tests/unit/service.rs"]
+mod behavior;
 pub struct Service {
     _lock: std::fs::File,
     pub root: PathBuf,
@@ -45,7 +48,7 @@ impl Service {
         let lock = config::lock(&root)?;
         // Only this candidate's temporary capture files; no existing Speechify paths.
         for entry in std::fs::read_dir(&root)
-            .map_err(|e| e.to_string())?
+            .map_err(crate::config::err)?
             .flatten()
         {
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -231,10 +234,10 @@ impl Service {
                 timeout,
             );
         }
-        let mut result = result?;
         if self.generation.load(Ordering::SeqCst) != generation {
             return Err("Cancelled".into());
         }
+        let mut result = result?;
         let raw = result["text"].as_str().unwrap_or("").to_owned();
         let mut text = self
             .store
@@ -345,11 +348,11 @@ fn cleanup_text(url: &str, model: &Value, text: &str) -> Result<String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(crate::config::err)?;
     let response: Value = client.post(url).json(&json!({"model":model,"temperature":0,
         "messages":[{"role":"system","content":"Clean dictation punctuation and grammar. Return only the corrected text. Preserve meaning."},
                     {"role":"user","content":text}]}))
-        .send().and_then(|r|r.error_for_status()).and_then(|r|r.json()).map_err(|e|e.to_string())?;
+        .send().and_then(|r|r.error_for_status()).and_then(|r|r.json()).map_err(crate::config::err)?;
     response["choices"][0]["message"]["content"]
         .as_str()
         .filter(|s| !s.trim().is_empty())

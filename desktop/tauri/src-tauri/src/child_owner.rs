@@ -24,7 +24,7 @@ pub fn spawn(cmd: &mut Command) -> Result<(Child, Owner)> {
             Ok(())
         });
     }
-    Ok((cmd.spawn().map_err(|e| e.to_string())?, Owner))
+    Ok((cmd.spawn().map_err(crate::config::err)?, Owner))
 }
 #[cfg(windows)]
 mod windows {
@@ -96,7 +96,7 @@ mod windows {
                 return Err("Cannot configure child ownership job".into());
             }
             cmd.creation_flags(0x00000004 | 0x08000000); // suspended, no console
-            let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+            let mut child = cmd.spawn().map_err(crate::config::err)?;
             if AssignProcessToJobObject(job, child.as_raw_handle()) == 0
                 || NtResumeProcess(child.as_raw_handle()) < 0
             {
