@@ -91,6 +91,30 @@ class CoverageGate(unittest.TestCase):
         self.assertEqual(gate.function_definition('app::resolve::<unsafe extern "C" fn(i32) -> bool>'), "app::resolve")
         self.assertEqual(gate.function_definition("app::resolve::<fn() -> Option<Vec<u8>>>"), "app::resolve")
 
+    def closure_report(self, filename, definitions):
+        path = self.root / filename
+        text = "SF:src-tauri/src/main.rs\nDA:1,1\n"
+        functions = []
+        for name, column, count in definitions:
+            text += f"FN:1,{name}\nFNDA:{count},{name}\n"
+            functions.append({"name": name, "filenames": ["src-tauri/src/main.rs"],
+                              "regions": [[1, column, 1, column + 5, count, 0, 0, 0]]})
+        path.write_text(text + "end_of_record\n")
+        path.with_suffix(".json").write_text(json.dumps({"data": [{"functions": functions}]}))
+        return path
+
+    def test_cfg_renumbered_closures_use_the_same_physical_source_body(self):
+        linux = self.closure_report("linux.info", [("app::work::{closure#1}::{closure#0}", 10, 1)])
+        windows = self.closure_report("windows.info", [("app::work::{closure#0}::{closure#0}", 10, 0)])
+        mac = self.backend("mac.info", "src-tauri/src/mac_clipboard.rs", [(1, 1)])
+        self.assertEqual(gate.check(self.frontend, [linux, windows, mac]), [])
+
+    def test_distinct_closures_on_one_line_cannot_cover_each_other(self):
+        linux = self.closure_report("linux.info", [("app::work::{closure#0}", 10, 1),
+                                                   ("app::work::{closure#1}", 30, 0)])
+        mac = self.backend("mac.info", "src-tauri/src/mac_clipboard.rs", [(1, 1)])
+        self.assertEqual(gate.check(self.frontend, [linux, mac]), ["src-tauri/src/main.rs: 1/2 functions uncovered"])
+
     def test_source_fingerprints_detect_changes_and_normalize_platform_line_endings(self):
         path = self.root / "src/main.ts"
         path.write_text("application code\n")

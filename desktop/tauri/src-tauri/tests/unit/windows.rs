@@ -541,3 +541,103 @@ fn clipboard_failures_are_reported_and_later_writes_can_recover() {
         assert_eq!(read(), "Recovered");
     }
 }
+
+static ORIGINAL_OPEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static OPEN_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+unsafe extern "system" fn busy_after_clipboard_commit(window: *mut std::ffi::c_void) -> i32 {
+    use std::sync::atomic::Ordering;
+    if OPEN_CALLS.fetch_add(1, Ordering::SeqCst) != 0 {
+        return 0;
+    }
+    let original: unsafe extern "system" fn(*mut std::ffi::c_void) -> i32 =
+        std::mem::transmute(ORIGINAL_OPEN.load(Ordering::SeqCst));
+    original(window)
+}
+static ORIGINAL_LOCK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static LOCK_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+unsafe extern "system" fn second_restore_buffer_refused(
+    handle: *mut std::ffi::c_void,
+) -> *mut std::ffi::c_void {
+    use std::sync::atomic::Ordering;
+    if LOCK_CALLS.fetch_add(1, Ordering::SeqCst) != 0 {
+        return std::ptr::null_mut();
+    }
+    let original: unsafe extern "system" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void =
+        std::mem::transmute(ORIGINAL_LOCK.load(Ordering::SeqCst));
+    original(handle)
+}
+unsafe extern "system" fn no_control_process(_: *mut std::ffi::c_void, _: *mut u32) -> u32 {
+    0
+}
+unsafe extern "system" fn no_clipboard_window(
+    _: u32,
+    _: *const u16,
+    _: *const u16,
+    _: u32,
+    _: i32,
+    _: i32,
+    _: i32,
+    _: i32,
+    _: *mut std::ffi::c_void,
+    _: *mut std::ffi::c_void,
+    _: *mut std::ffi::c_void,
+    _: *mut std::ffi::c_void,
+) -> *mut std::ffi::c_void {
+    std::ptr::null_mut()
+}
+
+#[test]
+#[ignore = "Controls native clipboard failure responses on a disposable desktop"]
+fn late_clipboard_refusals_and_closed_targets_release_resources_and_allow_recovery() {
+    use std::sync::atomic::Ordering;
+    let _desktop = CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner());
+    if !failure_child() {
+        return;
+    }
+    write_clipboard("Previous copy").unwrap();
+    OPEN_CALLS.store(0, Ordering::SeqCst);
+    let hook =
+        unsafe { os_hooks::Hook::new("OpenClipboard", busy_after_clipboard_commit as *const ()) };
+    ORIGINAL_OPEN.store(hook.original(), Ordering::SeqCst);
+    assert!(super::os::snapshot_and_write("Temporary").is_err());
+    drop(hook);
+    write_clipboard("Recovered").unwrap();
+    assert_eq!(read(), "Recovered");
+
+    let generation = unsafe {
+        os_hooks::Hook::new(
+            "GetClipboardSequenceNumber",
+            stable_clipboard_generation as *const (),
+        )
+    };
+    let restore = super::os::snapshot_and_write("Temporary").unwrap();
+    LOCK_CALLS.store(0, Ordering::SeqCst);
+    let hook =
+        unsafe { os_hooks::Hook::new("GlobalLock", second_restore_buffer_refused as *const ()) };
+    ORIGINAL_LOCK.store(hook.original(), Ordering::SeqCst);
+    assert!(
+        restore().is_err(),
+        "restoring multiple formats ignored a refused allocation"
+    );
+    drop(hook);
+    drop(generation);
+    assert_eq!(read(), "Temporary");
+    write_clipboard("Recovered").unwrap();
+    assert_eq!(read(), "Recovered");
+
+    let hook = unsafe { os_hooks::Hook::new("CreateWindowExW", no_clipboard_window as *const ()) };
+    assert!(write_clipboard("Cannot create owner").is_err());
+    drop(hook);
+    assert_eq!(read(), "Recovered");
+    let hook = unsafe { os_hooks::Hook::new("GetForegroundWindow", no_owner as *const ()) };
+    assert!(Poller::new().unwrap().focus().is_err());
+    drop(hook);
+
+    let target = Window::new("Edit");
+    target.set("Original content");
+    let hook =
+        unsafe { os_hooks::Hook::new("GetWindowThreadProcessId", no_control_process as *const ()) };
+    assert!(replacement::capture(target.id(), "Must not replace").is_none());
+    drop(hook);
+    assert_eq!(target.text(), "Original content");
+}

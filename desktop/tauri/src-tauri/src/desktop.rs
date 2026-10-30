@@ -260,12 +260,9 @@ fn show(app: &tauri::AppHandle, page: &str) {
         let _ = w.emit("navigate", page);
     }
 }
-fn runtime(app: tauri::AppHandle, s: Arc<Service>) {
-    let indicator = app.clone();
+fn runtime(app: tauri::AppHandle, s: Arc<Service>, indicator: tauri::WebviewWindow) {
     start_runtime(s, move |page| show(&app, page), move |visible| {
-        if let Some(w) = indicator.get_webview_window("indicator") {
-            if visible { let _ = w.show(); } else { let _ = w.hide(); }
-        }
+        if visible { let _ = indicator.show(); } else { let _ = indicator.hide(); }
     });
 }
 fn start_runtime(
@@ -379,19 +376,15 @@ fn start_runtime(
                         }
                         active_capture = false;
                         if let Some(c) = &capture {
-                            match c.audio.take() {
-                                Ok(a) => {
-                                    if a.len() < 160 {
-                                        recorder.error("Microphone was not ready before release; try holding longer");
-                                    } else if tx
-                                        .try_send((a, active_target, active_generation))
-                                        .is_err()
-                                    {
-                                        recorder.error("Dictation queue is full (4 clips); wait for transcription");
-                                    } else {
-                                        recorder.set_stage("Queued");
-                                    }
+                            let queued = c.audio.take().and_then(|audio| {
+                                if audio.len() < 160 {
+                                    return Err("Microphone was not ready before release; try holding longer".into());
                                 }
+                                tx.try_send((audio, active_target, active_generation))
+                                    .map_err(|_| "Dictation queue is full (4 clips); wait for transcription".into())
+                            });
+                            match queued {
+                                Ok(()) => recorder.set_stage("Queued"),
                                 Err(e) => recorder.error(e),
                             }
                         }
@@ -565,34 +558,16 @@ pub fn run() -> Result<()> {
                 32,
                 32,
             );
-            let menu = tauri::menu::Menu::with_items(
-                app,
-                &[
-                    &tauri::menu::MenuItem::with_id(
-                        app,
-                        "settings",
-                        "Settings",
-                        true,
-                        None::<&str>,
-                    )?,
-                    &tauri::menu::MenuItem::with_id(app, "history", "History", true, None::<&str>)?,
-                    &tauri::menu::MenuItem::with_id(app, "models", "Models", true, None::<&str>)?,
-                    &tauri::menu::MenuItem::with_id(
-                        app,
-                        "logs",
-                        "Log location",
-                        true,
-                        None::<&str>,
-                    )?,
-                    &tauri::menu::MenuItem::with_id(
-                        app,
-                        "quit",
-                        "Quit candidate",
-                        true,
-                        None::<&str>,
-                    )?,
-                ],
-            )?;
+            let menu = tauri::menu::Menu::new(app)?;
+            for (id, text) in [
+                ("settings", "Settings"),
+                ("history", "History"),
+                ("models", "Models"),
+                ("logs", "Log location"),
+                ("quit", "Quit candidate"),
+            ] {
+                menu.append(&tauri::menu::MenuItem::with_id(app, id, text, true, None::<&str>)?)?;
+            }
             tauri::tray::TrayIconBuilder::new()
                 .icon(icon)
                 .tooltip("Speechify Tauri Candidate")
@@ -608,7 +583,7 @@ pub fn run() -> Result<()> {
                     _ => show(app, "Settings"),
                 })
                 .build(app)?;
-            tauri::WebviewWindowBuilder::new(
+            let indicator = tauri::WebviewWindowBuilder::new(
                 app,
                 "indicator",
                 tauri::WebviewUrl::App("index.html?overlay".into()),
@@ -623,7 +598,7 @@ pub fn run() -> Result<()> {
             .focusable(false)
             .visible(false)
             .build()?;
-            runtime(app.handle().clone(), s.clone());
+            runtime(app.handle().clone(), s.clone(), indicator);
             let _ = crate::learning::scheduler(s.clone());
             std::thread::spawn(move || {
                 if let Err(e) = s.preload() {

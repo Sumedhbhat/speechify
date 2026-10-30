@@ -3,6 +3,7 @@
 #include <alsa/asoundlib.h>
 #include <alsa/pcm_external.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -18,6 +19,8 @@ struct microphone {
     int prepare_error;
     int start_error;
     int disconnect;
+    int startup_delay;
+    int setup_gate;
 };
 
 static int start(snd_pcm_ioplug_t *io) {
@@ -37,6 +40,15 @@ static int stop(snd_pcm_ioplug_t *io) {
 }
 static int prepare(snd_pcm_ioplug_t *io) {
     struct microphone *mic = io->private_data;
+    if (mic->setup_gate) {
+        const char *gate = getenv("SPEECHIFY_TEST_ALSA_GATE");
+        const char *release = getenv("SPEECHIFY_TEST_ALSA_RELEASE");
+        if (!gate || !release) return -EINVAL;
+        int marker = open(gate, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (marker >= 0) close(marker);
+        for (unsigned attempt = 0; attempt < 10000 && access(release, F_OK) != 0; attempt++) usleep(1000);
+        if (access(release, F_OK) != 0) return -ETIMEDOUT;
+    }
     return mic->prepare_error ? -EIO : 0;
 }
 static snd_pcm_sframes_t position(snd_pcm_ioplug_t *io) {
@@ -46,6 +58,7 @@ static snd_pcm_sframes_t position(snd_pcm_ioplug_t *io) {
     clock_gettime(CLOCK_MONOTONIC, &now);
     int64_t elapsed = (now.tv_sec - mic->started.tv_sec) * 1000000000LL
         + now.tv_nsec - mic->started.tv_nsec;
+    if (mic->startup_delay) { elapsed -= 750000000; if (elapsed < 0) elapsed = 0; }
     if (mic->disconnect && elapsed > 100000000) return -ENODEV;
     return (elapsed * io->rate / 1000000000LL) % io->buffer_size;
 }
@@ -111,6 +124,8 @@ SND_PCM_PLUGIN_DEFINE_FUNC(speechify_fixture) {
             mic->prepare_error = !strcmp(value, "prepare-error");
             mic->start_error = !strcmp(value, "start-error");
             mic->disconnect = !strcmp(value, "disconnect");
+            mic->startup_delay = !strcmp(value, "startup-delay");
+            mic->setup_gate = !strcmp(value, "setup-gate");
         } else { free(mic); return -EINVAL; }
     }
     mic->io.version = SND_PCM_IOPLUG_VERSION;

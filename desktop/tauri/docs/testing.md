@@ -30,7 +30,9 @@ full desktop tests, and drives the built CLI through its stdin/stdout protocol.
 Linux needs Xvfb, xauth, xclip, xdotool, D-Bus and gdbus in addition to the desktop
 build prerequisites. Its desktop tests use private display and D-Bus sessions
 and a synthetic audio device. The coverage runner compiles an ALSA fixture
-with the existing C compiler and ALSA development headers. This driver supplies
+with the existing C compiler and ALSA development headers. Controlled IO
+responses reproduce cancellation after a worker reply and after inference has
+finished, while the production worker and recorder protocols remain active. This driver supplies
 float, signed and unsigned samples, setup/start failures, and disconnects;
 it never opens microphone hardware. macOS/Windows clipboard tests are opt-in because
 they modify the system clipboard: the CI job runs them on disposable runners
@@ -58,7 +60,10 @@ combining execution counts from different binaries and target triples.
 Generic instantiations count as one source function; distinct closure bodies
 remain separate. Source and dependency fingerprints prevent combining reports
 from different versions of the application.
-Source locations keep same-named platform implementations separate, so running
+LLVM source spans keep distinct closures separate, including closures on the
+same line. They also match the same body when conditional compilation changes
+its closure ordinal on another OS. Source locations keep same-named platform
+implementations separate, so running
 the X11 poller cannot satisfy the Windows or macOS poller's function coverage.
 LLVM can attribute Tauri SDK serialization closures to the closing bracket of
 `#[tauri::command]`. The gate omits that non-executable annotation; the authored

@@ -8,6 +8,7 @@ from the denominator just because the current machine cannot compile them.
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import subprocess
 
@@ -69,7 +70,18 @@ def check(frontend: Path, backends: list[Path], details: bool = False) -> list[s
                 failures.append(f"{name}: {missing}/{len(counts)} {metric} uncovered")
 
     files = {}
+    spans = {}
     for path in backends:
+        # Closure ordinals change when cfg removes an earlier closure. LLVM's
+        # physical source span identifies the authored body across OS builds,
+        # including distinct closures written on the same source line.
+        metadata = path.with_suffix(".json")
+        if metadata.is_file():
+            for unit in json.loads(metadata.read_text(encoding="utf-8"))["data"]:
+                for function in unit["functions"]:
+                    region = function["regions"][0]
+                    filename = source_path(function["filenames"][region[5]])
+                    spans[filename, function["name"], region[0]] = tuple(region[:4])
         current = None
         function_lines = {}
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -117,7 +129,13 @@ def check(frontend: Path, backends: list[Path], details: bool = False) -> list[s
                 continue
             # cfg-specific bodies can have identical Rust names. Their source
             # locations distinguish e.g. Windows and X11 Poller::new().
-            key = f"{function_definition(canonical.get(name, name))} [line {line}]"
+            definition = function_definition(canonical.get(name, name))
+            span = spans.get((filename, name, line))
+            if span:
+                definition = re.sub(r"\{closure#\d+\}", "{closure}", definition)
+                key = f"{definition} [span {span}]"
+            else:
+                key = f"{definition} [line {line}]"
             merged[key] = max(merged.get(key, 0), count)
         report["functions"] = merged
     for source in sorted((ROOT / "src-tauri/src").rglob("*.rs")):

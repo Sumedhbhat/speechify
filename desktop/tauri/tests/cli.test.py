@@ -706,6 +706,22 @@ os._exit(0)
         activate("Quit candidate")
         self.assertEqual(app.wait(timeout=10), 0)
 
+        # A fresh installation without its selected model still opens settings
+        # and exposes a functioning tray, so the user can install a model.
+        shutil.rmtree(model)
+        app = subprocess.Popen([str(BINARY)], stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env)
+        wait(lambda: windows(True))
+        menu_bus, menu_path = wait(find_menu)
+        layout = menu("GetLayout", "0", "-1", "[]")
+        entries = {label: number for number, label in re.findall(r"\((\d+),[^{}]*\{[^{}]*'label': <'([^']+)'>", layout)}
+        self.assertEqual(set(entries), {"Settings", "History", "Models", "Log location", "Quit candidate"})
+        time.sleep(.1)
+        self.assertIsNone(app.poll(), "A missing model stopped the desktop")
+        activate("Models")
+        wait(lambda: windows(True))
+        activate("Quit candidate")
+        self.assertEqual(app.wait(timeout=10), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1144,3 +1144,83 @@ fn shutting_down_a_chatty_worker_never_blocks_and_reaps_the_owned_process() {
     #[cfg(unix)]
     assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
 }
+
+#[cfg(target_os = "linux")]
+pub(crate) fn io_child(scenario: &str) -> bool {
+    let name = std::thread::current().name().unwrap().to_owned();
+    if std::env::var("SPEECHIFY_TEST_IO_CHILD").as_deref() == Ok(&name) {
+        return true;
+    }
+    let shim = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.build/x11-desktop.so");
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &name, "--include-ignored"])
+        .env("SPEECHIFY_TEST_IO_CHILD", &name)
+        .env("LD_PRELOAD", &shim)
+        .env("SPEECHIFY_TEST_X11_SCENARIO", scenario)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    false
+}
+#[cfg(target_os = "linux")]
+pub(crate) struct IoGate {
+    pub paused: PathBuf,
+    pub release: PathBuf,
+}
+#[cfg(target_os = "linux")]
+impl IoGate {
+    pub fn new(home: &Home) -> Self {
+        let gate = Self {
+            paused: home.0.join("io-paused"),
+            release: home.0.join("io-release"),
+        };
+        std::env::set_var("SPEECHIFY_TEST_IO_GATE", &gate.paused);
+        std::env::set_var("SPEECHIFY_TEST_IO_RELEASE", &gate.release);
+        gate
+    }
+    pub fn release(&self) {
+        std::fs::write(&self.release, "").unwrap();
+    }
+}
+#[cfg(target_os = "linux")]
+impl Drop for IoGate {
+    fn drop(&mut self) {
+        let _ = std::fs::write(&self.release, "");
+    }
+}
+
+#[test]
+fn missing_bundle_resources_fall_back_to_the_runtime_beside_the_executable() {
+    let home = Home::new();
+    if let Some(root) = std::env::var_os("SPEECHIFY_TEST_STAGED_EXECUTABLE") {
+        let root = PathBuf::from(root);
+        assert_eq!(
+            crate::worker::native_dir(Some(root.join("missing-bundle")))
+                .canonicalize()
+                .unwrap(),
+            root.join("resources/native").canonicalize().unwrap()
+        );
+        return;
+    }
+    let executable = home.0.join(if cfg!(windows) {
+        "candidate-tests.exe"
+    } else {
+        "candidate-tests"
+    });
+    std::fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
+    std::fs::create_dir_all(home.0.join("resources/native")).unwrap();
+    let output = std::process::Command::new(executable)
+        .args(["--exact", "behavior_tests::missing_bundle_resources_fall_back_to_the_runtime_beside_the_executable"])
+        .env("SPEECHIFY_TEST_STAGED_EXECUTABLE", &home.0).env_remove("SPEECHIFY_NATIVE_DIR").output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

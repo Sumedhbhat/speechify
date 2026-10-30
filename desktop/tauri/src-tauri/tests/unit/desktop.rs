@@ -785,6 +785,8 @@ fn login_startup_can_be_enabled_verified_and_disabled_on_native_desktops() {
         return;
     }
     let service = home.service();
+    #[cfg(target_os = "macos")]
+    dispatch(&service, "autostart", &json!({"enabled": false})).unwrap();
     dispatch(&service, "autostart", &json!({"enabled": true})).unwrap();
     #[cfg(target_os = "macos")]
     {
@@ -1136,4 +1138,308 @@ fn failed_recognition_is_reported_without_saving_a_guess_or_leaving_temporary_au
         .file_name()
         .to_string_lossy()
         .starts_with("pending-")));
+}
+
+#[test]
+fn rollback_command_adopts_the_previous_trained_version_and_loads_it() {
+    use crate::behavior_tests::fake_service;
+    let home = Home::new();
+    let service = fake_service(&home, "");
+    let previous = home.0.join("models/whisper-ft-previous");
+    std::fs::create_dir(&previous).unwrap();
+    std::fs::write(previous.join("model.bin"), "previous weights").unwrap();
+    let versions = json!([{"name":"whisper-ft-previous","base":"whisper-large-v3-turbo"}, {"name":"whisper-ft-test","base":"whisper-large-v3-turbo"}]);
+    service
+        .store
+        .lock()
+        .unwrap()
+        .state("versions", &versions)
+        .unwrap();
+    assert_eq!(dispatch(&service, "rollback", &json!({})).unwrap(), true);
+    assert_eq!(
+        service.snapshot()["config"]["model"],
+        "ft:whisper-ft-previous"
+    );
+    assert_eq!(
+        crate::config::load(&home.0).unwrap()["model"],
+        "ft:whisper-ft-previous"
+    );
+    assert_eq!(service.snapshot()["state"]["ready"], true);
+    assert_eq!(
+        service.store.lock().unwrap().get_state("versions").unwrap(),
+        versions
+    );
+    assert!(previous.join("started").exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Requires the isolated Xvfb display"]
+fn copy_command_makes_the_transcript_available_to_other_applications() {
+    let _desktop = crate::behavior_tests::DESKTOP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let home = Home::new();
+    let service = home.service();
+    assert_eq!(
+        dispatch(&service, "copy", &json!({"text":"Transcript café 🦀"})).unwrap(),
+        true
+    );
+    let output = std::process::Command::new("xclip")
+        .args(["-selection", "clipboard", "-o"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "Transcript café 🦀"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Requires delayed IO and the synthetic ALSA input"]
+fn cancelling_after_inference_finishes_never_publishes_late_paste_guidance() {
+    use crate::behavior_tests::{fake_service, io_child, wait_until, IoGate};
+    let _desktop = crate::behavior_tests::DESKTOP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if !io_child("delay-inference-log") {
+        return;
+    }
+    let home = Home::new();
+    let service = fake_service(&home, "");
+    let mut cfg = service.config.lock().unwrap().clone();
+    cfg["input_device"] = json!("Speechify float input");
+    cfg["min_hold_ms"] = json!(1);
+    service.update(cfg).unwrap();
+    let runtime = Running::new(service.clone());
+    let gate = IoGate::new(&home);
+    runtime.start();
+    wait_until(|| service.snapshot()["state"]["level"].as_f64().unwrap_or(0.) > 0.);
+    std::thread::sleep(Duration::from_millis(100));
+    dispatch(&service, "manual_stop", &json!({})).unwrap();
+    wait_until(|| gate.paused.exists());
+    assert_eq!(service.snapshot()["state"]["recent"], "get hub");
+    dispatch(&service, "cancel", &json!({})).unwrap();
+    gate.release();
+    wait_until(|| {
+        !std::fs::read_dir(&home.0).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("pending-")
+        })
+    });
+    assert!(!service.recording.load(Ordering::SeqCst));
+    assert!(service.snapshot()["state"]["error"].is_null());
+    assert_eq!(
+        service.store.lock().unwrap().history("", "").unwrap().len(),
+        1
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Requires the synthetic ALSA input"]
+fn a_microphone_that_has_not_delivered_audio_refuses_the_clip_and_can_be_retried() {
+    use crate::behavior_tests::{fake_service, wait_until};
+    let _desktop = crate::behavior_tests::DESKTOP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let home = Home::new();
+    let service = fake_service(&home, "");
+    let mut cfg = service.config.lock().unwrap().clone();
+    cfg["input_device"] = json!("Speechify slow input");
+    cfg["min_hold_ms"] = json!(0);
+    service.update(cfg).unwrap();
+    let runtime = Running::new(service.clone());
+    runtime.start();
+    dispatch(&service, "manual_stop", &json!({})).unwrap();
+    wait_until(|| {
+        service.snapshot()["state"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("Microphone was not ready"))
+    });
+    assert!(service
+        .store
+        .lock()
+        .unwrap()
+        .history("", "")
+        .unwrap()
+        .is_empty());
+    runtime.start();
+    wait_until(|| service.snapshot()["state"]["level"].as_f64().unwrap_or(0.) > 0.);
+    std::thread::sleep(Duration::from_millis(100));
+    dispatch(&service, "manual_stop", &json!({})).unwrap();
+    wait_until(|| service.snapshot()["state"]["recent"] == "get hub");
+    assert_eq!(
+        service.store.lock().unwrap().history("", "").unwrap().len(),
+        1
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Requires the synthetic ALSA input"]
+fn global_keyboard_failure_leaves_manual_recording_available() {
+    use crate::behavior_tests::{fake_service, wait_until};
+    let _desktop = crate::behavior_tests::DESKTOP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if std::env::var_os("SPEECHIFY_TEST_NO_GLOBAL_DISPLAY").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "desktop::behavior::global_keyboard_failure_leaves_manual_recording_available",
+                "--include-ignored",
+            ])
+            .env("SPEECHIFY_TEST_NO_GLOBAL_DISPLAY", "1")
+            .env("DISPLAY", ":65530")
+            .env("XDG_SESSION_TYPE", "x11")
+            .env_remove("WAYLAND_DISPLAY")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let home = Home::new();
+    let service = fake_service(&home, "");
+    let mut cfg = service.config.lock().unwrap().clone();
+    cfg["input_device"] = json!("Speechify float input");
+    cfg["min_hold_ms"] = json!(1);
+    service.update(cfg).unwrap();
+    let runtime = Running::new(service.clone());
+    wait_until(|| {
+        service.snapshot()["state"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("Cannot open X11"))
+    });
+    runtime.start();
+    wait_until(|| service.snapshot()["state"]["level"].as_f64().unwrap_or(0.) > 0.);
+    std::thread::sleep(Duration::from_millis(100));
+    dispatch(&service, "manual_stop", &json!({})).unwrap();
+    wait_until(|| service.snapshot()["state"]["recent"] == "get hub");
+    assert_eq!(
+        service.store.lock().unwrap().history("", "").unwrap().len(),
+        1
+    );
+    assert!(service.snapshot()["state"]["error"]
+        .as_str()
+        .unwrap()
+        .contains("Use Copy text"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Requires the synthetic ALSA input and isolated Xvfb"]
+fn keyboard_backpressure_is_reported_when_microphone_initialization_is_blocked() {
+    use crate::behavior_tests::{fake_service, io_child, wait_until};
+    let _desktop = crate::behavior_tests::DESKTOP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if !io_child("alsa-setup-gate") {
+        return;
+    }
+    let home = Home::new();
+    let service = fake_service(&home, "");
+    let paused = home.0.join("alsa-paused");
+    let release = home.0.join("alsa-release");
+    std::env::set_var("SPEECHIFY_TEST_ALSA_GATE", &paused);
+    std::env::set_var("SPEECHIFY_TEST_ALSA_RELEASE", &release);
+    let mut cfg = service.config.lock().unwrap().clone();
+    cfg["input_device"] = json!("Speechify gated setup");
+    cfg["min_hold_ms"] = json!(1);
+    service.update(cfg).unwrap();
+    let runtime = Running::new(service.clone());
+    struct Release(std::path::PathBuf);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            let _ = std::fs::write(&self.0, "");
+        }
+    }
+    let _release = Release(release.clone());
+    struct Key;
+    impl Drop for Key {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("xdotool")
+                .args(["keyup", "105"])
+                .status();
+        }
+    }
+    let _key = Key;
+    assert!(std::process::Command::new("xdotool")
+        .args(["keydown", "105"])
+        .status()
+        .unwrap()
+        .success());
+    wait_until(|| paused.exists());
+    let generation = service.generation.load(Ordering::SeqCst);
+    for _ in 0..32 {
+        service
+            .capture_tx
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .try_send((Action::Cancel, 0, generation))
+            .unwrap();
+    }
+    assert!(std::process::Command::new("xdotool")
+        .args(["keyup", "105"])
+        .status()
+        .unwrap()
+        .success());
+    wait_until(|| {
+        service.snapshot()["state"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("command queue full"))
+    });
+    assert!(!service.recording.load(Ordering::SeqCst));
+    assert!(service
+        .store
+        .lock()
+        .unwrap()
+        .history("", "")
+        .unwrap()
+        .is_empty());
+    std::fs::write(&release, "").unwrap();
+    drop(runtime);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Requires the synthetic ALSA input"]
+fn empty_recognition_does_not_save_a_guess_or_offer_to_paste_empty_text() {
+    use crate::behavior_tests::{fake_service, wait_until};
+    let _desktop = crate::behavior_tests::DESKTOP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let home = Home::new();
+    let service = fake_service(&home, "empty");
+    let mut cfg = service.config.lock().unwrap().clone();
+    cfg["input_device"] = json!("Speechify float input");
+    cfg["min_hold_ms"] = json!(1);
+    service.update(cfg).unwrap();
+    let runtime = Running::new(service.clone());
+    runtime.start();
+    wait_until(|| service.snapshot()["state"]["level"].as_f64().unwrap_or(0.) > 0.);
+    std::thread::sleep(Duration::from_millis(100));
+    dispatch(&service, "manual_stop", &json!({})).unwrap();
+    wait_until(|| service.snapshot()["state"]["stage"] == "Ready");
+    assert_eq!(service.snapshot()["state"]["recent"], "");
+    assert!(service.snapshot()["state"]["error"].is_null());
+    assert!(service
+        .store
+        .lock()
+        .unwrap()
+        .history("", "")
+        .unwrap()
+        .is_empty());
 }

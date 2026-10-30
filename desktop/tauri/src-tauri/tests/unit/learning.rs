@@ -732,3 +732,95 @@ fn teacher_work_is_skipped_while_another_job_is_busy_and_failed_inference_never_
         "a student guess"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn an_optional_teacher_falling_back_to_cpu_requires_consent_and_never_labels_speech_without_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = Home::new();
+    if std::env::var_os("SPEECHIFY_TEST_TEACHER_GPU_CHILD").is_none() {
+        let tools = home.0.join("tools");
+        std::fs::create_dir(&tools).unwrap();
+        let query = tools.join("nvidia-smi");
+        std::fs::write(&query, "#!/bin/sh\nprintf '16384\\n'\n").unwrap();
+        std::fs::set_permissions(&query, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = std::env::join_paths(
+            std::iter::once(tools).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "learning::behavior::an_optional_teacher_falling_back_to_cpu_requires_consent_and_never_labels_speech_without_it"])
+            .env("SPEECHIFY_TEST_TEACHER_GPU_CHILD", "1").env("PATH", path).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let service = fake_service(&home, "");
+    let mut cfg = service.config.lock().unwrap().clone();
+    cfg["teacher"] = json!("distil-whisper-large-v3");
+    cfg["device"] = json!("auto");
+    cfg["teacher_on_cpu"] = json!(false);
+    std::fs::write(
+        home.0.join("models/distil-whisper-large-v3.gguf"),
+        "installed marker",
+    )
+    .unwrap();
+    std::fs::create_dir(home.0.join("models/distil-whisper-large-v3")).unwrap();
+    service
+        .store
+        .lock()
+        .unwrap()
+        .record(&[0.1; 16000], "student guess", "student guess", true)
+        .unwrap();
+    assert!(teacher(&service, &cfg)
+        .unwrap_err()
+        .contains("CPU requires explicit opt-in"));
+    assert!(!service.learning_busy.load(Ordering::SeqCst));
+    assert!(service.store.lock().unwrap().history("", "").unwrap()[0]["teacher_text"].is_null());
+    assert_eq!(
+        service.store.lock().unwrap().history("", "").unwrap()[0]["pasted"],
+        "student guess"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Requires the delayed-IO fixture from test-coverage.sh"]
+fn cancelling_a_teacher_with_a_completed_but_delayed_reply_never_adopts_the_label() {
+    use crate::behavior_tests::{io_child, IoGate};
+    if !io_child("delay-transcript-read") {
+        return;
+    }
+    let home = Home::new();
+    let service = fake_service(&home, "");
+    let mut cfg = service.config.lock().unwrap().clone();
+    cfg["teacher"] = json!("distil-whisper-large-v3");
+    cfg["teacher_on_cpu"] = json!(true);
+    std::fs::write(
+        home.0.join("models/distil-whisper-large-v3.gguf"),
+        "installed marker",
+    )
+    .unwrap();
+    std::fs::create_dir(home.0.join("models/distil-whisper-large-v3")).unwrap();
+    service
+        .store
+        .lock()
+        .unwrap()
+        .record(&[0.25; 16000], "student guess", "student guess", true)
+        .unwrap();
+    let gate = IoGate::new(&home);
+    let background = service.clone();
+    let job = std::thread::spawn(move || teacher(&background, &cfg));
+    wait_until(|| gate.paused.exists());
+    service.cancel_work();
+    gate.release();
+    assert_eq!(job.join().unwrap().unwrap_err(), "Teacher preempted");
+    let history = service.store.lock().unwrap().history("", "").unwrap();
+    assert!(history[0]["teacher_text"].is_null());
+    assert_eq!(history[0]["pasted"], "student guess");
+    assert!(!service.learning_busy.load(Ordering::SeqCst));
+}

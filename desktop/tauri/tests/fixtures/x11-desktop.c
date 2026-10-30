@@ -99,3 +99,43 @@ void XFixesSelectSelectionInput(Display *display, Window window, Atom selection,
     select_fn original = (select_fn)lookup(fixes_handle, "XFixesSelectSelectionInput");
     original(display, window, selection, mask);
 }
+
+/* Delay one completed IO operation so cancellation can overlap a late result. */
+#include <fcntl.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
+static atomic_bool delayed_io;
+static void io_gate(void) {
+    const char *gate = getenv("SPEECHIFY_TEST_IO_GATE");
+    const char *release = getenv("SPEECHIFY_TEST_IO_RELEASE");
+    if (!gate || !release || atomic_exchange(&delayed_io, true)) return;
+    int file = open(gate, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (file >= 0) close(file);
+    for (unsigned attempt = 0; attempt < 10000 && access(release, F_OK) != 0; attempt++) usleep(1000);
+}
+typedef ssize_t (*read_fn)(int, void *, size_t);
+ssize_t read(int fd, void *buffer, size_t length) {
+    REAL(read, read_fn);
+    ssize_t bytes = original(fd, buffer, length);
+    if (fd > 2 && bytes > 0 && scenario("delay-transcript-read") && memmem(buffer, (size_t)bytes, "\"text\"", 6)) {
+        struct stat state;
+        if (fstat(fd, &state) == 0 && S_ISFIFO(state.st_mode)) io_gate();
+    }
+    return bytes;
+}
+typedef ssize_t (*write_fn)(int, const void *, size_t);
+ssize_t write(int fd, const void *buffer, size_t length) {
+    REAL(write, write_fn);
+    if (fd > 2 && scenario("delay-inference-log") && memmem(buffer, length, "inference", 9)) {
+        char link[64], path[4096];
+        snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
+        ssize_t size = readlink(link, path, sizeof(path) - 1);
+        if (size > 0) {
+            path[size] = 0;
+            if (strstr(path, "/logs/timings.jsonl")) io_gate();
+        }
+    }
+    return original(fd, buffer, length);
+}
