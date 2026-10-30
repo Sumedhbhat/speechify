@@ -2,13 +2,8 @@
 use super::*;
 static CLIPBOARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(windows)]
-fn sequence() -> u32 {
-    #[link(name = "user32")]
-    extern "system" {
-        fn GetClipboardSequenceNumber() -> u32;
-    }
-    unsafe { GetClipboardSequenceNumber() }
-}
+#[path = "windows.rs"]
+mod desktop_behavior;
 
 #[cfg(target_os = "macos")]
 fn read() -> String {
@@ -40,7 +35,7 @@ fn read() -> String {
         }
     }
     unsafe {
-        assert_ne!(OpenClipboard(std::ptr::null_mut()), 0);
+        crate::behavior_tests::wait_until(|| OpenClipboard(std::ptr::null_mut()) != 0);
         let _clipboard = Clipboard;
         let handle = GetClipboardData(13);
         assert!(!handle.is_null());
@@ -60,11 +55,7 @@ fn native_clipboard_preserves_unicode_restores_previous_copy_and_protects_newer_
     let _clipboard = CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner());
     write_clipboard("Earlier clipboard café 🦀\nsecond line").unwrap();
     let restore = os::snapshot_and_write("A new dictation").unwrap();
-    #[cfg(windows)]
-    eprintln!("after snapshot sequence={}", sequence());
     assert_eq!(read(), "A new dictation");
-    #[cfg(windows)]
-    eprintln!("after read sequence={}", sequence());
     restore().unwrap();
     assert_eq!(read(), "Earlier clipboard café 🦀\nsecond line");
     let restore = os::snapshot_and_write("Identical text").unwrap();
