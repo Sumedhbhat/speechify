@@ -4,8 +4,7 @@ on:
   push:
     branches: [main, sb/tauri-candidate-implementation]
     paths: ['desktop/tauri/**', '.github/workflows/tauri-candidate.yml']
-  pull_request:
-    paths: ['desktop/tauri/**', '.github/workflows/tauri-candidate.yml']
+  pull_request: {}
   workflow_dispatch:
     inputs:
       coverage_only:
@@ -75,8 +74,13 @@ jobs:
   coverage-gate:
     name: Tauri full coverage gate
     needs: coverage
+    if: always()
     runs-on: ubuntu-24.04
     steps:
+      - name: Require passing behavioral suites on every platform
+        env:
+          COVERAGE_RESULT: ${{ needs.coverage.result }}
+        run: test "$COVERAGE_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false

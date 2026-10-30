@@ -183,6 +183,12 @@ describe('dictation', () => {
     expect(element('#message').textContent).toContain('Cannot connect to the Rust service: service stopped');
     await vi.advanceTimersByTimeAsync(700);
     expect(element('#readiness').textContent).toBe('Ready');
+    await action('manual-record');
+    expect(operations).toContainEqual(['manual_start', {}]);
+    await action('manual-record');
+    navigate({ payload: 'History' }); await settle();
+    expect(element('#heading').textContent).toBe('History');
+    expect(element('#history-list').textContent).toContain('Transcript 2');
     bridge.invoke.mockRejectedValueOnce('connection lost');
     await vi.advanceTimersByTimeAsync(700);
     expect(element('#message').textContent).toBe('connection lost');
@@ -472,6 +478,54 @@ describe('settings', () => {
     resolve(['Late microphone']); await settle();
     expect(element('#heading').textContent).toBe('Models');
     expect(document.body.textContent).not.toContain('Late microphone');
+  });
+
+  it.each(['Learning', 'History'])('keeps Settings usable when a delayed %s response arrives', async name => {
+    await start();
+    let resolve!: (value: unknown) => void;
+    const original = bridge.invoke.getMockImplementation()!;
+    bridge.invoke.mockImplementation((command, args) => args.op === name.toLowerCase()
+      ? new Promise(done => { resolve = done; }) : original(command, args));
+    await page(name);
+    await page('Settings');
+    await change('[name="language"]', 'fr', 'input');
+    resolve(name === 'Learning' ? structuredClone(learning) : structuredClone(recordings));
+    await settle();
+    expect(element('#heading').textContent).toBe('Settings');
+    expect(element<HTMLInputElement>('[name="language"]').value).toBe('fr');
+    expect(document.querySelector('[data-action="train"]')).toBeNull();
+    expect(document.querySelector('#correction')).toBeNull();
+    expect(element('#message').textContent).toBe('');
+  });
+
+  it('keeps the newest history search when older results arrive later', async () => {
+    await start(); await page('History');
+    const replies: ((value: Obj[]) => void)[] = [];
+    const original = bridge.invoke.getMockImplementation()!;
+    bridge.invoke.mockImplementation((command, args) => args.op === 'history'
+      ? new Promise(done => { replies.push(done); }) : original(command, args));
+    await change('#search', 'old', 'input');
+    await change('#search', 'new', 'input');
+    replies[1]([sample(3, { pasted: 'new result' })]); await settle();
+    replies[0]([sample(4, { pasted: 'old result' })]); await settle();
+    expect(element('#history-list').textContent).toContain('new result');
+    expect(element('#history-list').textContent).not.toContain('old result');
+    expect(element<HTMLTextAreaElement>('#correction').value).toBe('new result');
+  });
+
+  it('keeps Settings usable when a history deletion finishes after navigation', async () => {
+    await start(); await page('History');
+    let resolve!: (value: boolean) => void;
+    const original = bridge.invoke.getMockImplementation()!;
+    bridge.invoke.mockImplementation((command, args) => args.op === 'delete'
+      ? new Promise(done => { resolve = done; }) : original(command, args));
+    await action('delete');
+    await page('Settings');
+    await change('[name="language"]', 'fr', 'input');
+    resolve(true); await settle();
+    expect(element('#heading').textContent).toBe('Settings');
+    expect(element<HTMLInputElement>('[name="language"]').value).toBe('fr');
+    expect(element('#message').textContent).toBe('');
   });
 
   it('uses the system color preference when the theme is system', async () => {

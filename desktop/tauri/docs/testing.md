@@ -17,6 +17,31 @@ The coverage runner caches the catalog's pinned Moonshine GGUF (about 77 MB)
 under `.build/fixtures` for the real model-reuse and disk-failure scenarios.
 It verifies the catalog SHA-256 before using this artifact.
 
+Every pull request runs the native coverage matrix, including pull requests
+that change files outside Tauri. The `Tauri full coverage gate` check is required
+by the repository's `main: require CI` ruleset. It runs even when a matrix job
+fails, and fails if any platform's behavioral suite fails or is cancelled or
+skipped. Only successful suites proceed to the combined 100% coverage check.
+
+The scenario suites run in CI as follows:
+
+| Behavior | Suites | CI execution |
+| --- | --- | --- |
+| Rendered controls, navigation, forms, history, models and learning | `tests/interface.test.ts` | All three native coverage jobs via `npm run test:coverage` |
+| Settings, persisted history, corrections, audio retention, cleanup and cancellation | `src-tauri/tests/unit/{behavior,service}.rs` and source unit tests | All three native coverage jobs |
+| Native ABI, model loading, downloads, verification, optional installation and recovery | `src-tauri/tests/unit/{native,models,installer}.rs` | All three native coverage jobs |
+| Training, teacher selection, adoption, rejection, rollback and scheduling | `src-tauri/tests/unit/learning.rs` | All three native coverage jobs; controlled delayed-IO races on Linux |
+| Microphone samples, recording, hotkeys, manual actions and disconnect recovery | `src-tauri/tests/unit/{capture,desktop,evdev}.rs` | Portable assertions on all platforms; synthetic ALSA, X11 and Wayland recordings on Linux |
+| Clipboard preservation, newer copies, focus and correction safeguards | `src-tauri/tests/unit/{platform,clipboard,windows,macos,xclipboard}.rs` | Native Windows/macOS desktops and isolated Linux X11 session |
+| External CLI, worker protocol, cancellation, startup and shutdown | `tests/cli.test.py` | All three native coverage jobs; Unix watchdog and Linux clipboard/desktop cases run on their supported hosts |
+| Coverage rejection and collector correctness | `tests/coverage-{gate,runtime}.test.py` | All three native coverage jobs; Linux continuous profiling checked on Linux |
+| Optional Python environment installer interruption and recovery | `scripts/test-optional-installer.py` | All three native coverage jobs and Linux/macOS package jobs |
+
+The Rust coverage command includes ignored tests, and CI enables the disposable
+desktop and virtual keyboard fixtures. OS-specific cases run on their native
+host. The ordinary package test commands can omit those fixtures because the
+coverage matrix runs them explicitly.
+
 Install `cargo-llvm-cov` 0.9.1, `rustfilt` 0.2.0, and the Rust
 `llvm-tools-preview` component, then run:
 

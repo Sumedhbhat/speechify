@@ -8,6 +8,7 @@ const app = document.querySelector<HTMLDivElement>('#app')!;
 let manualRecording = false;
 let page = 'Dictation', snapshot: Obj | null = null, rows: Obj[] = [], selected: number | null = null, downloaded = false;
 let search = '', filter = '', dirty = false, refreshBusy = false;
+let initialized = false, renderVersion = 0, historyRequest = 0;
 let modelLanguage = '';
 function languageGroup(description: string): string {
   const languages = description.trim().toLowerCase();
@@ -41,6 +42,7 @@ function status() {
 }
 async function render() {
   if (!snapshot || overlay) return; const view = document.querySelector('#view')!;
+  const version = ++renderVersion;
   document.querySelector('#heading')!.textContent = page;
   document.querySelectorAll<HTMLElement>('[data-page]').forEach(b => b.setAttribute('aria-current', b.dataset.page === page ? 'page' : 'false'));
   if (page === 'Dictation') {
@@ -53,11 +55,18 @@ async function render() {
     await history();
   } else if (page === 'Learning') {
     const data = await api<Obj>('learning');
+    if (version !== renderVersion) return;
     view.innerHTML = `<p>Corrections become vocabulary hints immediately. Repeated word-level fixes become automatic rules after ${snapshot.config.autocorrect_after} corrections.</p><section><h2>Background learning</h2><div id="download-progress" role="status"></div><dl><dt>Teacher</dt><dd>${esc(typeof data.teacher === 'string' ? data.teacher : JSON.stringify(data.teacher))}</dd><dt>Training</dt><dd>${esc(typeof data.training === 'string' ? data.training : JSON.stringify(data.training))}</dd></dl><p class="quiet">Runs while idle and on mains. Human corrections take precedence over confident teacher labels. Uncorrected dictation guesses are never training labels.</p><div class="actions">${button('install', 'Install training environment', 'data-id="training"')}${button('train', 'Run fine-tuning')}${button('cancel', 'Pause current job')}${button('rollback', 'Roll back version')}</div><p class="quiet">Training uses the optional Python/CUDA environment. Adoption requires improved held-out personal WER and the LibriSpeech regression gate.</p></section><section><h2>Word rules</h2>${data.rules.length ? data.rules.map((r: Obj) => `<div class="learning-row"><span>${esc(r.wrong)} → <strong>${esc(r.right)}</strong><small>${r.count} corrections</small></span>${button('forget-rule', 'Forget', `data-key="${esc(r.wrong)}"`)}</div>`).join('') : '<p class="empty">No rules yet. Correct a recording in History to start learning.</p>'}</section><section><h2>Vocabulary</h2>${data.vocab.length ? data.vocab.map((v: Obj) => `<div class="learning-row"><span>${esc(v.term)}</span>${button('forget-vocab', 'Forget', `data-key="${esc(v.term)}"`)}</div>`).join('') : '<p class="empty">Your corrected words will appear here.</p>'}</section><section><h2>Trained versions</h2>${data.versions.length ? data.versions.map((v: Obj) => `<details><summary>${esc(v.name)}</summary><pre>${esc(JSON.stringify({ personal: v.gate1, regression: v.gate2 }, null, 2))}</pre></details>`).join('') : '<p class="empty">No trained versions. The original model remains active.</p>'}</section>`;
   } else settings(view);
   status();
 }
-async function history() { rows = await api<Obj[]>('history', { search, filter }); if (!rows.some(r => r.id === selected)) selected = rows[0]?.id ?? null; document.querySelector('#history-list')!.innerHTML = rows.length ? rows.map(r => `<button class="sample ${r.id === selected ? 'selected' : ''}" data-sample="${r.id}"><span>${esc((r.corrected ?? r.pasted).slice(0, 150))}</span><small>${new Date(r.ts * 1000).toLocaleString()}${r.corrected ? ' · Edited' : ''}${r.excluded ? ' · Excluded' : ''}</small></button>`).join('') : '<p class="empty">No recordings match. Dictate to start your history.</p>'; detail(); }
+async function history() {
+  const version = renderVersion, request = ++historyRequest;
+  const data = await api<Obj[]>('history', { search, filter });
+  if (version !== renderVersion || request !== historyRequest || page !== 'History') return;
+  rows = data;
+  if (!rows.some(r => r.id === selected)) selected = rows[0]?.id ?? null; document.querySelector('#history-list')!.innerHTML = rows.length ? rows.map(r => `<button class="sample ${r.id === selected ? 'selected' : ''}" data-sample="${r.id}"><span>${esc((r.corrected ?? r.pasted).slice(0, 150))}</span><small>${new Date(r.ts * 1000).toLocaleString()}${r.corrected ? ' · Edited' : ''}${r.excluded ? ' · Excluded' : ''}</small></button>`).join('') : '<p class="empty">No recordings match. Dictate to start your history.</p>'; detail();
+}
 function detail() { const r = rows.find(r => r.id === selected); const el = document.querySelector('#history-detail')!; if (!r) { el.innerHTML = '<p class="empty">Select a recording to listen or correct it.</p>'; return; } dirty = false; el.innerHTML = `<h2>Correction</h2><p class="metadata">${new Date(r.ts * 1000).toLocaleString()}</p>${r.audio ? button('play', 'Play recording') + '<audio id="playback" controls hidden></audio>' : '<p class="quiet">Audio retention is off. The latest clip stays in memory until the next dictation or quit; saving a correction preserves that audio.</p>'}<label for="correction">Corrected transcript</label><textarea id="correction" rows="8">${esc(r.corrected ?? r.pasted)}</textarea><div class="actions">${button('save', 'Save only', 'class="primary"')}${button('replace', 'Save and replace', 'title="Requires a proven original text range and unchanged caret; unsupported targets save only"')}${button('copy', 'Copy')}</div><p class="metadata">Shift+Enter saves only. Ctrl+Enter requests replacement. Unsafe replacement is refused.</p><details><summary>Original pasted text</summary><p>${esc(r.pasted)}</p></details><div class="actions">${button('revert', 'Revert correction')}${button('exclude', r.excluded ? 'Include in training' : 'Exclude from training')}${button('delete', 'Delete recording', 'class="danger"')}</div>${r.teacher_text ? `<details><summary>Teacher label · ${Number(r.teacher_confidence ?? 0).toFixed(2)} confidence</summary><p>${esc(r.teacher_text)}</p><p>${esc(r.teacher_note ?? 'Accepted subject to configured threshold')}</p></details>` : ''}`; }
 const labels: Record<string, string> = { ptt_key: 'Hold-to-talk key or combination', correct_hotkey: 'Correction shortcut', history_hotkey: 'History shortcut', models_hotkey: 'Models shortcut', input_device: 'Input device', keep_mic_open: 'Keep microphone open with 300 ms pre-roll', min_hold_ms: 'Minimum hold (ms)', device: 'Inference device', compute_type: 'Whisper compute type', language: 'Language code (empty for auto)', beam_size: 'Whisper beam size', onnx_threads: 'CPU inference threads', autocorrect_after: 'Corrections before automatic replacement', keep_all_audio: 'Retain dictation audio', llm_url: 'Optional OpenAI-compatible cleanup URL', llm_model: 'Cleanup model', learn_auto: 'Enable idle learning', teacher: 'Teacher model ID, auto, or off', idle_minutes: 'Idle minutes before learning', teacher_on_cpu: 'Allow teacher inference on CPU', teacher_min_confidence: 'Minimum teacher confidence', retrain_after_labels: 'New labels before training', retrain_after_days: 'Days between training', max_regression_wer: 'Maximum LibriSpeech regression (WER points)', keep_versions: 'Trained versions to retain', theme: 'Theme' };
 function field(k: string) { const v = snapshot!.config[k]; const options: Record<string, string[]> = { device: ['auto', 'cuda', 'vulkan', 'metal', 'cpu'], compute_type: ['auto', 'float16', 'float32', 'int8', 'int8_float16'], theme: ['system', 'dark', 'light'] }; return `<label class="${typeof v === 'boolean' ? 'check' : ''}">${typeof v !== 'boolean' ? esc(labels[k]) : ''}${options[k] ? `<select name="${k}">${options[k].map(o => `<option ${o === v ? 'selected' : ''}>${o}</option>`).join('')}</select>` : typeof v === 'boolean' ? `<input name="${k}" type="checkbox" ${v ? 'checked' : ''}>${esc(labels[k])}` : `<input name="${k}" ${k === 'input_device' ? 'list="inputs"' : ''} type="${typeof v === 'number' ? 'number' : 'text'}" ${typeof v === 'number' ? 'step="any"' : ''} value="${esc(v)}">`}</label>`; }
@@ -102,6 +111,20 @@ async function action(a: string, b: HTMLElement) { const r = rows.find(r => r.id
   else if (a.startsWith('autostart-')) { await api('autostart', { enabled: a === 'autostart-on' }); notify(a === 'autostart-on' ? 'Candidate login entry enabled.' : 'Candidate login entry removed.'); }
   snapshot = await api('snapshot'); status(); if (page === 'Models' && ['install', 'use-model', 'reuse'].includes(a)) await render();
 }
-async function refresh() { if (refreshBusy) return; refreshBusy = true; try { const old = snapshot?.state.download?.stage; snapshot = await api('snapshot'); status(); if (page === 'Models' && old !== snapshot!.state.download?.stage && snapshot!.state.download?.stage === 'Installed') await render(); } catch (e) { error(e); } finally { refreshBusy = false; } }
-async function start() { if (overlay) { document.body.classList.add('overlay-body'); } else shell(); try { snapshot = await api('snapshot'); await render(); status(); await listen<string>('navigate', e => { if (dirty) return; page = e.payload; void render().catch(error); }); } catch (e) { error(`Cannot connect to the Rust service: ${e}`); } setInterval(() => void refresh(), overlay ? 80 : 700); }
+async function refresh() {
+  if (refreshBusy) return; refreshBusy = true;
+  try {
+    const old = snapshot?.state.download?.stage;
+    snapshot = await api('snapshot');
+    status();
+    if (!initialized) {
+      await render();
+      await listen<string>('navigate', e => { if (dirty) return; page = e.payload; void render().catch(error); });
+      initialized = true;
+    }
+    if (page === 'Models' && old !== snapshot!.state.download?.stage && snapshot!.state.download?.stage === 'Installed') await render();
+  } catch (e) { error(initialized ? e : `Cannot connect to the Rust service: ${e}`); }
+  finally { refreshBusy = false; }
+}
+async function start() { if (overlay) { document.body.classList.add('overlay-body'); } else shell(); await refresh(); setInterval(() => void refresh(), overlay ? 80 : 700); }
 void start();
