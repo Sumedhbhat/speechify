@@ -702,10 +702,15 @@ mod os {
                     }
                     return Err("Clipboard restore busy".into());
                 }
+                let mut failed = false;
                 for (format, h) in allocated {
                     if SetClipboardData(format, h).is_null() {
                         GlobalFree(h);
+                        failed = true;
                     }
+                }
+                if failed {
+                    return Err("Clipboard restore failed".into());
                 }
             }
             Ok(())

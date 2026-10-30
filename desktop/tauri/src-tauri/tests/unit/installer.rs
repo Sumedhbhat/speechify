@@ -222,3 +222,14 @@ fn cancellation_before_setup_stops_the_installer_and_allows_a_later_retry() {
     script(&home, "pass\n");
     install(&service, "training").unwrap();
 }
+
+#[test]
+fn a_noisy_installer_can_finish_without_leaving_a_busy_process_or_a_blocked_progress_reader() {
+    let home = Home::new();
+    let service = home.service();
+    script(&home, "import pathlib,sys\nfor _ in range(2000):print('{\"stage\":\"Installing\"}')\npathlib.Path(sys.argv[sys.argv.index('--root')+1]).joinpath('installed').touch()\n");
+    install(&service, "training").unwrap();
+    assert!(home.0.join("installed").exists());
+    assert_eq!(service.install_pid.load(Ordering::SeqCst), 0);
+    assert!(service.installing_family.lock().unwrap().is_none());
+}

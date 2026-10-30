@@ -401,6 +401,9 @@ unsafe extern "system" fn clipboard_set_failed(
 unsafe extern "system" fn clipboard_data_missing(_: u32) -> *mut std::ffi::c_void {
     std::ptr::null_mut()
 }
+unsafe extern "system" fn stable_clipboard_generation() -> u32 {
+    100
+}
 unsafe extern "system" fn no_owner() -> *mut std::ffi::c_void {
     std::ptr::null_mut()
 }
@@ -512,13 +515,27 @@ fn clipboard_failures_are_reported_and_later_writes_can_recover() {
             clipboard_clear_failed as *const (),
             "busy",
         ),
-        ("SetClipboardData", clipboard_set_failed as *const (), "set"),
+        (
+            "SetClipboardData",
+            clipboard_set_failed as *const (),
+            "restore failed",
+        ),
     ] {
         write_clipboard("Previous copy").unwrap();
+        let generation = unsafe {
+            os_hooks::Hook::new(
+                "GetClipboardSequenceNumber",
+                stable_clipboard_generation as *const (),
+            )
+        };
         let restore = super::os::snapshot_and_write("Temporary dictation").unwrap();
         let hook = unsafe { os_hooks::Hook::new(symbol, replacement) };
-        let error = restore().unwrap_err();
+        let error = match restore() {
+            Err(error) => error,
+            Ok(()) => panic!("{symbol} restore failure was ignored"),
+        };
         drop(hook);
+        drop(generation);
         assert!(error.contains(message), "{symbol}: {error}");
         write_clipboard("Recovered").unwrap();
         assert_eq!(read(), "Recovered");

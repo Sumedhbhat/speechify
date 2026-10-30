@@ -24,6 +24,10 @@ fn main() {
     }
     println!("{{\"ready\":true,\"device\":\"cpu\",\"load_ms\":1}}");
     std::io::stdout().flush().unwrap();
+    if mode.trim() == "burst" {
+        for _ in 0..1000 { println!("{{\"text\":\"unexpected peer output\"}}"); }
+        std::io::stdout().flush().unwrap();
+    }
     if mode.trim() == "exit-after-ready" { return; }
     for line in std::io::stdin().lock().lines() {
         let line = line.unwrap(); std::fs::write(model.join("request.json"), &line).unwrap();

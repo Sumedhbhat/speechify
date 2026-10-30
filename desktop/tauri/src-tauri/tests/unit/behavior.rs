@@ -1128,3 +1128,19 @@ fn learned_case_insensitive_rules_handle_unicode_equivalents_without_chaining() 
         "C the KeyName; C the KeyName"
     );
 }
+
+#[test]
+fn shutting_down_a_chatty_worker_never_blocks_and_reaps_the_owned_process() {
+    let home = Home::new();
+    let service = fake_service(&home, "burst");
+    service.preload().unwrap();
+    let pid = service.pid.load(Ordering::SeqCst);
+    let ownership = service.pid.clone();
+    let started = std::time::Instant::now();
+    service.shutdown();
+    drop(service);
+    wait_until(|| ownership.load(Ordering::SeqCst) == 0);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    #[cfg(unix)]
+    assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
+}

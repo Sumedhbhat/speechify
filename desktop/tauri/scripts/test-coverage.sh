@@ -27,6 +27,7 @@ fi
 cargo llvm-cov clean --workspace --manifest-path src-tauri/Cargo.toml
 if [[ "$(uname -s)" == Linux ]]; then
   "$PYTHON" scripts/prepare-audio-fixture.py
+  "$PYTHON" scripts/prepare-x11-fixture.py
   export ALSA_PLUGIN_DIR="$PWD/.build/alsa"
   keyboard_args=()
   if [[ "${SPEECHIFY_TEST_VIRTUAL_KEYBOARD:-}" != 1 ]]; then

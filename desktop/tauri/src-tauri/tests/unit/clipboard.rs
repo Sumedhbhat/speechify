@@ -189,3 +189,27 @@ fn windows_bitmap_clipboard_is_refused_without_losing_the_owned_image() {
     }
     write_clipboard("Test finished").unwrap();
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "Verifies pasteboard denial in an isolated macOS sandbox"]
+fn macos_denied_clipboard_access_reports_failure_without_clearing_the_previous_copy() {
+    let _clipboard = CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner());
+    if std::env::var_os("SPEECHIFY_TEST_DENIED_PASTEBOARD").is_some() {
+        assert!(write_clipboard("").is_err());
+        return;
+    }
+    write_clipboard("Copy protected from denied writers").unwrap();
+    let output = Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", "(version 1)(allow default)(deny mach-lookup (global-name \"com.apple.pasteboard.1\"))"])
+        .arg(std::env::current_exe().unwrap())
+        .args(["--exact", "platform::clipboard_behavior::macos_denied_clipboard_access_reports_failure_without_clearing_the_previous_copy", "--include-ignored"])
+        .env("SPEECHIFY_TEST_DENIED_PASTEBOARD", "1").output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(read(), "Copy protected from denied writers");
+}

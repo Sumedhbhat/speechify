@@ -126,11 +126,14 @@ fn supported(target: &str) -> bool {
         || target == "application/rtf"
 }
 pub fn begin(text: &str) -> Result<()> {
+    let mut cmd = Command::new(std::env::current_exe().map_err(crate::config::err)?);
+    cmd.arg("--clipboard-worker");
+    begin_using(cmd, text, Duration::from_secs(15))
+}
+fn begin_using(mut cmd: Command, text: &str, timeout: Duration) -> Result<()> {
     use std::io::{BufRead, Write};
     use std::process::Stdio;
-    let mut cmd = Command::new(std::env::current_exe().map_err(crate::config::err)?);
-    cmd.arg("--clipboard-worker")
-        .stdin(Stdio::piped())
+    cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     let (mut child, owner) = crate::child_owner::spawn(&mut cmd)?;
@@ -149,7 +152,7 @@ pub fn begin(text: &str) -> Result<()> {
                 .and_then(|v| v);
             let _ = tx.send(result);
         });
-        rx.recv_timeout(Duration::from_secs(15))
+        rx.recv_timeout(timeout)
             .map_err(|_| "Clipboard snapshot timed out".to_string())?
     })();
     if result.is_err() {
@@ -161,6 +164,9 @@ pub fn begin(text: &str) -> Result<()> {
     });
     result
 }
+#[cfg(test)]
+#[path = "../tests/unit/xclipboard.rs"]
+mod behavior;
 pub fn worker() -> Result<()> {
     use std::io::{BufRead, Write};
     let mut line = String::new();

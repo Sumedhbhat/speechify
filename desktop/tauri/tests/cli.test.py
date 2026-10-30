@@ -262,6 +262,32 @@ os._exit(0)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(message, result.stderr)
 
+    def test_worker_stays_ready_while_its_owner_is_alive_and_serves_a_later_request(self):
+        worker = subprocess.Popen([str(BINARY), "--native-worker", str(self.root), "plain", "cpu", "2"],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, env=self.environment())
+        try:
+            self.assertTrue(json.loads(worker.stdout.readline())["ready"])
+            time.sleep(1.2)
+            self.assertIsNone(worker.poll())
+            worker.stdin.write(json.dumps({"wav": str(self.wav)}) + "\n")
+            worker.stdin.flush()
+            self.assertTrue(json.loads(worker.stdout.readline())["text"].startswith("160|en|"))
+            worker.stdin.close()
+            self.assertEqual(worker.wait(timeout=5), 0)
+        finally:
+            if worker.poll() is None:
+                worker.kill()
+                worker.wait(timeout=5)
+            worker.stdin.close()
+            worker.stdout.close()
+            worker.stderr.close()
+
+    def test_fixture_without_runtime_overrides_reports_the_missing_model(self):
+        result = self.run_cli("fixture", "moonshine-base", self.wav, extra_env={"SPEECHIFY_NATIVE_DIR": None})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Install the selected model", result.stderr)
+
     def write_clipboard(self, text, target="UTF8_STRING"):
         subprocess.run(["xclip", "-selection", "clipboard", "-i", "-target", target],
                        input=text.encode(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -271,10 +297,10 @@ os._exit(0)
         return subprocess.run(["xclip", "-selection", "clipboard", "-o", "-target", target],
                               capture_output=True, env=self.environment(), timeout=5)
 
-    def clipboard_worker(self, text):
+    def clipboard_worker(self, text, extra_env=None):
         import select
         worker = subprocess.Popen([str(BINARY), "--clipboard-worker"], stdin=subprocess.PIPE,
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.environment(), text=True)
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={**self.environment(), **(extra_env or {})}, text=True)
         def close_worker():
             if worker.poll() is None:
                 worker.kill()
@@ -363,6 +389,125 @@ os._exit(0)
         time.sleep(.6)
         self.assertNotEqual(self.read_clipboard().returncode, 0)
         self.write_clipboard("Next copy")
+        self.assertEqual(worker.wait(timeout=5), 0)
+
+    @unittest.skipUnless(sys.platform == "linux", "X11 clipboard contract")
+    def test_clipboard_boundary_refusals_preserve_the_previous_copy(self):
+        shim = str(ROOT / ".build/x11-desktop.so")
+        for scenario, message in [("no-selection-notifications", "notifications unavailable"),
+                                  ("changed-before-grab", "changed before paste"),
+                                  ("queued-copy-notification", "changed before paste"),
+                                  ("ownership-refused", "ownership refused")]:
+            with self.subTest(scenario=scenario):
+                self.write_clipboard("Earlier copy")
+                worker, ready = self.clipboard_worker("Must not overwrite", {
+                    "LD_PRELOAD": shim, "SPEECHIFY_TEST_X11_SHIM": shim,
+                    "SPEECHIFY_TEST_X11_SCENARIO": scenario,
+                })
+                self.assertIn(message, ready["Err"])
+                self.assertNotEqual(worker.wait(timeout=5), 0)
+                self.assertEqual(self.read_clipboard().stdout.decode(), "Earlier copy")
+
+    @unittest.skipUnless(sys.platform == "linux", "X11 clipboard contract")
+    def test_clipboard_startup_events_are_drained_and_an_event_loop_failure_is_reported(self):
+        shim = str(ROOT / ".build/x11-desktop.so")
+        for scenario in ["startup-event", "unavailable-event-api"]:
+            with self.subTest(scenario=scenario):
+                self.write_clipboard("Previous copy")
+                worker, ready = self.clipboard_worker("Dictation", {
+                    "LD_PRELOAD": shim, "SPEECHIFY_TEST_X11_SHIM": shim,
+                    "SPEECHIFY_TEST_X11_SCENARIO": scenario,
+                })
+                self.assertEqual(ready, {"Ok": None})
+                if scenario == "unavailable-event-api":
+                    self.assertNotEqual(worker.wait(timeout=5), 0)
+                    self.assertIn("Clipboard owner stopped", worker.stderr.read())
+                else:
+                    self.assertEqual(self.read_clipboard().stdout.decode(), "Dictation")
+                    self.write_clipboard("Newer copy")
+                    self.assertEqual(worker.wait(timeout=5), 0)
+                    self.assertEqual(self.read_clipboard().stdout.decode(), "Newer copy")
+
+    @unittest.skipUnless(sys.platform == "linux", "X11 clipboard contract")
+    def test_failed_promised_formats_and_excessive_total_snapshot_size_refuse_paste(self):
+        tools = self.root / self._testMethodName / "tools"
+        tools.mkdir(parents=True)
+        for scenario, listing, body, message in [
+            ("failed-target", "printf 'UTF8_STRING\\n'", "exit 1", "Cannot snapshot"),
+            ("empty-snapshot", "printf 'TARGETS\\nTIMESTAMP\\n'", "exit 1", "changed while snapshotting"),
+            ("invalid-targets", "printf '\\377'", "exit 1", "Invalid clipboard targets"),
+            ("total-limit", "i=0; while [ $i -lt 257 ]; do printf 'text/type-%s\\n' $i; i=$((i+1)); done", "/usr/bin/head -c 131072 /dev/zero", "exceeds 32 MB"),
+        ]:
+            with self.subTest(scenario=scenario):
+                script = tools / "xclip"
+                script.write_text(f'#!/bin/sh\nif [ "$5" = TARGETS ]; then {listing}; else {body}; fi\n')
+                script.chmod(0o700)
+                self.write_clipboard("Previous copy")
+                worker, ready = self.clipboard_worker("Must not overwrite", {"PATH": str(tools) + os.pathsep + os.environ["PATH"]})
+                self.assertIn(message, ready["Err"])
+                self.assertNotEqual(worker.wait(timeout=5), 0)
+                self.assertEqual(self.read_clipboard().stdout.decode(), "Previous copy")
+
+    @unittest.skipUnless(sys.platform == "linux", "X11 clipboard contract")
+    def test_clipboard_owner_disappearing_before_restore_keeps_the_new_empty_clipboard(self):
+        shim = str(ROOT / ".build/x11-desktop.so")
+        self.write_clipboard("Previous copy")
+        worker, ready = self.clipboard_worker("Temporary", {
+            "LD_PRELOAD": shim, "SPEECHIFY_TEST_X11_SHIM": shim,
+            "SPEECHIFY_TEST_X11_SCENARIO": "owner-disappeared-before-restore",
+        })
+        self.assertEqual(ready, {"Ok": None})
+        self.assertEqual(worker.wait(timeout=5), 0)
+        self.assertNotEqual(self.read_clipboard().returncode, 0)
+
+    @unittest.skipUnless(sys.platform == "linux", "X11 clipboard contract")
+    def test_selection_clients_omitting_the_property_still_receive_the_dictation(self):
+        import ctypes as c
+        self.write_clipboard("Previous copy")
+        worker, ready = self.clipboard_worker("Dictation 🦀")
+        self.assertEqual(ready, {"Ok": None})
+        x = c.CDLL("libX11.so.6")
+        signatures = {
+            "XOpenDisplay": (c.c_void_p, [c.c_char_p]),
+            "XDefaultRootWindow": (c.c_ulong, [c.c_void_p]),
+            "XCreateSimpleWindow": (c.c_ulong, [c.c_void_p, c.c_ulong, c.c_int, c.c_int, c.c_uint, c.c_uint, c.c_uint, c.c_ulong, c.c_ulong]),
+            "XInternAtom": (c.c_ulong, [c.c_void_p, c.c_char_p, c.c_int]),
+            "XConvertSelection": (c.c_int, [c.c_void_p, c.c_ulong, c.c_ulong, c.c_ulong, c.c_ulong, c.c_ulong]),
+            "XFlush": (c.c_int, [c.c_void_p]),
+            "XPending": (c.c_int, [c.c_void_p]),
+            "XNextEvent": (c.c_int, [c.c_void_p, c.c_void_p]),
+            "XGetWindowProperty": (c.c_int, [c.c_void_p, c.c_ulong, c.c_ulong, c.c_long, c.c_long, c.c_int, c.c_ulong, c.POINTER(c.c_ulong), c.POINTER(c.c_int), c.POINTER(c.c_ulong), c.POINTER(c.c_ulong), c.POINTER(c.c_void_p)]),
+            "XFree": (c.c_int, [c.c_void_p]),
+            "XDestroyWindow": (c.c_int, [c.c_void_p, c.c_ulong]),
+            "XCloseDisplay": (c.c_int, [c.c_void_p]),
+        }
+        for name, (result, args) in signatures.items():
+            getattr(x, name).restype, getattr(x, name).argtypes = result, args
+        display = x.XOpenDisplay(self.display.encode())
+        self.assertTrue(display)
+        window = x.XCreateSimpleWindow(display, x.XDefaultRootWindow(display), 0, 0, 1, 1, 0, 0, 0)
+        try:
+            target = x.XInternAtom(display, b"UTF8_STRING", 0)
+            x.XConvertSelection(display, x.XInternAtom(display, b"CLIPBOARD", 0), target, 0, window, 0)
+            x.XFlush(display)
+            deadline = time.monotonic() + 5
+            while not x.XPending(display) and time.monotonic() < deadline:
+                time.sleep(.001)
+            self.assertTrue(x.XPending(display), "No selection reply")
+            event = (c.c_long * 24)()
+            x.XNextEvent(display, event)
+            self.assertEqual(c.cast(event, c.POINTER(c.c_int))[0], 31)
+            kind, count, remaining, data, format_ = c.c_ulong(), c.c_ulong(), c.c_ulong(), c.c_void_p(), c.c_int()
+            self.assertEqual(x.XGetWindowProperty(display, window, target, 0, 1024, 1, 0, c.byref(kind), c.byref(format_), c.byref(count), c.byref(remaining), c.byref(data)), 0)
+            try:
+                self.assertEqual(format_.value, 8)
+                self.assertEqual(c.string_at(data, count.value).decode(), "Dictation 🦀")
+            finally:
+                x.XFree(data)
+        finally:
+            x.XDestroyWindow(display, window)
+            x.XCloseDisplay(display)
+        self.write_clipboard("Newer copy")
         self.assertEqual(worker.wait(timeout=5), 0)
 
     @unittest.skipUnless(sys.platform == "linux", "Desktop lifecycle on an isolated X11/D-Bus session")
