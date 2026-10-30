@@ -370,6 +370,65 @@ fn truncated_pcm_and_float_recordings_are_rejected_instead_of_transcribing_parti
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn full_storage_is_reported_for_both_empty_and_buffered_recordings() {
+    let sink = Path::new("/dev/full");
+    for audio in [Vec::new(), vec![0.25; 16000]] {
+        assert!(audio::save(sink, &audio).is_err());
+    }
+}
+
+#[test]
+fn wav_duration_limits_use_wide_arithmetic_and_reject_recordings_over_ten_minutes() {
+    let home = Home::new();
+    let high_rate = home.0.join("high-rate.wav");
+    let mut writer = hound::WavWriter::create(
+        &high_rate,
+        hound::WavSpec {
+            channels: 1,
+            sample_rate: 8_000_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        },
+    )
+    .unwrap();
+    for _ in 0..8000 {
+        writer.write_sample(8192i16).unwrap();
+    }
+    writer.finalize().unwrap();
+    let clip = audio::load(&high_rate).unwrap();
+    assert_eq!(clip.len(), 16);
+    assert!(clip.iter().all(|sample| (*sample - 0.25).abs() < 0.001));
+
+    // A valid sparse PCM WAV represents 601 seconds of silence without
+    // spending the test's time generating or transcribing ten minutes of audio.
+    let path = home.0.join("over-limit.wav");
+    let payload = 16000u32 * 601 * 2;
+    let mut header = b"RIFF".to_vec();
+    header.extend((payload + 36).to_le_bytes());
+    header.extend(b"WAVEfmt ");
+    header.extend(16u32.to_le_bytes());
+    header.extend(1u16.to_le_bytes()); // PCM
+    header.extend(1u16.to_le_bytes()); // mono
+    header.extend(16000u32.to_le_bytes());
+    header.extend(32000u32.to_le_bytes());
+    header.extend(2u16.to_le_bytes());
+    header.extend(16u16.to_le_bytes());
+    header.extend(b"data");
+    header.extend(payload.to_le_bytes());
+    std::fs::write(&path, header).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(u64::from(payload) + 44)
+        .unwrap();
+    assert!(audio::load(&path)
+        .unwrap_err()
+        .contains("at most 10 minutes"));
+}
+
 #[test]
 fn deleting_the_only_unretained_recording_prevents_later_recovery_or_learning() {
     let home = Home::new();

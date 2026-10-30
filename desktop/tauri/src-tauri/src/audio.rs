@@ -48,7 +48,10 @@ pub fn resample(input: &[f32], rate: u32, channels: usize) -> Vec<f32> {
 pub fn load(path: &Path) -> Result<Vec<f32>> {
     let mut r = hound::WavReader::open(path).map_err(|e| e.to_string())?;
     let s = r.spec();
-    if s.sample_rate == 0 || s.channels == 0 || r.duration() > s.sample_rate * 600 {
+    if s.sample_rate == 0
+        || s.channels == 0
+        || u64::from(r.duration()) > u64::from(s.sample_rate) * 600
+    {
         return Err("WAV must be at most 10 minutes".into());
     }
     let samples = if s.sample_format == hound::SampleFormat::Float {
