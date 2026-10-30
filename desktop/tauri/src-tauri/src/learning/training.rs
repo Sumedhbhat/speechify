@@ -157,10 +157,8 @@ pub(super) fn start_training_on_power(service: Arc<Service>, on_mains: bool) -> 
             let mut adopted = cfg.clone();
             adopted["model"] = json!(format!("ft:{name}"));
             service.update(adopted)?;
-            prune(
-                &service,
-                cfg["keep_versions"].as_u64().unwrap_or(3) as usize,
-            )?;
+            let keep_versions = cfg["keep_versions"].as_u64().unwrap_or(3) as usize;
+            prune(&service, keep_versions)?;
             Ok(())
         })();
         if let Err(e) = result {

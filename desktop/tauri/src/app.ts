@@ -229,7 +229,7 @@ export function startApplication(app: HTMLDivElement, overlay: boolean): void {
       await render();
     } else if (actionName === 'import-data') {
       const path = prompt(
-        'Existing Speechify data directory. Copies actionName consistent SQLite backup and referenced audio into empty candidate history.',
+        'Existing Speechify data directory. Copies a consistent SQLite backup and referenced audio into empty candidate history.',
       );
       if (path) notify(`Imported ${await api('import', { path })} audio files. Source unchanged.`);
     } else if (actionName.startsWith('autostart-')) {

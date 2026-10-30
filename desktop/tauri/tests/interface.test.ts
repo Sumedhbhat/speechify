@@ -580,6 +580,9 @@ describe('settings', () => {
     expect(operations.some(([op]) => op === 'import')).toBe(false);
     vi.mocked(prompt).mockReturnValueOnce('/old-data');
     await action('import-data');
+    expect(prompt).toHaveBeenLastCalledWith(
+      'Existing Speechify data directory. Copies a consistent SQLite backup and referenced audio into empty candidate history.',
+    );
     expect(operations).toContainEqual(['import', { path: '/old-data' }]);
     expect(element('#message').textContent).toContain('Imported 3 audio files. Source unchanged.');
     await action('autostart-on');

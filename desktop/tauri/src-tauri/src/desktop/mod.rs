@@ -5,7 +5,10 @@ pub(crate) mod runtime;
 
 use crate::{audio::capture::Capture, config::Result, service::Service};
 use std::sync::Arc;
-use tauri::{Emitter, Manager};
+use tauri::{
+    menu::{Menu, MenuItem},
+    Emitter, Manager,
+};
 
 #[cfg(test)]
 #[path = "../../tests/unit/desktop.rs"]
@@ -65,7 +68,7 @@ pub fn run() -> Result<()> {
                 32,
                 32,
             );
-            let menu = tauri::menu::Menu::new(app)?;
+            let menu = Menu::new(app)?;
             for (id, text) in [
                 ("settings", "Settings"),
                 ("history", "History"),
@@ -73,13 +76,8 @@ pub fn run() -> Result<()> {
                 ("logs", "Log location"),
                 ("quit", "Quit candidate"),
             ] {
-                menu.append(&tauri::menu::MenuItem::with_id(
-                    app,
-                    id,
-                    text,
-                    true,
-                    None::<&str>,
-                )?)?;
+                let item = MenuItem::with_id(app, id, text, true, None::<&str>)?;
+                menu.append(&item)?;
             }
             tauri::tray::TrayIconBuilder::new()
                 .icon(icon)

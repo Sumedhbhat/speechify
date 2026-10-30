@@ -41,8 +41,11 @@ fn restart_correction_export_and_safe_delete() {
 }
 #[test]
 fn retention_off_keeps_only_latest_until_correction_or_restart() {
-    let root =
-        std::env::temp_dir().join(format!("speechify-retained-audio-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!(
+        "speechify-retained-audio-{}-{}",
+        std::process::id(),
+        (now() * 1e9) as u64
+    ));
     std::fs::create_dir_all(root.join("audio")).unwrap();
     let mut s = Store::open(&root).unwrap();
     let old = s.record(&[0.1; 160], "old", "old", false).unwrap();
@@ -67,7 +70,11 @@ fn retention_off_keeps_only_latest_until_correction_or_restart() {
 }
 #[test]
 fn export_includes_labels_older_than_history_limit() {
-    let root = std::env::temp_dir().join(format!("speechify-export-limit-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!(
+        "speechify-export-limit-{}-{}",
+        std::process::id(),
+        (now() * 1e9) as u64
+    ));
     std::fs::create_dir_all(root.join("audio")).unwrap();
     let mut s = Store::open(&root).unwrap();
     let id = s.record(&[0.1; 16], "old", "old", true).unwrap();
@@ -87,7 +94,11 @@ fn export_includes_labels_older_than_history_limit() {
 }
 #[test]
 fn legacy_import_migrates_and_failed_audio_copy_is_retryable() {
-    let base = std::env::temp_dir().join(format!("speechify-legacy-import-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!(
+        "speechify-legacy-import-{}-{}",
+        std::process::id(),
+        (now() * 1e9) as u64
+    ));
     let src = base.join("original");
     let dst = base.join("candidate");
     for p in [&src, &dst] {

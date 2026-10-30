@@ -2,7 +2,12 @@
 # Fast, repeatable checks for a structural change. Native coverage runs separately.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-PYTHON="${PYTHON:-python3}"
+if [[ -z "${PYTHON:-}" ]]; then
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) PYTHON=python ;;
+    *) PYTHON=python3 ;;
+  esac
+fi
 
 npm run format:check
 npm run test:coverage
