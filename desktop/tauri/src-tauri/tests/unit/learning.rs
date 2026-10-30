@@ -1,5 +1,6 @@
 use super::*;
 use crate::behavior_tests::{fake_service, training_environment, wait_until, Home};
+use std::process::Command;
 
 #[cfg(unix)]
 #[test]

@@ -1,5 +1,15 @@
-use super::*;
+use super::{
+    commands::dispatch,
+    runtime::{start, CaptureCommand},
+};
 use crate::behavior_tests::Home;
+use crate::{audio::capture::Capture, config::Result, keys::Action, platform, service::Service};
+use serde_json::{json, Value};
+use std::{
+    path::Path,
+    sync::{atomic::Ordering, mpsc, Arc},
+    time::{Duration, Instant},
+};
 
 #[cfg(feature = "behavioral-tests")]
 #[test]
@@ -8,7 +18,7 @@ fn ipc_commands_parse_requests_return_saved_settings_and_report_background_failu
     let service = home.service();
     let app = tauri::test::mock_builder()
         .manage(service.clone())
-        .invoke_handler(tauri::generate_handler![request])
+        .invoke_handler(tauri::generate_handler![super::commands::request])
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
@@ -411,22 +421,22 @@ fn manual_recording_refuses_unavailable_or_busy_recorder_and_recovers() {
     assert!(dispatch(&service, "manual_start", &json!({}))
         .unwrap_err()
         .contains("busy"));
-    assert_eq!(rx.recv().unwrap().0, Action::Cancel);
+    assert_eq!(rx.recv().unwrap().action, Action::Cancel);
     assert!(!service.recording.load(Ordering::SeqCst));
     service.learning_busy.store(false, Ordering::SeqCst);
     dispatch(&service, "manual_start", &json!({})).unwrap();
-    assert_eq!(rx.recv().unwrap().0, Action::Start);
+    assert_eq!(rx.recv().unwrap().action, Action::Start);
     assert!(service.snapshot()["manual_recording"].as_bool().unwrap());
     assert!(dispatch(&service, "manual_start", &json!({}))
         .unwrap_err()
         .contains("already active"));
     dispatch(&service, "manual_stop", &json!({})).unwrap();
-    assert_eq!(rx.recv().unwrap().0, Action::Cancel);
+    assert_eq!(rx.recv().unwrap().action, Action::Cancel);
     service.config.lock().unwrap()["min_hold_ms"] = json!(0);
     dispatch(&service, "manual_start", &json!({})).unwrap();
-    assert_eq!(rx.recv().unwrap().0, Action::Start);
+    assert_eq!(rx.recv().unwrap().action, Action::Start);
     dispatch(&service, "manual_stop", &json!({})).unwrap();
-    assert_eq!(rx.recv().unwrap().0, Action::Submit);
+    assert_eq!(rx.recv().unwrap().action, Action::Submit);
     dispatch(&service, "manual_start", &json!({})).unwrap();
     assert!(dispatch(&service, "manual_stop", &json!({}))
         .unwrap_err()
@@ -454,7 +464,7 @@ impl Running {
         let changes = visibility.clone();
         let navigation = Arc::new(std::sync::Mutex::new(Vec::new()));
         let pages = navigation.clone();
-        let threads = start_runtime(
+        let threads = start(
             service.clone(),
             move |page| pages.lock().unwrap().push(page.to_owned()),
             move |visible| {
@@ -905,7 +915,11 @@ fn microphone_open_and_disconnect_failures_are_visible_and_never_save_partial_di
                 .unwrap()
                 .as_ref()
                 .unwrap()
-                .send((Action::Submit, 0, service.generation.load(Ordering::SeqCst)))
+                .send(CaptureCommand {
+                    action: Action::Submit,
+                    target: 0,
+                    generation: service.generation.load(Ordering::SeqCst),
+                })
                 .unwrap();
             service
                 .capture_tx
@@ -913,7 +927,11 @@ fn microphone_open_and_disconnect_failures_are_visible_and_never_save_partial_di
                 .unwrap()
                 .as_ref()
                 .unwrap()
-                .send((Action::Cancel, 0, service.generation.load(Ordering::SeqCst)))
+                .send(CaptureCommand {
+                    action: Action::Cancel,
+                    target: 0,
+                    generation: service.generation.load(Ordering::SeqCst),
+                })
                 .unwrap();
             wait_until(|| runtime.visibility.lock().unwrap().last() == Some(&false));
         }
@@ -1395,7 +1413,11 @@ fn keyboard_backpressure_is_reported_when_microphone_initialization_is_blocked()
             .unwrap()
             .as_ref()
             .unwrap()
-            .try_send((Action::Cancel, 0, generation))
+            .try_send(CaptureCommand {
+                action: Action::Cancel,
+                target: 0,
+                generation: generation,
+            })
             .unwrap();
     }
     assert!(std::process::Command::new("xdotool")
@@ -1504,15 +1526,34 @@ fn a_disconnect_consumed_by_submit_reopens_the_microphone_before_the_next_record
             .iter()
             .filter(|visible| !**visible)
             .count();
-        sender.try_send((Action::Submit, 0, generation)).unwrap();
+        sender
+            .try_send(CaptureCommand {
+                action: Action::Submit,
+                target: 0,
+                generation: generation,
+            })
+            .unwrap();
         for _ in 0..31 {
-            sender.try_send((Action::Cancel, 0, generation)).unwrap();
+            sender
+                .try_send(CaptureCommand {
+                    action: Action::Cancel,
+                    target: 0,
+                    generation: generation,
+                })
+                .unwrap();
         }
         let start = Instant::now();
         // A freed slot proves the recorder has received Submit and is waiting
         // for the setting transaction to release its configuration lock.
         while start.elapsed() < Duration::from_millis(100) {
-            if sender.try_send((Action::Cancel, 0, generation)).is_ok() {
+            if sender
+                .try_send(CaptureCommand {
+                    action: Action::Cancel,
+                    target: 0,
+                    generation: generation,
+                })
+                .is_ok()
+            {
                 delivered = true;
                 break;
             }

@@ -34,8 +34,8 @@ MIN_CORRECTED_HELDOUT = 20
 
 # Hallucination limits.
 MAX_COMPRESSION_RATIO = 2.4  # Whisper's own threshold for repetitive output
-MAX_WORDS_PER_SECOND = 7.0   # fast speech is ~4-5 words per second of voice
-MIN_WORDS_PER_SECOND = 0.3   # checked once there are 3+ seconds of voice
+MAX_WORDS_PER_SECOND = 7.0  # fast speech is ~4-5 words per second of voice
+MIN_WORDS_PER_SECOND = 0.3  # checked once there are 3+ seconds of voice
 
 # Without token probabilities, a clean-looking transcript scores this much,
 # never more, so the heuristic can't outrank a real probability.
@@ -151,9 +151,9 @@ def heuristic_confidence(text: str, voiced_s: float) -> float:
 
 @dataclass(frozen=True)
 class TeacherResult:
-    text: str | None        # None when rejected
+    text: str | None  # None when rejected
     confidence: float
-    note: str | None        # why it was rejected
+    note: str | None  # why it was rejected
 
 
 def judge(text: str, audio: np.ndarray, mean_logprob: float | None) -> TeacherResult:
@@ -209,9 +209,7 @@ def classify(clip: Clip, min_confidence: float) -> tuple[str | None, str]:
     return clip.teacher_text.strip(), "teacher"
 
 
-CLIP_COLUMNS = (
-    "id, audio, corrected, excluded, teacher_text, teacher_confidence, teacher_ts, teacher_note, teacher_model"
-)
+CLIP_COLUMNS = "id, audio, corrected, excluded, teacher_text, teacher_confidence, teacher_ts, teacher_note, teacher_model"
 
 
 def load_clips(db: sqlite3.Connection) -> list[Clip]:

@@ -1,6 +1,7 @@
 use super::*;
 use libloading::Library;
 use std::ffi::{c_char, c_void};
+use std::process::Command;
 
 struct Window {
     lib: Library,

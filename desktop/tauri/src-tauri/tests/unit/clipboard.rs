@@ -1,5 +1,6 @@
 //! Native clipboard tests run on disposable macOS/Windows CI desktops.
 use super::*;
+use std::process::Command;
 static CLIPBOARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(windows)]
 #[path = "windows.rs"]

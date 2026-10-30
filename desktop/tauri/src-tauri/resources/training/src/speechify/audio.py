@@ -219,6 +219,10 @@ def microphones() -> list[str]:
         return []
     names = []
     for d in devices:
-        if d["max_input_channels"] > 0 and (api is None or d["hostapi"] == api) and d["name"] not in names:
+        if (
+            d["max_input_channels"] > 0
+            and (api is None or d["hostapi"] == api)
+            and d["name"] not in names
+        ):
             names.append(d["name"])
     return names

@@ -3,6 +3,9 @@
 Rust service and TypeScript settings UI. App ID: `org.sumedhbhat.speechify.tauri`.
 This is a comparison candidate with documented parity gaps, not a replacement for the installed Python application.
 
+For the module map, dictation flow and developer checks, see
+[Working on the Tauri application](docs/architecture.md).
+
 The Rust process owns recording, keyboard polling, the bounded dictation queue, native worker supervision, SQLite, downloads and learning. Closing Settings hides the window; Quit stops the service. Ordinary dictation uses transcribe.cpp 0.3.1 without Python. Native models are persistent in a separate Rust child process, with CPU retry after GPU failure. All 14 original catalog entries remain available; Distil-Whisper, Kyutai and trained CTranslate2 models use an explicit optional Python worker.
 
 ## Build on Linux
