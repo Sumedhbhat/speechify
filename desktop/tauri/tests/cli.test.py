@@ -314,7 +314,7 @@ class CliBehavior(unittest.TestCase):
         self.assertEqual(worker.wait(timeout=5), 0)
 
     @unittest.skipUnless(sys.platform == "linux", "Desktop lifecycle on an isolated X11/D-Bus session")
-    def test_desktop_survives_closing_settings_reopens_from_tray_and_quits_cleanly(self):
+    def test_desktop_records_into_a_target_survives_closing_settings_and_quits_cleanly(self):
         bus = subprocess.check_output(["dbus-daemon", "--session", "--fork", "--print-address=1", "--print-pid=1"], text=True).splitlines()
         self.addCleanup(lambda: os.kill(int(bus[1]), 15))
         env = self.environment()
@@ -322,6 +322,15 @@ class CliBehavior(unittest.TestCase):
         # Restrict capture to a synthetic ALSA device, including if the test host
         # has a real microphone attached.
         env["ALSA_CONFIG_PATH"] = str(ROOT / "tests/fixtures/alsa.conf")
+        env["ALSA_PLUGIN_DIR"] = str(ROOT / ".build/alsa")
+        data = Path(env["SPEECHIFY_CANDIDATE_PARENT"]) / "speechify-tauri-candidate"
+        model = data / "models/whisper-ft-cli"
+        model.mkdir(parents=True)
+        (model / "model.bin").write_text("fixture")
+        python = data / "environments/whisper/bin/python"
+        python.parent.mkdir(parents=True)
+        shutil.copy2(self.worker_peer, python)
+        (data / "config.toml").write_text('model = "ft:whisper-ft-cli"\ndevice = "cpu"\ninput_device = "Speechify float input"\nlearn_auto = false\n')
         (ROOT / "coverage").mkdir(exist_ok=True)
         log = open(ROOT / "coverage/desktop-startup.log", "w+")
         self.addCleanup(log.close)
@@ -422,15 +431,73 @@ class CliBehavior(unittest.TestCase):
         wait(lambda: windows(True))
 
         # A short global talk-key tap must never create a dictation or audio.
-        subprocess.run(["xdotool", "keydown", "Control_R"], check=True, env=env)
+        # Physical right-Control avoids xdotool's automatic left modifiers.
+        subprocess.run(["xdotool", "keydown", "105"], check=True, env=env)
         time.sleep(.06)
-        subprocess.run(["xdotool", "keyup", "Control_R"], check=True, env=env)
+        subprocess.run(["xdotool", "keyup", "105"], check=True, env=env)
         time.sleep(.3)
         import sqlite3
-        data = Path(env["SPEECHIFY_CANDIDATE_PARENT"]) / "speechify-tauri-candidate"
         with closing(sqlite3.connect(data / "learning.db")) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM samples").fetchone()[0], 0)
         self.assertEqual(list((data / "audio").iterdir()), [])
+
+        # An external X11 target receives the native paste key and consumes the
+        # transient clipboard, just as an editor does when handling Ctrl+V.
+        import ctypes
+        x = ctypes.CDLL("libX11.so.6")
+        x.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x.XOpenDisplay.restype = ctypes.c_void_p
+        x.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+        x.XDefaultRootWindow.restype = ctypes.c_ulong
+        x.XCreateSimpleWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_ulong, ctypes.c_ulong]
+        x.XCreateSimpleWindow.restype = ctypes.c_ulong
+        x.XMapWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        x.XSelectInput.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_long]
+        x.XSetInputFocus.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+        x.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        x.XPending.argtypes = [ctypes.c_void_p]
+        x.XNextEvent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        x.XDestroyWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        x.XCloseDisplay.argtypes = [ctypes.c_void_p]
+        class KeyEvent(ctypes.Structure):
+            _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong), ("send", ctypes.c_int),
+                        ("display", ctypes.c_void_p), ("window", ctypes.c_ulong), ("root", ctypes.c_ulong),
+                        ("subwindow", ctypes.c_ulong), ("time", ctypes.c_ulong), ("x", ctypes.c_int),
+                        ("y", ctypes.c_int), ("x_root", ctypes.c_int), ("y_root", ctypes.c_int),
+                        ("state", ctypes.c_uint), ("keycode", ctypes.c_uint), ("same_screen", ctypes.c_int)]
+        class KeyUnion(ctypes.Union):
+            _fields_ = [("key", KeyEvent), ("pad", ctypes.c_long * 24)]
+        target_display = x.XOpenDisplay(self.display.encode())
+        self.assertTrue(target_display)
+        target = x.XCreateSimpleWindow(target_display, x.XDefaultRootWindow(target_display), 0, 0, 200, 100, 0, 0, 0)
+        try:
+            x.XSelectInput(target_display, target, 1 | 2)
+            x.XMapWindow(target_display, target)
+            x.XSetInputFocus(target_display, target, 1, 0)
+            x.XSync(target_display, 0)
+            previous = "Keep my earlier copy 🦀"
+            self.write_clipboard(previous)
+            subprocess.run(["xdotool", "keydown", "105"], check=True, env=env)
+            time.sleep(.4)
+            subprocess.run(["xdotool", "keyup", "105"], check=True, env=env)
+            received = []
+            def consume_paste():
+                while x.XPending(target_display):
+                    event = KeyUnion()
+                    x.XNextEvent(target_display, ctypes.byref(event))
+                    if event.key.type == 2 and event.key.keycode == 55 and event.key.state & 4:
+                        received.append(self.read_clipboard().stdout.decode())
+                return bool(received)
+            wait(consume_paste)
+            self.assertEqual(received, ["get hub"])
+            wait(lambda: self.read_clipboard().stdout.decode() == previous)
+            with closing(sqlite3.connect(data / "learning.db")) as db:
+                self.assertEqual(db.execute("SELECT raw,pasted FROM samples").fetchall(), [("get hub", "get hub")])
+            self.assertEqual(len(list((data / "audio").glob("*.wav"))), 1)
+            self.assertEqual(list(data.glob("pending-*.wav")), [])
+        finally:
+            x.XDestroyWindow(target_display, target)
+            x.XCloseDisplay(target_display)
         activate("Quit candidate")
         self.assertEqual(app.wait(timeout=10), 0)
 

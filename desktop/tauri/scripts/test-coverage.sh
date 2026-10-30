@@ -26,6 +26,8 @@ if [[ "$(uname -s)" == Linux ]]; then
 fi
 cargo llvm-cov clean --workspace --manifest-path src-tauri/Cargo.toml
 if [[ "$(uname -s)" == Linux ]]; then
+  "$PYTHON" scripts/prepare-audio-fixture.py
+  export ALSA_PLUGIN_DIR="$PWD/.build/alsa"
   env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 ALSA_CONFIG_PATH="$PWD/tests/fixtures/alsa.conf" SPEECHIFY_TEST_SYNTHETIC_ALSA=1 xvfb-run -a \
     cargo llvm-cov --manifest-path src-tauri/Cargo.toml --features behavioral-tests --locked --no-report -- --include-ignored
 else

@@ -117,3 +117,39 @@ fn selected_and_default_microphones_open_capture_and_close_through_the_real_driv
         drop(capture);
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Requires the synthetic ALSA driver supplied by test-coverage.sh"]
+fn driver_sample_formats_and_disconnects_follow_the_same_capture_contract() {
+    assert_eq!(
+        std::env::var("SPEECHIFY_TEST_SYNTHETIC_ALSA").as_deref(),
+        Ok("1")
+    );
+    for kind in ["float", "signed", "unsigned"] {
+        let capture = super::capture::Capture::open(&format!("Speechify {kind} input")).unwrap();
+        let mut audio = Vec::new();
+        crate::behavior_tests::wait_until(|| {
+            audio = capture.audio.take().unwrap();
+            !audio.is_empty()
+        });
+        assert!(audio.iter().all(|sample| (*sample - 0.25).abs() < 0.001));
+        drop(capture);
+        let capture =
+            super::capture::Capture::open(&format!("Speechify {kind} disconnect")).unwrap();
+        let mut error = None;
+        crate::behavior_tests::wait_until(|| {
+            error = capture.audio.take_error();
+            error.is_some()
+        });
+        assert!(error
+            .unwrap()
+            .contains("Microphone disconnected or unavailable"));
+        assert!(super::capture::Capture::open(&format!("Speechify {kind} setup error")).is_err());
+    }
+    let unsupported = super::capture::Capture::open("Speechify unsupported input")
+        .err()
+        .unwrap();
+    assert!(unsupported.contains("Unsupported microphone sample format"));
+    assert!(super::capture::Capture::open("Speechify start error").is_err());
+}
