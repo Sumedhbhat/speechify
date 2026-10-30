@@ -5,8 +5,55 @@ use std::{
     path::Path,
     ptr,
 };
-macro_rules! call {($lib:expr,$name:literal,$ty:ty,$($arg:expr),*)=>{{let f:libloading::Symbol<$ty>=$lib.get(concat!($name,"\0").as_bytes()).map_err(|e|e.to_string())?;f($($arg),*)}};}
-pub(crate) unsafe fn load_runtime(dir: &Path) -> Result<Library> {
+// Resolve the complete C API once at the library boundary. An incomplete
+// installation cannot make a model ready and later fail during dictation.
+macro_rules! runtime_api {
+    ($($name:ident: $signature:ty),* $(,)?) => {
+        struct Api { $($name: $signature),* }
+        impl Api {
+            unsafe fn load(library: &Library) -> Result<Self> {
+                Ok(Self { $($name: resolve(library, concat!(stringify!($name), "\0").as_bytes())?),* })
+            }
+        }
+    };
+}
+unsafe fn resolve<T: Copy>(library: &Library, name: &[u8]) -> Result<T> {
+    library
+        .get::<T>(name)
+        .map(|symbol| *symbol)
+        .map_err(|error| {
+            format!(
+                "Native runtime is incomplete ({}): {error}",
+                String::from_utf8_lossy(&name[..name.len() - 1])
+            )
+        })
+}
+runtime_api! {
+    transcribe_backend_init_params_init: unsafe extern "C" fn(*mut transcribe_backend_init_params),
+    transcribe_init_backends_ex: unsafe extern "C" fn(*const transcribe_backend_init_params) -> i32,
+    transcribe_model_load_params_init: unsafe extern "C" fn(*mut transcribe_model_load_params),
+    transcribe_model_load_file: unsafe extern "C" fn(*const c_char, *const transcribe_model_load_params, *mut *mut c_void) -> i32,
+    transcribe_session_params_init: unsafe extern "C" fn(*mut transcribe_session_params),
+    transcribe_session_init: unsafe extern "C" fn(*mut c_void, *const transcribe_session_params, *mut *mut c_void) -> i32,
+    transcribe_capabilities_init: unsafe extern "C" fn(*mut transcribe_capabilities),
+    transcribe_model_get_capabilities: unsafe extern "C" fn(*mut c_void, *mut transcribe_capabilities) -> i32,
+    transcribe_model_device: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
+    transcribe_device_info_init: unsafe extern "C" fn(*mut transcribe_device_info),
+    transcribe_device_get_info: unsafe extern "C" fn(*mut c_void, *mut transcribe_device_info) -> i32,
+    transcribe_run_params_init: unsafe extern "C" fn(*mut transcribe_run_params),
+    transcribe_model_supports: unsafe extern "C" fn(*mut c_void, i32) -> bool,
+    transcribe_whisper_run_ext_init: unsafe extern "C" fn(*mut transcribe_whisper_run_ext),
+    transcribe_run: unsafe extern "C" fn(*mut c_void, *const f32, i32, *const transcribe_run_params) -> i32,
+    transcribe_full_text: unsafe extern "C" fn(*mut c_void) -> *const c_char,
+    transcribe_session_free: unsafe extern "C" fn(*mut c_void),
+    transcribe_model_free: unsafe extern "C" fn(*mut c_void),
+}
+pub(crate) struct Runtime {
+    api: Api,
+    // Function pointers stay valid until the last model/session has been freed.
+    _library: Library,
+}
+pub(crate) unsafe fn load_runtime(dir: &Path) -> Result<Runtime> {
     let filename = if cfg!(target_os = "windows") {
         "transcribe.dll"
     } else if cfg!(target_os = "macos") {
@@ -35,10 +82,11 @@ pub(crate) unsafe fn load_runtime(dir: &Path) -> Result<Library> {
     #[cfg(not(windows))]
     let lib = Library::new(path).map_err(|e| format!("Native library: {e}"))?;
     verify(&lib)?;
-    Ok(lib)
+    let api = Api::load(&lib)?;
+    Ok(Runtime { api, _library: lib })
 }
 pub struct Native {
-    lib: Library,
+    runtime: Runtime,
     model: *mut c_void,
     session: *mut c_void,
     pub device: String,
@@ -48,31 +96,16 @@ pub struct Native {
 impl Native {
     pub fn open(dir: &Path, path: &Path, device: &str, threads: i32) -> Result<Self> {
         unsafe {
-            let lib = load_runtime(dir)?;
+            let runtime = load_runtime(dir)?;
             let mut init: transcribe_backend_init_params = std::mem::zeroed();
-            call!(
-                lib,
-                "transcribe_backend_init_params_init",
-                unsafe extern "C" fn(*mut transcribe_backend_init_params),
-                &mut init
-            );
-            let artifact =
-                CString::new(dir.to_string_lossy().as_bytes()).map_err(|e| e.to_string())?;
+            (runtime.api.transcribe_backend_init_params_init)(&mut init);
+            let artifact = CString::new(dir.to_string_lossy().as_bytes())
+                .expect("the loaded native directory contains no NUL");
             init.artifact_dir = artifact.as_ptr();
             init.allowed_backends = if device == "cpu" { 1 } else { u32::MAX };
-            check(call!(
-                lib,
-                "transcribe_init_backends_ex",
-                unsafe extern "C" fn(*const transcribe_backend_init_params) -> i32,
-                &init
-            ))?;
+            check((runtime.api.transcribe_init_backends_ex)(&init))?;
             let mut params: transcribe_model_load_params = std::mem::zeroed();
-            call!(
-                lib,
-                "transcribe_model_load_params_init",
-                unsafe extern "C" fn(*mut transcribe_model_load_params),
-                &mut params
-            );
+            (runtime.api.transcribe_model_load_params_init)(&mut params);
             params.backend = match device {
                 "cpu" => 1,
                 "metal" => 2,
@@ -83,20 +116,13 @@ impl Native {
             let path =
                 CString::new(path.to_string_lossy().as_bytes()).map_err(|e| e.to_string())?;
             let mut model = ptr::null_mut();
-            check(call!(
-                lib,
-                "transcribe_model_load_file",
-                unsafe extern "C" fn(
-                    *const c_char,
-                    *const transcribe_model_load_params,
-                    *mut *mut c_void,
-                ) -> i32,
+            check((runtime.api.transcribe_model_load_file)(
                 path.as_ptr(),
                 &params,
-                &mut model
+                &mut model,
             ))?;
             let mut this = Self {
-                lib,
+                runtime,
                 model,
                 session: ptr::null_mut(),
                 device: device.into(),
@@ -104,38 +130,17 @@ impl Native {
                 languages: vec![],
             };
             let mut session: transcribe_session_params = std::mem::zeroed();
-            call!(
-                this.lib,
-                "transcribe_session_params_init",
-                unsafe extern "C" fn(*mut transcribe_session_params),
-                &mut session
-            );
+            (this.runtime.api.transcribe_session_params_init)(&mut session);
             session.n_threads = threads;
-            check(call!(
-                this.lib,
-                "transcribe_session_init",
-                unsafe extern "C" fn(
-                    *mut c_void,
-                    *const transcribe_session_params,
-                    *mut *mut c_void,
-                ) -> i32,
+            check((this.runtime.api.transcribe_session_init)(
                 this.model,
                 &session,
-                &mut this.session
+                &mut this.session,
             ))?;
             let mut caps: transcribe_capabilities = std::mem::zeroed();
-            call!(
-                this.lib,
-                "transcribe_capabilities_init",
-                unsafe extern "C" fn(*mut transcribe_capabilities),
-                &mut caps
-            );
-            check(call!(
-                this.lib,
-                "transcribe_model_get_capabilities",
-                unsafe extern "C" fn(*mut c_void, *mut transcribe_capabilities) -> i32,
-                this.model,
-                &mut caps
+            (this.runtime.api.transcribe_capabilities_init)(&mut caps);
+            check((this.runtime.api.transcribe_model_get_capabilities)(
+                this.model, &mut caps,
             ))?;
             this.max_samples = if caps.max_audio_ms > 0 {
                 caps.max_audio_ms as usize * 16
@@ -152,26 +157,12 @@ impl Native {
                 }
             }
             // Report the selected native backend rather than the requested auto choice.
-            let dev = call!(
-                this.lib,
-                "transcribe_model_device",
-                unsafe extern "C" fn(*mut c_void) -> *mut c_void,
-                this.model
-            );
+            let dev = (this.runtime.api.transcribe_model_device)(this.model);
             if !dev.is_null() {
                 let mut info: transcribe_device_info = std::mem::zeroed();
-                call!(
-                    this.lib,
-                    "transcribe_device_info_init",
-                    unsafe extern "C" fn(*mut transcribe_device_info),
-                    &mut info
-                );
-                check(call!(
-                    this.lib,
-                    "transcribe_device_get_info",
-                    unsafe extern "C" fn(*mut c_void, *mut transcribe_device_info) -> i32,
-                    dev,
-                    &mut info
+                (this.runtime.api.transcribe_device_info_init)(&mut info);
+                check((this.runtime.api.transcribe_device_get_info)(
+                    dev, &mut info,
                 ))?;
                 if !info.kind.is_null() {
                     this.device = CStr::from_ptr(info.kind).to_string_lossy().into_owned();
@@ -185,26 +176,14 @@ impl Native {
             let mut results = vec![];
             for chunk in audio.chunks(self.max_samples.max(16000)) {
                 let mut p: transcribe_run_params = std::mem::zeroed();
-                call!(
-                    self.lib,
-                    "transcribe_run_params_init",
-                    unsafe extern "C" fn(*mut transcribe_run_params),
-                    &mut p
-                );
+                (self.runtime.api.transcribe_run_params_init)(&mut p);
                 let lang = CString::new(language).map_err(|e| e.to_string())?;
                 if self.languages.iter().any(|x| x == language) {
                     p.language = lang.as_ptr();
                 }
-                let supports = |feature| -> Result<bool> {
-                    Ok(call!(
-                        self.lib,
-                        "transcribe_model_supports",
-                        unsafe extern "C" fn(*mut c_void, i32) -> bool,
-                        self.model,
-                        feature
-                    ))
-                };
-                if supports(4)? {
+                let supports =
+                    |feature| (self.runtime.api.transcribe_model_supports)(self.model, feature);
+                if supports(4) {
                     p.pnc = 2;
                 }
                 let text = if language == "en" {
@@ -214,47 +193,31 @@ impl Native {
                 };
                 let text = CString::new(text).map_err(|e| e.to_string())?;
                 let mut ext: transcribe_whisper_run_ext = std::mem::zeroed();
-                if supports(0)? {
-                    call!(
-                        self.lib,
-                        "transcribe_whisper_run_ext_init",
-                        unsafe extern "C" fn(*mut transcribe_whisper_run_ext),
-                        &mut ext
-                    );
+                if supports(0) {
+                    (self.runtime.api.transcribe_whisper_run_ext_init)(&mut ext);
                     ext.initial_prompt = text.as_ptr();
                     p.family = &ext.ext;
-                } else if supports(8)? {
+                } else if supports(8) {
                     p.prompt = text.as_ptr();
                 }
                 let words: Vec<CString> = prompt
                     .split(',')
-                    .filter_map(|x| CString::new(x.trim()).ok())
+                    .map(|x| {
+                        CString::new(x.trim()).expect("the complete prompt was validated above")
+                    })
                     .collect();
                 let pointers: Vec<_> = words.iter().map(|x| x.as_ptr()).collect();
-                if supports(7)? {
+                if supports(7) {
                     p.vocabulary = pointers.as_ptr();
                     p.n_vocabulary = pointers.len() as i32;
                 }
-                check(call!(
-                    self.lib,
-                    "transcribe_run",
-                    unsafe extern "C" fn(
-                        *mut c_void,
-                        *const f32,
-                        i32,
-                        *const transcribe_run_params,
-                    ) -> i32,
+                check((self.runtime.api.transcribe_run)(
                     self.session,
                     chunk.as_ptr(),
                     chunk.len() as i32,
-                    &p
+                    &p,
                 ))?;
-                let out = call!(
-                    self.lib,
-                    "transcribe_full_text",
-                    unsafe extern "C" fn(*mut c_void) -> *const c_char,
-                    self.session
-                );
+                let out = (self.runtime.api.transcribe_full_text)(self.session);
                 if !out.is_null() {
                     results.push(CStr::from_ptr(out).to_string_lossy().trim().to_owned());
                 }
@@ -274,20 +237,10 @@ impl Drop for Native {
     fn drop(&mut self) {
         unsafe {
             if !self.session.is_null() {
-                if let Ok(f) = self
-                    .lib
-                    .get::<unsafe extern "C" fn(*mut c_void)>(b"transcribe_session_free\0")
-                {
-                    f(self.session);
-                }
+                (self.runtime.api.transcribe_session_free)(self.session);
             }
             if !self.model.is_null() {
-                if let Ok(f) = self
-                    .lib
-                    .get::<unsafe extern "C" fn(*mut c_void)>(b"transcribe_model_free\0")
-                {
-                    f(self.model);
-                }
+                (self.runtime.api.transcribe_model_free)(self.model);
             }
         }
     }

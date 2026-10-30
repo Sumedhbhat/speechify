@@ -7,6 +7,8 @@ use crate::{
     store::{self, Store},
 };
 use serde_json::{json, Value};
+#[path = "native.rs"]
+mod native_behavior;
 use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
