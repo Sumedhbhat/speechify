@@ -29,6 +29,9 @@ fn native_permission_focus_key_state_and_paste_outcomes_follow_the_desktop_contr
         );
         return;
     }
+    // The fixture is loaded in this test process. System utilities such as
+    // pbcopy use arm64e and must not inherit our arm64 interposer.
+    std::env::remove_var("DYLD_INSERT_LIBRARIES");
     unsafe {
         let fixture = Library::new(path).unwrap();
         let reset = fixture
