@@ -69,22 +69,30 @@ def check(frontend: Path, backends: list[Path], details: bool = False) -> list[s
     files = {}
     for path in backends:
         current = None
+        function_lines = {}
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.startswith("SF:"):
                 current = files.setdefault(source_path(line[3:]), {"lines": {}, "functions": {}})
+                function_lines = {}
             elif line == "end_of_record":
                 current = None
             elif current is not None and line.startswith("DA:"):
                 number, count, *_ = line[3:].split(",")
                 current["lines"][number] = max(current["lines"].get(number, 0), int(count))
+            elif current is not None and line.startswith("FN:"):
+                number, name = line[3:].split(",", 1)
+                function_lines[name] = int(number)
             elif current is not None and line.startswith("FNDA:"):
                 count, name = line[5:].split(",", 1)
-                current["functions"][name] = max(current["functions"].get(name, 0), int(count))
+                if name not in function_lines:
+                    raise ValueError(f"{path}: function has no source location: {name}")
+                key = (name, function_lines[name])
+                current["functions"][key] = max(current["functions"].get(key, 0), int(count))
     # The same function has different linker symbols in test/CLI binaries and
     # across target triples. Demangle names before merging their executions.
     # rustfilt's stdin filter only recognizes legacy symbols; pass names as args
     # so its demangler also handles the current Rust v0 symbol format.
-    symbols = sorted({name for f in files.values() for name in f["functions"] if name.startswith(("_R", "_ZN"))})
+    symbols = sorted({name for f in files.values() for name, _ in f["functions"] if name.startswith(("_R", "_ZN"))})
     canonical = {}
     for offset in range(0, len(symbols), 40):
         batch = symbols[offset:offset + 40]
@@ -95,8 +103,10 @@ def check(frontend: Path, backends: list[Path], details: bool = False) -> list[s
         canonical.update(zip(batch, names))
     for report in files.values():
         merged = {}
-        for name, count in report["functions"].items():
-            key = function_definition(canonical.get(name, name))
+        for (name, line), count in report["functions"].items():
+            # cfg-specific bodies can have identical Rust names. Their source
+            # locations distinguish e.g. Windows and X11 Poller::new().
+            key = f"{function_definition(canonical.get(name, name))} [line {line}]"
             merged[key] = max(merged.get(key, 0), count)
         report["functions"] = merged
     for source in sorted((ROOT / "src-tauri/src").glob("*.rs")):

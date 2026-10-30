@@ -13,6 +13,9 @@ They let tests verify the real ABI and process protocols with small deterministi
 inputs. Model downloads use a local HTTP server and real SHA-256 verification.
 Actual speech recognition can also be checked with the application's `fixture`
 command and an installed native model.
+The coverage runner caches the catalog's pinned Moonshine GGUF (about 77 MB)
+under `.build/fixtures` for the real model-reuse and disk-failure scenarios.
+It verifies the catalog SHA-256 before using this artifact.
 
 Install `cargo-llvm-cov` 0.9.1, `rustfilt` 0.2.0, and the Rust
 `llvm-tools-preview` component, then run:
@@ -41,6 +44,8 @@ combining execution counts from different binaries and target triples.
 Generic instantiations count as one source function; distinct closure bodies
 remain separate. Source and dependency fingerprints prevent combining reports
 from different versions of the application.
+Source locations keep same-named platform implementations separate, so running
+the X11 poller cannot satisfy the Windows or macOS poller's function coverage.
 Linux uses continuous LLVM profiling so pre-exec child setup and cancelled
 helpers retain their execution counts. A standalone collector test verifies
 this behavior before the application run. Add `--details` to the gate command

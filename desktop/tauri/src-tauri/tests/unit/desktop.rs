@@ -1,6 +1,55 @@
 use super::*;
 use crate::behavior_tests::Home;
 
+#[cfg(feature = "behavioral-tests")]
+#[test]
+fn ipc_commands_parse_requests_return_saved_settings_and_report_background_failures() {
+    let home = Home::new();
+    let service = home.service();
+    let app = tauri::test::mock_builder()
+        .manage(service.clone())
+        .invoke_handler(tauri::generate_handler![request])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let invoke = |body| {
+        tauri::test::get_ipc_response(
+            &webview,
+            tauri::webview::InvokeRequest {
+                cmd: "request".into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "tauri://localhost".parse().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(body),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.into(),
+            },
+        )
+        .map(|response| response.deserialize::<Value>().unwrap())
+    };
+    assert!(invoke(json!({"args":{}})).is_err());
+    assert!(invoke(json!({"op":"snapshot"})).is_err());
+    assert!(invoke(json!({"op":"unknown","args":{}})).is_err());
+    let mut cfg = invoke(json!({"op":"snapshot","args":{}})).unwrap()["config"].clone();
+    cfg["theme"] = json!("dark");
+    assert_eq!(invoke(json!({"op":"settings","args":cfg})).unwrap(), true);
+    assert_eq!(crate::config::load(&home.0).unwrap()["theme"], "dark");
+    assert_eq!(
+        invoke(json!({"op":"snapshot","args":{}})).unwrap()["config"]["theme"],
+        "dark"
+    );
+    let broken = service.clone();
+    assert!(std::thread::spawn(move || {
+        let _state = broken.state.lock().unwrap();
+        panic!("Simulated background service failure");
+    })
+    .join()
+    .is_err());
+    assert!(invoke(json!({"op":"snapshot","args":{}})).is_err());
+}
+
 #[test]
 fn history_commands_save_correct_revert_exclude_export_and_delete() {
     let home = Home::new();
@@ -195,6 +244,138 @@ fn malformed_commands_are_refused_without_changing_history_or_starting_work() {
     );
     dispatch(&service, "cancel", &json!({})).unwrap();
     assert_eq!(service.snapshot()["state"]["stage"], "Cancelled");
+}
+
+#[test]
+fn optional_install_commands_report_progress_success_failure_and_cancellation() {
+    use crate::behavior_tests::wait_until;
+    for mode in ["success", "failure", "cancel"] {
+        let home = Home::new();
+        let service = home.service();
+        std::fs::write(home.0.join("resources/install-exception.py"), format!(
+            "import pathlib,sys,time\nr=pathlib.Path(sys.argv[sys.argv.index('--root')+1])\nprint('{{\"stage\":\"Installing fixture\"}}',flush=True)\nwhile not (r/'finish').exists():time.sleep(.01)\nraise SystemExit({})\n", if mode == "failure" { 3 } else { 0 }
+        )).unwrap();
+        assert_eq!(
+            dispatch(&service, "install", &json!({"id":"training"})).unwrap(),
+            true
+        );
+        wait_until(|| service.snapshot()["state"]["download"]["stage"] == "Installing fixture");
+        assert!(service.downloading.load(Ordering::SeqCst));
+        assert!(dispatch(
+            &service,
+            "settings",
+            &service.config.lock().unwrap().clone()
+        )
+        .is_err());
+        assert!(dispatch(&service, "install", &json!({"id":"training"})).is_err());
+        if mode == "cancel" {
+            dispatch(&service, "cancel", &json!({})).unwrap();
+        } else {
+            std::fs::write(home.0.join("finish"), "").unwrap();
+        }
+        let expected = if mode == "success" {
+            "Installed"
+        } else {
+            "Failed"
+        };
+        wait_until(|| service.snapshot()["state"]["download"]["stage"] == expected);
+        let status = service.snapshot()["state"]["download"].clone();
+        assert_eq!(status["id"], "training");
+        if mode == "cancel" {
+            assert!(status["error"].as_str().unwrap().contains("cancelled"));
+        }
+        assert!(!service.downloading.load(Ordering::SeqCst));
+        assert_eq!(service.install_pid.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn an_unverified_complete_download_never_replaces_an_existing_model() {
+    use crate::behavior_tests::wait_until;
+    let home = Home::new();
+    let service = home.service();
+    let model = crate::models::path(&home.0, "moonshine-base").unwrap();
+    std::fs::write(&model, "Existing model").unwrap();
+    let partial = model.with_extension("partial");
+    let file = std::fs::File::create(&partial).unwrap();
+    file.set_len(
+        crate::models::spec("moonshine-base").unwrap()["gguf"]["size"]
+            .as_u64()
+            .unwrap(),
+    )
+    .unwrap();
+    drop(file);
+    dispatch(&service, "install", &json!({"id":"moonshine-base"})).unwrap();
+    wait_until(|| service.snapshot()["state"]["download"]["stage"] == "Failed");
+    assert!(service.snapshot()["state"]["download"]["error"]
+        .as_str()
+        .unwrap()
+        .contains("SHA-256 mismatch"));
+    assert_eq!(std::fs::read_to_string(model).unwrap(), "Existing model");
+    assert!(!partial.exists());
+    assert!(!service.downloading.load(Ordering::SeqCst));
+}
+
+#[test]
+#[ignore = "Requires the pinned GGUF supplied by test-coverage.sh"]
+fn reuse_model_validates_and_copies_the_real_artifact_without_losing_it_on_disk_errors() {
+    let home = Home::new();
+    let service = home.service();
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../.build/fixtures/moonshine-base.gguf");
+    let destination = crate::models::path(&home.0, "moonshine-base").unwrap();
+    let partial = destination.with_extension("partial");
+    let args = json!({"id":"moonshine-base","path":source});
+    std::fs::write(&destination, "Old installation").unwrap();
+    std::fs::write(&partial, "Interrupted replacement").unwrap();
+    assert_eq!(dispatch(&service, "reuse_model", &args).unwrap(), true);
+    let expected = std::fs::read(&source).unwrap();
+    assert!(std::fs::read(&destination).unwrap() == expected);
+    assert!(!partial.exists());
+    assert_eq!(
+        service.snapshot()["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["id"] == "moonshine-base")
+            .unwrap()["installed"],
+        true
+    );
+    std::fs::create_dir(&partial).unwrap();
+    assert!(dispatch(&service, "reuse_model", &args).is_err());
+    assert!(std::fs::read(&destination).unwrap() == expected);
+    std::fs::remove_dir(&partial).unwrap();
+    std::fs::remove_file(&destination).unwrap();
+    std::fs::create_dir(&destination).unwrap();
+    assert!(dispatch(&service, "reuse_model", &args).is_err());
+    assert!(destination.is_dir());
+    assert!(std::fs::read(&source).unwrap() == expected);
+}
+
+#[test]
+fn load_and_train_commands_keep_the_current_model_when_training_is_rejected() {
+    use crate::behavior_tests::{fake_service, training_environment, wait_until};
+    let home = Home::new();
+    let service = fake_service(&home, "");
+    assert_eq!(dispatch(&service, "load", &json!({})).unwrap(), true);
+    assert_eq!(service.snapshot()["state"]["ready"], true);
+    training_environment(
+        &home,
+        r#"{"status":"rejected","gate1":{"passed":false},"gate2":{"passed":true}}"#,
+    );
+    let before = service.config.lock().unwrap().clone();
+    dispatch(&service, "train", &json!({})).unwrap();
+    wait_until(|| !service.learning_busy.load(Ordering::SeqCst));
+    assert_eq!(
+        service
+            .store
+            .lock()
+            .unwrap()
+            .get_state("training_status")
+            .unwrap()["status"],
+        "rejected"
+    );
+    assert_eq!(crate::config::load(&home.0).unwrap(), before);
 }
 
 #[test]

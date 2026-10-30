@@ -23,6 +23,7 @@ tauri-plugin-single-instance = { version = "=2.5.3", optional = true }
 [features]
 default = ["desktop"]
 desktop = ["dep:tauri", "dep:cpal", "dep:tauri-plugin-single-instance"]
+behavioral-tests = ["desktop", "tauri/test"]
 [profile.dev]
 debug = 0
 incremental = false

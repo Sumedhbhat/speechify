@@ -13,6 +13,7 @@ fi
 npm run test:coverage
 npm run build
 "$PYTHON" scripts/prepare-native.py
+"$PYTHON" scripts/prepare-test-model.py
 # Exercise the built frontend in the debug coverage executable.
 export TAURI_CONFIG='{"build":{"devUrl":null}}'
 profile_mode=""
@@ -26,11 +27,11 @@ fi
 cargo llvm-cov clean --workspace --manifest-path src-tauri/Cargo.toml
 if [[ "$(uname -s)" == Linux ]]; then
   env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 ALSA_CONFIG_PATH="$PWD/tests/fixtures/alsa.conf" SPEECHIFY_TEST_SYNTHETIC_ALSA=1 xvfb-run -a \
-    cargo llvm-cov --manifest-path src-tauri/Cargo.toml --locked --no-report -- --include-ignored
+    cargo llvm-cov --manifest-path src-tauri/Cargo.toml --features behavioral-tests --locked --no-report -- --include-ignored
 else
-  cargo llvm-cov --manifest-path src-tauri/Cargo.toml --locked --no-report -- --include-ignored
+  cargo llvm-cov --manifest-path src-tauri/Cargo.toml --features behavioral-tests --locked --no-report -- --include-ignored
 fi
-cargo llvm-cov run --manifest-path src-tauri/Cargo.toml --locked --no-clean --json --output-path coverage/rust.json -- diagnostics
+cargo llvm-cov run --manifest-path src-tauri/Cargo.toml --features behavioral-tests --locked --no-clean --json --output-path coverage/rust.json -- diagnostics
 LLVM_PROFILE_FILE="$PWD/src-tauri/target/llvm-cov-target/cli-%p-%m${profile_mode}.profraw" \
   "$PYTHON" tests/cli.test.py src-tauri/target/llvm-cov-target/debug/speechify-tauri-candidate
 cargo llvm-cov report --manifest-path src-tauri/Cargo.toml --json --output-path coverage/rust.json

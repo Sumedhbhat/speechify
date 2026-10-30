@@ -28,7 +28,7 @@ class CoverageGate(unittest.TestCase):
 
     def backend(self, name, source, counts):
         path = self.root / name
-        path.write_text(f"SF:{source}\n" + "\n".join(f"DA:{line},{count}" for line, count in counts) + "\nFNDA:1,application_function\nend_of_record\n")
+        path.write_text(f"SF:{source}\n" + "\n".join(f"DA:{line},{count}" for line, count in counts) + "\nFN:1,application_function\nFNDA:1,application_function\nend_of_record\n")
         return path
 
     def test_platform_files_must_be_measured_even_on_another_host(self):
@@ -50,6 +50,21 @@ class CoverageGate(unittest.TestCase):
         self.assertIn("src/main.ts: 1/1 functions uncovered", failures)
         self.assertIn("src/main.ts: 1/2 branches uncovered", failures)
         self.assertIn("src/new-feature.ts: not measured", failures)
+
+    def test_same_named_platform_functions_cannot_cover_each_others_bodies(self):
+        linux = self.backend("linux.info", "src-tauri/src/main.rs", [(1, 1), (2, 0)])
+        windows = self.backend("windows.info", "src-tauri/src/main.rs", [(1, 0), (2, 1)])
+        windows.write_text(windows.read_text().replace("FN:1,", "FN:2,").replace("FNDA:1,", "FNDA:0,"))
+        mac = self.backend("mac.info", "src-tauri/src/mac_clipboard.rs", [(1, 1)])
+        failures = gate.check(self.frontend, [linux, windows, mac], details=True)
+        self.assertIn("src-tauri/src/main.rs: 1/2 functions uncovered", failures)
+        self.assertIn("  functions: application_function [line 2]", failures)
+
+    def test_a_function_count_without_a_source_definition_is_rejected(self):
+        backend = self.backend("invalid.info", "src-tauri/src/main.rs", [(1, 1)])
+        backend.write_text(backend.read_text().replace("FN:1,application_function\n", ""))
+        with self.assertRaisesRegex(ValueError, "no source location"):
+            gate.check(self.frontend, [backend])
 
     def test_generic_instantiations_merge_but_distinct_closure_bodies_do_not(self):
         first = "app::download::<app::install<first::Callback>>::{closure#0}"
