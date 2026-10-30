@@ -37,14 +37,14 @@ pub fn path(root: &Path, id: &str) -> Result<PathBuf> {
     owned(&root.join("models"), &format!("{id}.gguf"))
 }
 pub fn verify(path: &Path, expected: &str, cancel: &AtomicBool) -> Result<()> {
-    let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut f = std::fs::File::open(path).map_err(crate::config::err)?;
     let mut h = Sha256::new();
     let mut buf = [0u8; 1024 * 128];
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err("Cancelled".into());
         }
-        let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+        let n = f.read(&mut buf).map_err(crate::config::err)?;
         if n == 0 {
             break;
         }
@@ -108,10 +108,11 @@ fn install_artifact(
             let _ = std::fs::remove_file(&tmp);
             return Err(error);
         }
+        progress("Installing", total);
         if cancel.load(Ordering::Relaxed) {
             return Err("Cancelled".into());
         }
-        std::fs::rename(&tmp, dst).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, dst).map_err(crate::config::err)?;
         Ok(())
     })();
     // Network/disk failures retain the resumable prefix; cancellation removes it.
@@ -131,19 +132,19 @@ fn download(
         .connect_timeout(std::time::Duration::from_secs(20))
         .timeout(std::time::Duration::from_secs(30))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(crate::config::err)?;
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
         .open(tmp)
-        .map_err(|e| e.to_string())?;
-    let mut bytes = f.metadata().map_err(|e| e.to_string())?.len();
+        .map_err(crate::config::err)?;
+    let mut bytes = f.metadata().map_err(crate::config::err)?.len();
     if bytes > total {
-        f.set_len(0).map_err(|e| e.to_string())?;
+        f.set_len(0).map_err(crate::config::err)?;
         bytes = 0;
     }
-    f.seek(SeekFrom::Start(bytes)).map_err(|e| e.to_string())?;
+    f.seek(SeekFrom::Start(bytes)).map_err(crate::config::err)?;
     progress(bytes);
     while bytes < total {
         if cancel.load(Ordering::Relaxed) {
@@ -157,7 +158,7 @@ fn download(
                 .header(reqwest::header::RANGE, format!("bytes={bytes}-{end}"))
                 .send()
                 .and_then(|r| r.error_for_status())
-                .map_err(|e| e.to_string())?;
+                .map_err(crate::config::err)?;
             if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
                 return Err(
                     "Model host did not honor a bounded range request; retry later".to_owned(),
@@ -179,11 +180,11 @@ fn download(
                     return Err("Cancelled".into());
                 }
                 let want = remaining.min(buf.len() as u64) as usize;
-                let n = response.read(&mut buf[..want]).map_err(|e| e.to_string())?;
+                let n = response.read(&mut buf[..want]).map_err(crate::config::err)?;
                 if n == 0 {
                     return Err("Download was truncated".into());
                 }
-                f.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+                f.write_all(&buf[..n]).map_err(crate::config::err)?;
                 bytes += n as u64;
                 remaining -= n as u64;
             }
@@ -198,7 +199,7 @@ fn download(
             }
         }
     }
-    f.sync_all().map_err(|e| e.to_string())
+    f.sync_all().map_err(crate::config::err)
 }
 
 pub fn list(root: &Path) -> Vec<Value> {

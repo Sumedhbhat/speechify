@@ -95,7 +95,7 @@ fn read(target: &str) -> Result<Vec<u8>> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| e.to_string())?;
+        .map_err(crate::config::err)?;
     let mut bytes = Vec::new();
     let result = child
         .stdout
@@ -110,7 +110,7 @@ fn read(target: &str) -> Result<Vec<u8>> {
             "Clipboard target {target} exceeds 128 KiB or cannot be read; use manual copy"
         ));
     }
-    let status = child.wait().map_err(|e| e.to_string())?;
+    let status = child.wait().map_err(crate::config::err)?;
     if !status.success() {
         return Err(format!(
             "Cannot snapshot clipboard target {target}; use manual copy"
@@ -128,7 +128,7 @@ fn supported(target: &str) -> bool {
 pub fn begin(text: &str) -> Result<()> {
     use std::io::{BufRead, Write};
     use std::process::Stdio;
-    let mut cmd = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+    let mut cmd = Command::new(std::env::current_exe().map_err(crate::config::err)?);
     cmd.arg("--clipboard-worker")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -137,15 +137,15 @@ pub fn begin(text: &str) -> Result<()> {
     let pid = child.id();
     let result = (|| {
         writeln!(child.stdin.take().unwrap(), "{}", serde_json::json!(text))
-            .map_err(|e| e.to_string())?;
+            .map_err(crate::config::err)?;
         let stdout = child.stdout.take().unwrap();
         let (tx, rx) = mpsc::sync_channel(1);
         std::thread::spawn(move || {
             let mut line = String::new();
             let result = std::io::BufReader::new(stdout)
                 .read_line(&mut line)
-                .map_err(|e| e.to_string())
-                .and_then(|_| serde_json::from_str::<Result<()>>(&line).map_err(|e| e.to_string()))
+                .map_err(crate::config::err)
+                .and_then(|_| serde_json::from_str::<Result<()>>(&line).map_err(crate::config::err))
                 .and_then(|v| v);
             let _ = tx.send(result);
         });
@@ -167,17 +167,17 @@ pub fn worker() -> Result<()> {
     std::io::stdin()
         .lock()
         .read_line(&mut line)
-        .map_err(|e| e.to_string())?;
-    let text: String = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+        .map_err(crate::config::err)?;
+    let text: String = serde_json::from_str(&line).map_err(crate::config::err)?;
     let (tx, rx) = mpsc::sync_channel(1);
     let thread = std::thread::spawn(move || {
         if let Err(e) = serve(text.into_bytes(), &tx) {
             let _ = tx.send(Err(e));
         }
     });
-    let result = rx.recv().map_err(|e| e.to_string())?;
+    let result = rx.recv().map_err(crate::config::err)?;
     println!("{}", serde_json::to_string(&result).unwrap());
-    std::io::stdout().flush().map_err(|e| e.to_string())?;
+    std::io::stdout().flush().map_err(crate::config::err)?;
     result?;
     thread
         .join()
@@ -186,10 +186,10 @@ pub fn worker() -> Result<()> {
 }
 fn serve(text: Vec<u8>, ready: &mpsc::SyncSender<Result<()>>) -> Result<()> {
     unsafe {
-        let lib = Library::new("libX11.so.6").map_err(|e| e.to_string())?;
+        let lib = Library::new("libX11.so.6").map_err(crate::config::err)?;
         let open = lib
             .get::<unsafe extern "C" fn(*const c_char) -> Display>(b"XOpenDisplay\0")
-            .map_err(|e| e.to_string())?;
+            .map_err(crate::config::err)?;
         let d = open(std::ptr::null());
         if d.is_null() {
             return Err("Cannot open clipboard display".into());
@@ -223,12 +223,12 @@ fn serve(text: Vec<u8>, ready: &mpsc::SyncSender<Result<()>>) -> Result<()> {
             .get::<unsafe extern "C" fn(Display, *mut c_int, *mut c_int) -> c_int>(
                 b"XFixesQueryExtension\0",
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(crate::config::err)?;
         let select = fixes
             .get::<unsafe extern "C" fn(Display, c_ulong, Atom, c_ulong)>(
                 b"XFixesSelectSelectionInput\0",
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(crate::config::err)?;
         let (mut event_base, mut error_base) = (0, 0);
         if query(d, &mut event_base, &mut error_base) == 0 {
             return Err("XFixes selection notifications unavailable; use manual copy".into());
@@ -263,9 +263,6 @@ fn serve(text: Vec<u8>, ready: &mpsc::SyncSender<Result<()>>) -> Result<()> {
                     ));
                 }
                 let data = read(name)?;
-                if data.len() > 128 * 1024 {
-                    return Err("Clipboard target exceeds safe direct transfer size (128 KiB); use manual copy".into());
-                }
                 bytes += data.len();
                 if bytes > 32 * 1024 * 1024 {
                     return Err("Clipboard snapshot exceeds 32 MB; use manual copy".into());

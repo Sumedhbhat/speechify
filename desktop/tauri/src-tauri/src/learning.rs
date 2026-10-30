@@ -177,7 +177,7 @@ fn teacher(s: &Arc<Service>, cfg: &Value) -> Result<()> {
         let text = result["text"].as_str().unwrap_or("");
         let audio = crate::audio::load(&path)?;
         let (confidence, note) = judge(text, audio.len() as f64 / 16000.);
-        s.store.lock().unwrap().db.execute("UPDATE samples SET teacher_text=?,teacher_model=?,teacher_confidence=?,teacher_ts=?,teacher_note=? WHERE id=?",rusqlite::params![text,teacher,confidence,now(),note,id]).map_err(|e|e.to_string())?;
+        s.store.lock().unwrap().db.execute("UPDATE samples SET teacher_text=?,teacher_model=?,teacher_confidence=?,teacher_ts=?,teacher_note=? WHERE id=?",rusqlite::params![text,teacher,confidence,now(),note,id]).map_err(crate::config::err)?;
         s.store.lock().unwrap().state(
             "teacher_status",
             &json!(format!("Labelled sample {id}; confidence {confidence:.2}")),
@@ -305,7 +305,7 @@ fn start_training_on_power(s: Arc<Service>, on_mains: bool) -> Result<()> {
             .stderr(Stdio::null());
             let (mut child, _owner) = crate::child_owner::spawn(&mut cmd)?;
             s.training_pid.store(child.id(), Ordering::SeqCst);
-            let status = child.wait().map_err(|e| e.to_string())?;
+            let status = child.wait().map_err(crate::config::err)?;
             s.training_pid.store(0, Ordering::SeqCst);
             if !status.success() {
                 return Err(
@@ -313,8 +313,8 @@ fn start_training_on_power(s: Arc<Service>, on_mains: bool) -> Result<()> {
                 );
             }
             let result: Value =
-                serde_json::from_str(&std::fs::read_to_string(&report).map_err(|e| e.to_string())?)
-                    .map_err(|e| e.to_string())?;
+                serde_json::from_str(&std::fs::read_to_string(&report).map_err(crate::config::err)?)
+                    .map_err(crate::config::err)?;
             s.store.lock().unwrap().state("training_status", &result)?;
             if !gates(&result) {
                 return Ok(());
@@ -326,8 +326,8 @@ fn start_training_on_power(s: Arc<Service>, on_mains: bool) -> Result<()> {
                 .to_string_lossy()
                 .into_owned();
             let safe = owned(&s.root.join("models"), &name)?;
-            if safe.canonicalize().map_err(|e| e.to_string())?
-                != path.canonicalize().map_err(|e| e.to_string())?
+            if safe.canonicalize().map_err(crate::config::err)?
+                != path.canonicalize().map_err(crate::config::err)?
             {
                 return Err("Trainer returned an external path".into());
             }
@@ -388,10 +388,10 @@ fn prune(s: &Service, keep: usize) -> Result<()> {
                     .to_string_lossy();
                 let candidate = owned(&s.root.join("models"), &name)?;
                 if path.exists()
-                    && path.canonicalize().map_err(|e| e.to_string())?
-                        == candidate.canonicalize().map_err(|e| e.to_string())?
+                    && path.canonicalize().map_err(crate::config::err)?
+                        == candidate.canonicalize().map_err(crate::config::err)?
                 {
-                    std::fs::remove_dir_all(candidate).map_err(|e| e.to_string())?;
+                    std::fs::remove_dir_all(candidate).map_err(crate::config::err)?;
                 }
             }
         }

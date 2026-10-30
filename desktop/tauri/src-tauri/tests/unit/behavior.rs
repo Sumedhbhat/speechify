@@ -1053,3 +1053,64 @@ fn learned_glossary_budget_includes_separators_between_terms() {
     // The third term would make the native glossary exceed its 450-byte budget.
     assert!(store.prompt().unwrap().len() <= 450);
 }
+
+#[test]
+fn resampling_preserves_constant_audio_at_edges_and_extreme_valid_sample_rates() {
+    for rate in [1, 8000, 11025, 16000, 22050, 44100, 48000, 96000, u32::MAX] {
+        let count = if rate == u32::MAX {
+            268_436
+        } else if rate == 1 {
+            1
+        } else {
+            31
+        };
+        let audio = audio::resample(&vec![0.25; count], rate, 1);
+        assert_eq!(audio.len(), (count as u64 * 16000 / rate as u64) as usize);
+        assert!(!audio.is_empty());
+        assert!(
+            audio.iter().all(|value| (*value - 0.25).abs() < 0.00001),
+            "invalid samples at {rate} Hz"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn running_out_of_space_while_saving_settings_keeps_the_last_saved_configuration() {
+    let home = Home::new();
+    let before = config::defaults();
+    config::save(&home.0, &before).unwrap();
+    let mut changed = before.clone();
+    changed["theme"] = json!("dark");
+    std::os::unix::fs::symlink("/dev/full", home.0.join("config.tmp")).unwrap();
+    assert!(config::save(&home.0, &changed).is_err());
+    assert_eq!(config::load(&home.0).unwrap(), before);
+}
+
+#[test]
+fn export_skips_missing_recordings_and_delete_still_removes_the_history_entry() {
+    let home = Home::new();
+    let mut store = home.store();
+    let id = store.record(&[0.1; 160], "hello", "hello", true).unwrap();
+    store.edit(id, "a corrected label").unwrap();
+    std::fs::remove_file(store.audio_path(id).unwrap()).unwrap();
+    let exported = store.export(0.7).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(exported.join("metadata.csv")).unwrap(),
+        "file_name,transcription,source\n"
+    );
+    store.delete(id).unwrap();
+    assert!(store.history("", "").unwrap().is_empty());
+}
+
+#[test]
+fn settings_with_an_unserializable_extra_value_are_rejected_without_losing_valid_settings() {
+    let home = Home::new();
+    let service = home.service();
+    let before = service.config.lock().unwrap().clone();
+    let mut changed = before.clone();
+    changed["extra"] = Value::Null;
+    assert!(service.update(changed).is_err());
+    assert_eq!(*service.config.lock().unwrap(), before);
+    assert_eq!(config::load(&home.0).unwrap(), before);
+}

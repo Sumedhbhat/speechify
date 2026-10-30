@@ -114,7 +114,7 @@ impl Native {
                 _ => 0,
             };
             let path =
-                CString::new(path.to_string_lossy().as_bytes()).map_err(|e| e.to_string())?;
+                CString::new(path.to_string_lossy().as_bytes()).map_err(crate::config::err)?;
             let mut model = ptr::null_mut();
             check((runtime.api.transcribe_model_load_file)(
                 path.as_ptr(),
@@ -177,7 +177,7 @@ impl Native {
             for chunk in audio.chunks(self.max_samples.max(16000)) {
                 let mut p: transcribe_run_params = std::mem::zeroed();
                 (self.runtime.api.transcribe_run_params_init)(&mut p);
-                let lang = CString::new(language).map_err(|e| e.to_string())?;
+                let lang = CString::new(language).map_err(crate::config::err)?;
                 if self.languages.iter().any(|x| x == language) {
                     p.language = lang.as_ptr();
                 }
@@ -191,7 +191,7 @@ impl Native {
                 } else {
                     prompt.into()
                 };
-                let text = CString::new(text).map_err(|e| e.to_string())?;
+                let text = CString::new(text).map_err(crate::config::err)?;
                 let mut ext: transcribe_whisper_run_ext = std::mem::zeroed();
                 if supports(0) {
                     (self.runtime.api.transcribe_whisper_run_ext_init)(&mut ext);

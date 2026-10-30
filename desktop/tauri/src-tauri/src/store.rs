@@ -1,4 +1,4 @@
-use crate::config::{owned, Result};
+use crate::config::{err, owned, Result};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -6,9 +6,6 @@ pub struct Store {
     pub db: Connection,
     pub root: PathBuf,
     latest_audio: std::cell::RefCell<Option<(i64, Vec<f32>)>>,
-}
-fn err(e: impl std::fmt::Display) -> String {
-    e.to_string()
 }
 pub fn now() -> f64 {
     std::time::SystemTime::now()

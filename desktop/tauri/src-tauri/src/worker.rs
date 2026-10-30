@@ -34,14 +34,14 @@ pub fn serve(dir: &Path, model: &Path, device: &str, threads: i32) -> Result<()>
         "{}",
         json!({"ready":true,"device":loaded.device,"load_ms":t.elapsed().as_secs_f64()*1000.})
     );
-    std::io::stdout().flush().map_err(|e| e.to_string())?;
+    std::io::stdout().flush().map_err(crate::config::err)?;
     let mut engine = Some(loaded);
     for line in std::io::stdin().lock().lines() {
-        let line = line.map_err(|e| e.to_string())?;
+        let line = line.map_err(crate::config::err)?;
         if line.len() > 32768 {
             return Err("Worker message too large".into());
         }
-        let request: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+        let request: Value = serde_json::from_str(&line).map_err(crate::config::err)?;
         let start = Instant::now();
         let result: Result<String> = (|| {
             let audio =
@@ -66,7 +66,7 @@ pub fn serve(dir: &Path, model: &Path, device: &str, threads: i32) -> Result<()>
             Err(error) => json!({"error":error}),
         };
         println!("{response}");
-        std::io::stdout().flush().map_err(|e| e.to_string())?;
+        std::io::stdout().flush().map_err(crate::config::err)?;
     }
     Ok(())
 }
@@ -117,7 +117,7 @@ impl Worker {
                 .arg(json!({"compute_type":config["compute_type"],"language":config["language"],"beam_size":config["beam_size"]}).to_string());
             c
         } else {
-            let mut c = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+            let mut c = Command::new(std::env::current_exe().map_err(crate::config::err)?);
             c.args(["--native-worker"])
                 .arg(dir)
                 .arg(model)
@@ -205,7 +205,7 @@ impl Worker {
             json!({"wav":wav,"language":language,"prompt":prompt})
         )
         .and_then(|_| self.input.flush())
-        .map_err(|e| e.to_string())?;
+        .map_err(crate::config::err)?;
         self.read(timeout)
     }
 }
@@ -220,7 +220,7 @@ impl Drop for Worker {
 }
 pub type WorkerSlot = Arc<Mutex<Option<Worker>>>;
 pub fn transcription_timeout(wav: &Path) -> Result<std::time::Duration> {
-    let reader = hound::WavReader::open(wav).map_err(|e| e.to_string())?;
+    let reader = hound::WavReader::open(wav).map_err(crate::config::err)?;
     let seconds = f64::from(reader.duration()) / f64::from(reader.spec().sample_rate.max(1));
     // CPU models may run slower than real time; cancellation still kills the child immediately.
     Ok(std::time::Duration::from_secs_f64(

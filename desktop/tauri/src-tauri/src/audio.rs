@@ -37,16 +37,12 @@ pub fn resample(input: &[f32], rate: u32, channels: usize) -> Vec<f32> {
                 sum += mono[j as usize] as f64 * w;
                 weight += w;
             }
-            if weight.abs() > 1e-8 {
-                (sum / weight) as f32
-            } else {
-                0.
-            }
+            (sum / weight) as f32
         })
         .collect()
 }
 pub fn load(path: &Path) -> Result<Vec<f32>> {
-    let mut r = hound::WavReader::open(path).map_err(|e| e.to_string())?;
+    let mut r = hound::WavReader::open(path).map_err(crate::config::err)?;
     let s = r.spec();
     if s.sample_rate == 0
         || s.channels == 0
@@ -57,13 +53,13 @@ pub fn load(path: &Path) -> Result<Vec<f32>> {
     let samples = if s.sample_format == hound::SampleFormat::Float {
         r.samples::<f32>()
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?
+            .map_err(crate::config::err)?
     } else {
         let scale = 2f32.powi(s.bits_per_sample as i32 - 1);
         r.samples::<i32>()
             .map(|x| x.map(|v| v as f32 / scale))
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?
+            .map_err(crate::config::err)?
     };
     if samples.iter().any(|x| !x.is_finite()) {
         return Err("Non-finite WAV samples".into());
@@ -80,12 +76,12 @@ pub fn save(path: &Path, audio: &[f32]) -> Result<()> {
             sample_format: hound::SampleFormat::Int,
         },
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(crate::config::err)?;
     for s in audio {
         w.write_sample((s.clamp(-1., 1.) * 32767.) as i16)
-            .map_err(|e| e.to_string())?;
+            .map_err(crate::config::err)?;
     }
-    w.finalize().map_err(|e| e.to_string())
+    w.finalize().map_err(crate::config::err)
 }
 #[cfg(feature = "desktop")]
 pub mod capture {
@@ -95,11 +91,11 @@ pub mod capture {
     pub fn devices() -> Result<Vec<String>> {
         cpal::default_host()
             .input_devices()
-            .map_err(|e| e.to_string())?
+            .map_err(crate::config::err)?
             .map(|d| {
                 d.description()
                     .map(|x| x.name().to_string())
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::config::err)
             })
             .collect()
     }
@@ -122,7 +118,7 @@ pub mod capture {
                 host.default_input_device()
             } else {
                 host.input_devices()
-                    .map_err(|e| e.to_string())?
+                    .map_err(crate::config::err)?
                     .find(|d| d.description().is_ok_and(|x| x.name() == name))
             }
             .or_else(|| host.default_input_device())
@@ -131,7 +127,7 @@ pub mod capture {
                 .description()
                 .map(|d| d.name().to_string())
                 .unwrap_or_else(|_| "System default microphone".into());
-            let config = device.default_input_config().map_err(|e| e.to_string())?;
+            let config = device.default_input_config().map_err(crate::config::err)?;
             let rate = config.sample_rate();
             let channels = config.channels() as usize;
             let audio = CapturedAudio::new(rate, channels);
@@ -154,7 +150,7 @@ pub mod capture {
                             },
                             None,
                         )
-                        .map_err(|e| e.to_string())?
+                        .map_err(crate::config::err)?
                 }};
             }
             let stream = match config.sample_format() {
@@ -163,7 +159,7 @@ pub mod capture {
                 cpal::SampleFormat::U16 => stream!(u16),
                 f => return Err(format!("Unsupported microphone sample format: {f}")),
             };
-            stream.play().map_err(|e| e.to_string())?;
+            stream.play().map_err(crate::config::err)?;
             Ok(Self {
                 _stream: stream,
                 actual_device,

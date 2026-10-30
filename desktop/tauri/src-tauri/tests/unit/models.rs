@@ -73,7 +73,8 @@ fn verified_download_is_committed_atomically_and_reports_its_stages() {
         vec![
             ("Downloading".into(), 0),
             ("Downloading".into(), 3),
-            ("Verifying SHA-256".into(), 3)
+            ("Verifying SHA-256".into(), 3),
+            ("Installing".into(), 3)
         ]
     );
     assert!(server
@@ -151,4 +152,43 @@ fn stale_oversized_prefix_restarts_from_the_first_byte() {
         .to_lowercase()
         .contains("range: bytes=0-2"));
     assert_eq!(std::fs::read(dest).unwrap(), b"abc");
+}
+
+#[test]
+fn cancellation_after_verification_never_commits_a_model_and_retry_can_install_it() {
+    let home = Home::new();
+    let dest = home.0.join("models/test.gguf");
+    std::fs::write(&dest, b"previous installation").unwrap();
+    let (url, server) = host(GOOD);
+    let cancel = AtomicBool::new(false);
+    let error = install_artifact(&dest, &url, 3, ABC_SHA, &cancel, |stage, _| {
+        if stage == "Installing" {
+            cancel.store(true, Ordering::SeqCst);
+        }
+    })
+    .unwrap_err();
+    server.join().unwrap();
+    assert_eq!(error, "Cancelled");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"previous installation");
+    assert!(!dest.with_extension("partial").exists());
+    let (url, server) = host(GOOD);
+    cancel.store(false, Ordering::SeqCst);
+    install_artifact(&dest, &url, 3, ABC_SHA, &cancel, |_, _| {}).unwrap();
+    server.join().unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), b"abc");
+}
+
+#[test]
+fn a_range_response_ending_before_any_bytes_arrive_is_a_retryable_download_error() {
+    let home = Home::new();
+    let dest = home.0.join("models/test.gguf");
+    let (url, server) = host(
+        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-2/3\r\nConnection: close\r\n\r\n",
+    );
+    let error =
+        install_artifact(&dest, &url, 3, ABC_SHA, &AtomicBool::new(false), |_, _| {}).unwrap_err();
+    server.join().unwrap();
+    assert!(error.contains("truncated"), "{error}");
+    assert!(!dest.exists());
+    assert_eq!(std::fs::read(dest.with_extension("partial")).unwrap(), b"");
 }

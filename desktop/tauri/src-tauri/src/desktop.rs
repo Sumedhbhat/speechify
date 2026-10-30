@@ -25,7 +25,7 @@ async fn request(
     let s = service.inner().clone();
     tauri::async_runtime::spawn_blocking(move || dispatch(&s, &op, &args))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(crate::config::err)?
 }
 fn dispatch(s: &Arc<Service>, op: &str, args: &Value) -> Result<Value> {
     match op {
@@ -129,7 +129,7 @@ fn dispatch(s: &Arc<Service>, op: &str, args: &Value) -> Result<Value> {
         "audio" => {
             use base64::Engine;
             let p = s.store.lock().unwrap().audio_path(id(args)?)?;
-            let bytes = std::fs::read(p).map_err(|e| e.to_string())?;
+            let bytes = std::fs::read(p).map_err(crate::config::err)?;
             Ok(json!(
                 base64::engine::general_purpose::STANDARD.encode(bytes)
             ))
@@ -157,14 +157,14 @@ fn dispatch(s: &Arc<Service>, op: &str, args: &Value) -> Result<Value> {
             Ok(json!(s.store.lock().unwrap().import(source)?))
         }
         "export_config" => Ok(json!(
-            toml::to_string_pretty(&*s.config.lock().unwrap()).map_err(|e| e.to_string())?
+            toml::to_string_pretty(&*s.config.lock().unwrap()).map_err(crate::config::err)?
         )),
         "import_config" => {
             let raw: toml::Value = toml::from_str(args["text"].as_str().ok_or("TOML required")?)
-                .map_err(|e| e.to_string())?;
+                .map_err(crate::config::err)?;
             let mut cfg = crate::config::defaults();
             for (k, v) in serde_json::to_value(raw)
-                .map_err(|e| e.to_string())?
+                .map_err(crate::config::err)?
                 .as_object()
                 .ok_or("TOML table required")?
             {
@@ -230,9 +230,9 @@ fn dispatch(s: &Arc<Service>, op: &str, args: &Value) -> Result<Value> {
             crate::models::verify(source, hash, &std::sync::atomic::AtomicBool::new(false))?;
             let dest = crate::models::path(&s.root, id)?;
             let tmp = dest.with_extension("partial");
-            std::fs::copy(source, &tmp).map_err(|e| e.to_string())?;
+            std::fs::copy(source, &tmp).map_err(crate::config::err)?;
             crate::models::verify(&tmp, hash, &std::sync::atomic::AtomicBool::new(false))?;
-            std::fs::rename(tmp, dest).map_err(|e| e.to_string())?;
+            std::fs::rename(tmp, dest).map_err(crate::config::err)?;
             Ok(json!(true))
         }
         "train" => {
@@ -639,7 +639,7 @@ pub fn run() -> Result<()> {
         });
     let app = builder
         .build(tauri::generate_context!())
-        .map_err(|e| e.to_string())?;
+        .map_err(crate::config::err)?;
     app.run(|app, event| {
         if matches!(event, tauri::RunEvent::Exit) {
             app.state::<Arc<Service>>().shutdown();
@@ -648,7 +648,7 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 fn autostart(enabled: bool) -> Result<()> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = std::env::current_exe().map_err(crate::config::err)?;
     #[cfg(target_os = "linux")]
     {
         let base = std::env::var_os("XDG_CONFIG_HOME")
@@ -657,16 +657,16 @@ fn autostart(enabled: bool) -> Result<()> {
             .ok_or("HOME or XDG_CONFIG_HOME missing")?;
         let path = base.join("autostart/speechify-tauri-candidate.desktop");
         if enabled {
-            std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(path.parent().unwrap()).map_err(crate::config::err)?;
             let exe = exe
                 .to_string_lossy()
                 .replace('\\', "\\\\")
                 .replace('"', "\\\"")
                 .replace('`', "\\`")
                 .replace('$', "\\$");
-            std::fs::write(path,format!("[Desktop Entry]\nType=Application\nName=Speechify Tauri Candidate\nExec=\"{exe}\"\nX-GNOME-Autostart-enabled=true\n")).map_err(|e|e.to_string())?;
+            std::fs::write(path,format!("[Desktop Entry]\nType=Application\nName=Speechify Tauri Candidate\nExec=\"{exe}\"\nX-GNOME-Autostart-enabled=true\n")).map_err(crate::config::err)?;
         } else if path.exists() {
-            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+            std::fs::remove_file(path).map_err(crate::config::err)?;
         }
     }
     #[cfg(target_os = "macos")]
@@ -674,15 +674,15 @@ fn autostart(enabled: bool) -> Result<()> {
         let path = std::path::PathBuf::from(std::env::var_os("HOME").ok_or("HOME missing")?)
             .join("Library/LaunchAgents/org.sumedhbhat.speechify.tauri.plist");
         if enabled {
-            std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(path.parent().unwrap()).map_err(crate::config::err)?;
             let exe = exe
                 .to_string_lossy()
                 .replace('&', "&amp;")
                 .replace('<', "&lt;")
                 .replace('>', "&gt;");
-            std::fs::write(path,format!("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>org.sumedhbhat.speechify.tauri</string><key>ProgramArguments</key><array><string>{exe}</string></array><key>RunAtLoad</key><true/></dict></plist>")).map_err(|e|e.to_string())?;
+            std::fs::write(path,format!("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>org.sumedhbhat.speechify.tauri</string><key>ProgramArguments</key><array><string>{exe}</string></array><key>RunAtLoad</key><true/></dict></plist>")).map_err(crate::config::err)?;
         } else if path.exists() {
-            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+            std::fs::remove_file(path).map_err(crate::config::err)?;
         }
     }
     #[cfg(windows)]
@@ -707,7 +707,7 @@ fn autostart(enabled: bool) -> Result<()> {
                 .args(["delete", key, "/v", "SpeechifyTauriCandidate", "/f"])
                 .status()
         }
-        .map_err(|e| e.to_string())?;
+        .map_err(crate::config::err)?;
         if !status.success() {
             return Err("Could not update candidate login entry".into());
         }

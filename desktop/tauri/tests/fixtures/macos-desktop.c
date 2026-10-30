@@ -2,10 +2,15 @@
  * Real pasteboard and CoreFoundation objects remain native. No input is posted
  * to other applications, and no TCC permission database is modified. */
 #include <ApplicationServices/ApplicationServices.h>
-#include <mach-o/dyld-interposing.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <unistd.h>
+
+/* dyld's public __interpose ABI; newer SDKs omit dyld-interposing.h. */
+#define DYLD_INTERPOSE(replacement, original) \
+    __attribute__((used)) static const struct { const void *replace; const void *with; } \
+    interpose_##original __attribute__((section("__DATA,__interpose"))) = \
+        { (const void *)&replacement, (const void *)&original };
 
 enum {
     DENY_ACCESSIBILITY = 1, DENY_INPUT = 2, NO_FOCUS = 4,

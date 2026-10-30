@@ -1,6 +1,11 @@
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 pub type Result<T> = std::result::Result<T, String>;
+
+/// Preserve boundary errors in the string-based command protocol.
+pub fn err(error: impl std::fmt::Display) -> String {
+    error.to_string()
+}
 pub fn defaults() -> Value {
     let mut v: Value = serde_json::from_str(include_str!("../resources/defaults.json")).unwrap();
     if cfg!(target_os = "macos") {
@@ -24,15 +29,15 @@ pub fn root() -> Result<PathBuf> {
         .map(PathBuf::from)
         .unwrap_or(base)
         .join("speechify-tauri-candidate");
-    std::fs::create_dir_all(&p).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&p).map_err(err)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700))
-            .map_err(|e| e.to_string())?;
+            .map_err(err)?;
     }
     for sub in ["audio", "models", "logs", "exports"] {
-        std::fs::create_dir_all(p.join(sub)).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(p.join(sub)).map_err(err)?;
     }
     Ok(p)
 }
@@ -108,7 +113,7 @@ pub fn validate(v: &Value) -> Result<()> {
         }
     }
     if !v["llm_url"].as_str().unwrap().is_empty() {
-        let url = reqwest::Url::parse(v["llm_url"].as_str().unwrap()).map_err(|e| e.to_string())?;
+        let url = reqwest::Url::parse(v["llm_url"].as_str().unwrap()).map_err(err)?;
         if !["http", "https"].contains(&url.scheme()) {
             return Err("LLM endpoint must use HTTP or HTTPS".into());
         }
@@ -119,9 +124,9 @@ pub fn load(root: &Path) -> Result<Value> {
     let path = root.join("config.toml");
     let mut d = defaults();
     if path.exists() {
-        let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-        let v: toml::Value = toml::from_str(&text).map_err(|e| e.to_string())?;
-        let obj = serde_json::to_value(v).map_err(|e| e.to_string())?;
+        let text = std::fs::read_to_string(path).map_err(err)?;
+        let v: toml::Value = toml::from_str(&text).map_err(err)?;
+        let obj = serde_json::to_value(v).map_err(err)?;
         for (k, v) in obj.as_object().ok_or("Invalid config")? {
             d[k] = v.clone();
         }
@@ -131,17 +136,17 @@ pub fn load(root: &Path) -> Result<Value> {
 }
 pub fn save(root: &Path, v: &Value) -> Result<()> {
     validate(v)?;
-    let text = toml::to_string_pretty(v).map_err(|e| e.to_string())?;
+    let text = toml::to_string_pretty(v).map_err(err)?;
     atomic(&root.join("config.toml"), text.as_bytes())
 }
 pub fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let partial = path.with_extension("tmp");
-    let mut f = std::fs::File::create(&partial).map_err(|e| e.to_string())?;
+    let mut f = std::fs::File::create(&partial).map_err(err)?;
     f.write_all(bytes)
         .and_then(|_| f.sync_all())
-        .map_err(|e| e.to_string())?;
-    std::fs::rename(partial, path).map_err(|e| e.to_string())
+        .map_err(err)?;
+    std::fs::rename(partial, path).map_err(err)
 }
 pub fn owned(root: &Path, name: &str) -> Result<PathBuf> {
     if name.is_empty() || Path::new(name).components().count() != 1 || name == ".." || name == "." {
@@ -151,8 +156,8 @@ pub fn owned(root: &Path, name: &str) -> Result<PathBuf> {
     if p.exists()
         && !p
             .canonicalize()
-            .map_err(|e| e.to_string())?
-            .starts_with(root.canonicalize().map_err(|e| e.to_string())?)
+            .map_err(err)?
+            .starts_with(root.canonicalize().map_err(err)?)
     {
         return Err("Path leaves candidate directory".into());
     }
@@ -182,7 +187,7 @@ pub fn lock(root: &Path) -> Result<std::fs::File> {
         .read(true)
         .write(true)
         .open(root.join("service.lock"))
-        .map_err(|e| e.to_string())?;
+        .map_err(err)?;
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;

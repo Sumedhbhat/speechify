@@ -750,3 +750,97 @@ fn login_startup_respects_xdg_and_home_and_reports_filesystem_failures() {
     assert!(toggle(false).is_err());
     assert!(entry.is_dir());
 }
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+#[ignore = "Changes candidate login startup; requires a disposable native desktop"]
+fn login_startup_can_be_enabled_verified_and_disabled_on_native_desktops() {
+    assert_eq!(
+        std::env::var("SPEECHIFY_TEST_DISPOSABLE_DESKTOP").as_deref(),
+        Ok("1")
+    );
+    let home = Home::new();
+    if std::env::var_os("SPEECHIFY_TEST_LOGIN_CHILD").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "desktop::behavior::login_startup_can_be_enabled_verified_and_disabled_on_native_desktops", "--include-ignored"])
+            .env("SPEECHIFY_TEST_LOGIN_CHILD", "1").env("HOME", &home.0).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let service = home.service();
+    dispatch(&service, "autostart", &json!({"enabled": true})).unwrap();
+    #[cfg(target_os = "macos")]
+    {
+        let path = std::path::PathBuf::from(std::env::var_os("HOME").unwrap())
+            .join("Library/LaunchAgents/org.sumedhbhat.speechify.tauri.plist");
+        let check = std::process::Command::new("/usr/bin/plutil")
+            .args(["-extract", "ProgramArguments.0", "raw", "-o", "-"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(
+            check.status.success(),
+            "{}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(check.stdout).unwrap().trim(),
+            std::env::current_exe().unwrap().to_str().unwrap()
+        );
+        dispatch(&service, "autostart", &json!({"enabled": false})).unwrap();
+        assert!(!path.exists());
+        std::fs::create_dir(&path).unwrap();
+        assert!(dispatch(&service, "autostart", &json!({"enabled": false})).is_err());
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::write(&path, "prior entry").unwrap();
+        assert!(dispatch(&service, "autostart", &json!({"enabled": true})).is_ok());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        std::fs::write(path.parent().unwrap(), "obstructed directory").unwrap();
+        assert!(dispatch(&service, "autostart", &json!({"enabled": true})).is_err());
+        assert_eq!(
+            std::fs::read_to_string(path.parent().unwrap()).unwrap(),
+            "obstructed directory"
+        );
+    }
+    #[cfg(windows)]
+    {
+        let result = std::process::Command::new("reg")
+            .args([
+                "query",
+                "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                "/v",
+                "SpeechifyTauriCandidate",
+            ])
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        let entry = String::from_utf8_lossy(&result.stdout);
+        assert!(entry.contains(&format!(
+            "\"{}\"",
+            std::env::current_exe().unwrap().display()
+        )));
+        dispatch(&service, "autostart", &json!({"enabled": false})).unwrap();
+        assert!(dispatch(&service, "autostart", &json!({"enabled": false})).is_err());
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn unsupported_macos_shortcuts_are_refused_without_changing_saved_settings() {
+    let home = Home::new();
+    let service = home.service();
+    let before = service.config.lock().unwrap().clone();
+    for key in ["scroll_lock", "f21", "f22", "f23", "f24"] {
+        let mut cfg = before.clone();
+        cfg["ptt_key"] = json!(key);
+        assert!(dispatch(&service, "settings", &cfg).is_err());
+        assert_eq!(*service.config.lock().unwrap(), before);
+        assert_eq!(crate::config::load(&home.0).unwrap(), before);
+    }
+}

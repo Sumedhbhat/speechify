@@ -35,10 +35,10 @@ mod os {
                 });
             }
             unsafe {
-                let lib = Library::new("libX11.so.6").map_err(|e| e.to_string())?;
+                let lib = Library::new("libX11.so.6").map_err(crate::config::err)?;
                 let open = lib
                     .get::<unsafe extern "C" fn(*const c_char) -> *mut c_void>(b"XOpenDisplay\0")
-                    .map_err(|e| e.to_string())?;
+                    .map_err(crate::config::err)?;
                 let display = open(std::ptr::null());
                 if display.is_null() {
                     return Err("Cannot open X11 display".into());
@@ -47,10 +47,10 @@ mod os {
                 {
                     let sym = lib
                         .get::<unsafe extern "C" fn(*const c_char) -> u64>(b"XStringToKeysym\0")
-                        .map_err(|e| e.to_string())?;
+                        .map_err(crate::config::err)?;
                     let code = lib
                         .get::<unsafe extern "C" fn(*mut c_void, u64) -> u8>(b"XKeysymToKeycode\0")
-                        .map_err(|e| e.to_string())?;
+                        .map_err(crate::config::err)?;
                     for (name, key) in key_names() {
                         mapping.push((
                             name,
@@ -76,7 +76,7 @@ mod os {
                     .as_ref()
                     .unwrap()
                     .get::<unsafe extern "C" fn(*mut c_void, *mut c_char) -> i32>(b"XQueryKeymap\0")
-                    .map_err(|e| e.to_string())?;
+                    .map_err(crate::config::err)?;
                 let mut map = [0u8; 32];
                 f(self.display, map.as_mut_ptr().cast());
                 let mut out: BTreeSet<String> = self
@@ -107,7 +107,7 @@ mod os {
                     .get::<unsafe extern "C" fn(*mut c_void, *mut u64, *mut i32) -> i32>(
                         b"XGetInputFocus\0",
                     )
-                    .map_err(|e| e.to_string())?;
+                    .map_err(crate::config::err)?;
                 let (mut window, mut revert) = (0, 0);
                 f(self.display, &mut window, &mut revert);
                 if window <= 1 {
@@ -175,13 +175,13 @@ mod os {
             let mut c = Command::new("wl-copy")
                 .stdin(Stdio::piped())
                 .spawn()
-                .map_err(|e| e.to_string())?;
+                .map_err(crate::config::err)?;
             c.stdin
                 .take()
                 .unwrap()
                 .write_all(text.as_bytes())
-                .map_err(|e| e.to_string())?;
-            if !c.wait().map_err(|e| e.to_string())?.success() {
+                .map_err(crate::config::err)?;
+            if !c.wait().map_err(crate::config::err)?.success() {
                 return Err("Wayland clipboard write failed".into());
             }
             return Ok(());
@@ -192,13 +192,13 @@ mod os {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| e.to_string())?;
+            .map_err(crate::config::err)?;
         c.stdin
             .take()
             .unwrap()
             .write_all(text.as_bytes())
-            .map_err(|e| e.to_string())?;
-        if !c.wait().map_err(|e| e.to_string())?.success() {
+            .map_err(crate::config::err)?;
+        if !c.wait().map_err(crate::config::err)?.success() {
             return Err("Clipboard write failed".into());
         }
         Ok(())
@@ -384,13 +384,13 @@ mod os {
         let mut c = Command::new("/usr/bin/pbcopy")
             .stdin(Stdio::piped())
             .spawn()
-            .map_err(|e| e.to_string())?;
+            .map_err(crate::config::err)?;
         c.stdin
             .take()
             .unwrap()
             .write_all(text.as_bytes())
-            .map_err(|e| e.to_string())?;
-        if !c.wait().map_err(|e| e.to_string())?.success() {
+            .map_err(crate::config::err)?;
+        if !c.wait().map_err(crate::config::err)?.success() {
             return Err("Clipboard write failed".into());
         }
         Ok(())
