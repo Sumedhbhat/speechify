@@ -1,6 +1,5 @@
-import './style.css';
-import { startApplication } from './app';
+import "./style.css";
+import { api, events } from "./api";
+import { createApp } from "./app";
 
-const app = document.querySelector<HTMLDivElement>('#app')!;
-const overlay = new URLSearchParams(location.search).has('overlay');
-startApplication(app, overlay);
+createApp(document.getElementById("app")!, { api, events });
