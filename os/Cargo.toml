@@ -1,0 +1,17 @@
+[package]
+name = "speechify-os"
+description = "Operating-system adapters: microphone, key state, clipboard typing, focused window"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cpal = "=0.18.2"
+arboard = { version = "=3.7.0", default-features = false }
+enigo = { version = "=0.6.1", default-features = false, features = ["x11rb"] }
+device_query = "=4.0.1"
+active-win-pos-rs = "=0.11.0"
+
+[target.'cfg(windows)'.dependencies]
+uiautomation = "=0.25.1"
+windows = { version = "=0.62.2", features = ["Win32_Media_Audio", "Win32_Media_Audio_Endpoints", "Win32_System_Com", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }

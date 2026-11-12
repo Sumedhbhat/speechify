@@ -1,306 +1,182 @@
-use crate::config::{owned, Result};
-use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
-use std::{
-    io::{Read, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
-#[cfg(test)]
-#[path = "../tests/unit/models.rs"]
-mod behavior;
-pub fn catalog() -> Vec<Value> {
-    serde_json::from_str(include_str!("../resources/catalog.json")).unwrap()
-}
-pub fn environment(id: &str) -> Option<&'static str> {
-    if id.starts_with("ft:") || id.starts_with("distil") {
-        Some("whisper")
-    } else if id.starts_with("kyutai-") {
-        Some("transformers")
-    } else {
-        None
-    }
-}
-pub fn spec(id: &str) -> Result<Value> {
-    catalog()
-        .into_iter()
-        .find(|m| m["id"] == id)
-        .ok_or(format!("Unknown catalog model: {id}"))
-}
-pub fn path(root: &Path, id: &str) -> Result<PathBuf> {
-    if id.starts_with("ft:") {
-        return owned(&root.join("models"), id.trim_start_matches("ft:"));
-    }
-    owned(&root.join("models"), &format!("{id}.gguf"))
-}
-pub fn verify(path: &Path, expected: &str, cancel: &AtomicBool) -> Result<()> {
-    let mut f = std::fs::File::open(path).map_err(crate::config::err)?;
-    let mut h = Sha256::new();
-    let mut buf = [0u8; 1024 * 128];
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            return Err("Cancelled".into());
-        }
-        let n = f.read(&mut buf).map_err(crate::config::err)?;
-        if n == 0 {
-            break;
-        }
-        h.update(&buf[..n]);
-    }
-    if h.finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>()
-        != expected
-    {
-        return Err("SHA-256 mismatch; file was not installed".into());
-    }
-    Ok(())
-}
-pub fn install(
-    root: &Path,
-    id: &str,
-    cancel: Arc<AtomicBool>,
-    progress: impl Fn(Value),
-) -> Result<()> {
-    let s = spec(id)?;
-    let g = &s["gguf"];
-    if g.is_null() {
-        return Err(
-            "This model needs its optional Python environment; install it from Models first".into(),
-        );
-    }
-    let dst = path(root, id)?;
-    let url = format!(
-        "https://huggingface.co/{}/resolve/{}/{}",
-        g["repo"].as_str().unwrap(),
-        g["revision"].as_str().unwrap(),
-        g["file"].as_str().unwrap()
-    );
-    let total = g["size"].as_u64().unwrap();
-    install_artifact(
-        &dst,
-        &url,
-        total,
-        g["sha256"].as_str().unwrap(),
-        &cancel,
-        |stage, bytes| {
-            progress(json!({"id":id,"stage":stage,"bytes":bytes,"total":total}));
-        },
-    )
-}
-fn install_artifact(
-    dst: &Path,
-    url: &str,
-    total: u64,
-    sha256: &str,
-    cancel: &AtomicBool,
-    progress: impl Fn(&str, u64),
-) -> Result<()> {
-    let tmp = dst.with_extension("partial");
-    let result = (|| {
-        download(url, total, &tmp, cancel, |bytes| {
-            progress("Downloading", bytes);
-        })?;
-        progress("Verifying SHA-256", total);
-        if let Err(error) = verify(&tmp, sha256, cancel) {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(error);
-        }
-        progress("Installing", total);
-        if cancel.load(Ordering::Relaxed) {
-            return Err("Cancelled".into());
-        }
-        std::fs::rename(&tmp, dst).map_err(crate::config::err)?;
-        Ok(())
-    })();
-    // Network/disk failures retain the resumable prefix; cancellation removes it.
-    if cancel.load(Ordering::Relaxed) {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result
-}
-fn download(
-    url: &str,
-    total: u64,
-    tmp: &Path,
-    cancel: &AtomicBool,
-    progress: impl Fn(u64),
-) -> Result<()> {
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(20))
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(crate::config::err)?;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(tmp)
-        .map_err(crate::config::err)?;
-    let mut bytes = f.metadata().map_err(crate::config::err)?.len();
-    if bytes > total {
-        f.set_len(0).map_err(crate::config::err)?;
-        bytes = 0;
-    }
-    f.seek(SeekFrom::Start(bytes)).map_err(crate::config::err)?;
-    progress(bytes);
-    while bytes < total {
-        if cancel.load(Ordering::Relaxed) {
-            return Err("Cancelled".into());
-        }
-        let before = bytes;
-        let end = (bytes + 4 * 1024 * 1024 - 1).min(total - 1);
-        let attempt = (|| {
-            let mut response = client
-                .get(url)
-                .header(reqwest::header::RANGE, format!("bytes={bytes}-{end}"))
-                .send()
-                .and_then(|r| r.error_for_status())
-                .map_err(crate::config::err)?;
-            if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-                return Err(
-                    "Model host did not honor a bounded range request; retry later".to_owned(),
-                );
-            }
-            let expected = format!("bytes {bytes}-{end}/{total}");
-            if response
-                .headers()
-                .get(reqwest::header::CONTENT_RANGE)
-                .and_then(|v| v.to_str().ok())
-                != Some(expected.as_str())
-            {
-                return Err("Model host returned an unexpected content range".into());
-            }
-            let mut remaining = end - bytes + 1;
-            let mut buf = [0u8; 65536];
-            while remaining > 0 {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err("Cancelled".into());
-                }
-                let want = remaining.min(buf.len() as u64) as usize;
-                let n = response
-                    .read(&mut buf[..want])
-                    .map_err(crate::config::err)?;
-                if n == 0 {
-                    return Err("Download was truncated".into());
-                }
-                f.write_all(&buf[..n]).map_err(crate::config::err)?;
-                bytes += n as u64;
-                remaining -= n as u64;
-            }
-            Ok(())
-        })();
-        progress(bytes);
-        if let Err(error) = attempt {
-            // Resume progress even if a slow range exceeds its bounded request deadline.
-            // A zero-progress failure returns to the UI, preserving the prefix for Retry.
-            if bytes == before || cancel.load(Ordering::Relaxed) {
-                return Err(error);
-            }
-        }
-    }
-    f.sync_all().map_err(crate::config::err)
+//! `Engines` for a real desktop: loads and keeps the speech and language models.
+
+use speechify_core::app::Engines;
+use speechify_core::asr::{Recognizer, Remote};
+use speechify_core::llm::{Chat, Rewriter};
+use speechify_core::native::Engine;
+use speechify_core::settings::Settings;
+use speechify_core::{catalog, Result};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// What the UI shows about the speech engine.
+#[derive(Debug, Clone, Default)]
+pub struct SpeechStatus {
+    pub ready: bool,
+    pub device: String,
+    pub error: String,
 }
 
-pub fn list(root: &Path) -> Vec<Value> {
-    let mut items = catalog();
-    for m in &mut items {
-        let id = m["id"].as_str().unwrap();
-        m["installed"] = json!(
-            path(root, id).is_ok_and(|p| p.is_file()) || root.join("models").join(id).is_dir()
-        );
-        m["runtime"] = json!(if m["gguf"].is_null() {
-            "Optional Python exception"
-        } else {
-            "Native transcribe.cpp"
-        });
+pub struct Models {
+    pub runtime_dir: PathBuf,
+    pub models_dir: PathBuf,
+    pub status: Arc<Mutex<SpeechStatus>>,
+    /// The loaded everyday recogniser and the settings it was loaded for.
+    everyday: Option<(String, Box<dyn Recognizer>)>,
+    chat: Option<(String, Chat)>,
+    teacher: Option<Box<dyn Recognizer>>,
+    teacher_chat: Option<Chat>,
+    warmed: Option<Instant>,
+}
+
+impl Models {
+    pub fn new(runtime_dir: PathBuf, models_dir: PathBuf, status: Arc<Mutex<SpeechStatus>>) -> Models {
+        Models {
+            runtime_dir,
+            models_dir,
+            status,
+            everyday: None,
+            chat: None,
+            teacher: None,
+            teacher_chat: None,
+            warmed: None,
+        }
     }
-    if let Ok(dirs) = std::fs::read_dir(root.join("models")) {
-        for d in dirs.flatten() {
-            let p = d.path();
-            if p.is_dir()
-                && p.join("model.bin").exists()
-                && d.file_name().to_string_lossy().starts_with("whisper-ft-")
-            {
-                let name = d.file_name().to_string_lossy().into_owned();
-                items.push(json!({
-                    "id": format!("ft:{name}"),
-                    "name": format!("Your trained Whisper ({name})"),
-                    "repo": p,
-                    "languages": "as trained",
-                    "runtime": "Optional Python exception",
-                    "installed": true,
-                    "finetune": true,
-                }));
+
+    fn open(&self, model_id: &str, device: &str) -> Result<(Box<dyn Recognizer>, String)> {
+        let model = catalog::find(model_id)?;
+        if !catalog::installed(&self.models_dir, &model) {
+            return Err(format!(
+                "{} is not downloaded yet. Open Speechify and download it under Models.",
+                model.name
+            ));
+        }
+        let engine = Engine::open(&self.runtime_dir, &catalog::path(&self.models_dir, &model), device)?;
+        let device = engine.device().to_string();
+        Ok((Box::new(engine), device))
+    }
+
+    fn load_everyday(&mut self, settings: &Settings) -> Result<()> {
+        let speech = &settings.speech;
+        let key = format!(
+            "{}|{}|{}|{}|{}",
+            speech.model, speech.device, speech.remote_url, speech.remote_model, speech.remote_key
+        );
+        if self.everyday.as_ref().is_some_and(|(loaded, _)| *loaded == key) {
+            return Ok(());
+        }
+        // Free the old model before loading the new one.
+        self.everyday = None;
+        let loaded = if speech.remote_url.trim().is_empty() {
+            self.open(&speech.model, &speech.device)
+        } else {
+            Ok((
+                Box::new(Remote::new(
+                    &speech.remote_url,
+                    &speech.remote_key,
+                    &speech.remote_model,
+                )) as Box<dyn Recognizer>,
+                format!("server {}", speech.remote_url),
+            ))
+        };
+        let mut status = self.status.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        match loaded {
+            Ok((recognizer, device)) => {
+                *status = SpeechStatus {
+                    ready: true,
+                    device,
+                    error: String::new(),
+                };
+                self.everyday = Some((key, recognizer));
+                Ok(())
+            }
+            Err(error) => {
+                *status = SpeechStatus {
+                    ready: false,
+                    device: String::new(),
+                    error: error.clone(),
+                };
+                Err(error)
             }
         }
     }
-    items
+
+    /// Loads the everyday model ahead of the first dictation.
+    pub fn preload(&mut self, settings: &Settings) {
+        let _ = self.load_everyday(settings);
+    }
+
+    /// Frees the teacher's models once a review is over.
+    pub fn release_teacher(&mut self) {
+        self.teacher = None;
+        self.teacher_chat = None;
+    }
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn checksum_and_cancel() {
-        let p = std::env::temp_dir().join(format!("speechify-tauri-hash-{}", std::process::id()));
-        std::fs::write(&p, b"abc").unwrap();
-        let flag = AtomicBool::new(false);
-        assert!(verify(
-            &p,
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-            &flag
-        )
-        .is_ok());
-        assert!(verify(&p, "bad", &flag).is_err());
-        flag.store(true, Ordering::SeqCst);
-        assert_eq!(verify(&p, "bad", &flag).unwrap_err(), "Cancelled");
-        std::fs::remove_file(p).unwrap();
+
+fn chat(settings: &Settings, model: &str, timeout: Duration) -> Chat {
+    Chat::new(&settings.rewrite.url, &settings.rewrite.key, model, timeout)
+}
+
+impl Engines for Models {
+    fn everyday(&mut self, settings: &Settings) -> Result<(&mut dyn Recognizer, Option<&dyn Rewriter>)> {
+        self.load_everyday(settings)?;
+        let rewrite = &settings.rewrite;
+        let key = format!(
+            "{}|{}|{}|{}",
+            rewrite.url, rewrite.key, rewrite.model, rewrite.timeout_ms
+        );
+        if !rewrite.enabled {
+            self.chat = None;
+        } else if self.chat.as_ref().is_none_or(|(built, _)| *built != key) {
+            self.chat = Some((
+                key,
+                chat(
+                    settings,
+                    &rewrite.model,
+                    Duration::from_millis(rewrite.timeout_ms.max(500)),
+                ),
+            ));
+        }
+        let recognizer = self
+            .everyday
+            .as_mut()
+            .map(|(_, recognizer)| recognizer.as_mut())
+            .ok_or("The speech model is not loaded")?;
+        Ok((recognizer, self.chat.as_ref().map(|(_, chat)| chat as &dyn Rewriter)))
     }
-    #[test]
-    fn interrupted_range_resumes_without_discarding_existing_prefix() {
-        use std::{
-            io::{BufRead, BufReader},
-            net::TcpListener,
-        };
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/model", listener.local_addr().unwrap());
-        let server = std::thread::spawn(move || {
-            for (start, body) in [(2, "cd"), (4, "efgh")] {
-                let (mut stream, _) = listener.accept().unwrap();
-                stream
-                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                    .unwrap();
-                let mut request = String::new();
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                loop {
-                    let mut line = String::new();
-                    reader.read_line(&mut line).unwrap();
-                    if line == "\r\n" {
-                        break;
-                    }
-                    request.push_str(&line);
-                }
-                assert!(request
-                    .to_lowercase()
-                    .contains(&format!("range: bytes={start}-7")));
-                write!(stream, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-7/8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", 8-start).unwrap();
-            }
+
+    fn teacher(&mut self, settings: &Settings) -> Result<(&mut dyn Recognizer, Option<&dyn Rewriter>)> {
+        if self.teacher.is_none() {
+            // The teacher runs on the same device as live dictation.
+            self.teacher = Some(self.open(&settings.teacher.speech_model, &settings.speech.device)?.0);
+        }
+        // The larger language model may take a while per dictation; nobody is waiting.
+        let teacher_chat = chat(settings, &settings.teacher.rewrite_model, Duration::from_secs(180));
+        let available = settings.rewrite.enabled
+            && teacher_chat
+                .models()
+                .is_ok_and(|models| models.contains(&settings.teacher.rewrite_model));
+        self.teacher_chat = available.then_some(teacher_chat);
+        let recognizer = self
+            .teacher
+            .as_mut()
+            .map(|recognizer| recognizer.as_mut())
+            .ok_or("The teacher model is not loaded")?;
+        Ok((recognizer, self.teacher_chat.as_ref().map(|chat| chat as &dyn Rewriter)))
+    }
+
+    fn warm(&mut self, settings: &Settings) {
+        // Ollama unloads idle models; nudge it while the user is still speaking
+        // so the cleanup that follows does not wait for a reload.
+        let recently = self.warmed.is_some_and(|at| at.elapsed() < Duration::from_secs(240));
+        if !settings.rewrite.enabled || recently {
+            return;
+        }
+        self.warmed = Some(Instant::now());
+        let warmer = chat(settings, &settings.rewrite.model, Duration::from_secs(60));
+        std::thread::spawn(move || {
+            let _ = warmer.warm();
         });
-        let tmp = std::env::temp_dir().join(format!("speechify-range-{}", std::process::id()));
-        std::fs::write(&tmp, b"ab").unwrap();
-        download(&url, 8, &tmp, &AtomicBool::new(false), |_| {}).unwrap();
-        server.join().unwrap();
-        assert_eq!(std::fs::read(&tmp).unwrap(), b"abcdefgh");
-        std::fs::remove_file(tmp).unwrap();
-    }
-    #[test]
-    fn catalog_is_complete() {
-        let c = catalog();
-        assert_eq!(c.len(), 14);
-        assert_eq!(c.iter().filter(|m| !m["gguf"].is_null()).count(), 11);
     }
 }
