@@ -68,7 +68,13 @@ pub fn place_bar(app: &AppHandle, bar: &Bar) {
     }
     let (width, height) = bar_size(bar);
     let _ = window.set_size(LogicalSize::new(width, height));
-    if let Ok(Some(monitor)) = window.current_monitor().or_else(|_| window.primary_monitor()) {
+    // A hidden window may report no current monitor; use the primary one then.
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+    if let Some(monitor) = monitor {
         let scale = monitor.scale_factor();
         let area = monitor.work_area();
         let (left, top) = (area.position.x as f64 / scale, area.position.y as f64 / scale);
