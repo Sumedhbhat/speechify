@@ -1,125 +1,66 @@
 # Releases
 
-Speechify ships on two channels. Each comes from its own kind of branch, so a
-stable line can get fixes without taking everything that has landed on `main`
-since.
+Two channels, both built by `.github/workflows/release.yml`.
 
-| Channel | Branch | Version | GitHub release |
+| Channel | Comes from | Version | GitHub release |
 | --- | --- | --- | --- |
-| Nightly | `main` | `<Cargo.toml version>-nightly.<CI run>` | Prerelease such as `v0.2.0-nightly.57`, one per push to `main` (except `[no-release]` merges) |
-| Stable | `release/X.Y` | The `Cargo.toml` version, always `X.Y.Z` | `vX.Y.Z`, published when that version first lands on the branch |
+| Nightly | every push to `main` | `<Cargo.toml version>-nightly.<run number>` | prerelease |
+| Stable | every push to `release/X.Y` | the exact `Cargo.toml` version | normal release |
 
-The version is written in one place: `version` in
-[`src-tauri/Cargo.toml`](../src-tauri/Cargo.toml). `tauri.conf.json` and
-`package.json` don't carry one. CI adds the `-nightly.<run>` suffix at build
-time and never edits the manifest.
+The version is written in one place: `version` under `[workspace.package]` in the root `Cargo.toml`. The workflow reads the first `version = "..."` line from that file.
 
-## What a release contains
+## Install and update
 
-| Asset | What it is |
-| --- | --- |
-| `Speechify-<version>-windows-x64-installer.exe` | Windows installer (NSIS) |
-| `Speechify-<version>-mac-arm64.dmg` | macOS app for Apple silicon, ad-hoc signed |
-| `Speechify-<version>-linux-amd64.deb` | Ubuntu 24.04 or newer, and Debian-based distributions with the same libraries |
-| `Speechify-<version>-linux-x86_64.tar.gz` | Portable Linux build: the executable, native inference libraries, optional Python resources, `VERSION` and `SHA256SUMS`. Needs the system GTK 3, WebKitGTK 4.1 and ALSA libraries. |
-| `SHA256SUMS` | Checksums of all of the above |
+Each release has three installers, plus `SHA256SUMS`:
 
-Speech models aren't included. Each one is downloaded the first time you pick
-it in **Models**.
+- `Speechify-<version>-windows-x64-installer.exe`
+- `Speechify-<version>-mac-arm64.dmg` (Apple silicon)
+- `Speechify-<version>-linux-amd64.deb`
 
-The macOS app isn't signed with an Apple Developer ID, so Gatekeeper asks
-before the first start, and macOS may ask for its permissions again after an
-update. Signing and notarizing with a Developer ID would fix both.
+To update, install the new version over the old one. Dictations, dictionary, settings and models live in the app data folder and are kept. The installers are not signed. The macOS app is signed ad hoc until there is an Apple Developer ID. There is no in-app updater.
 
-## Updating
+## What a push does
 
-Install the new version over the old one. The installers replace the app and
-never touch the data folder (see "Your data" in the README). Speechify
-doesn't update itself yet.
+1. **Determine version.** On `release/*` the branch name must be `release/<major>.<minor>` (not three parts) and the `Cargo.toml` version must start with it, or the job fails. On `main` it is the nightly version above. Anything else is a development build and publishes nothing.
+2. **Tests.** On pushes, the workflow runs `ci.yml` as a reusable workflow: the tests on Linux, macOS and Windows, and the coverage gate. A release is published only after they pass.
+3. **Package.** One job per platform fetches the pinned speech runtime, builds with `SPEECHIFY_VERSION` set, and checks that `speechify --version` prints `speechify <version>`. Linux builds a `.deb`, macOS a signed-ad-hoc `.app` in a `.dmg`, Windows an NSIS installer.
+4. **Publish.** It collects the installers, writes `SHA256SUMS`, and creates the release `v<version>` with generated notes. Nightlies are marked as prereleases.
 
-Releases up to `v0.1.0-nightly.73` were the older Python version of Speechify. Its tray updater
-looks for that app's installer names, so it won't offer these releases; install
-this version by hand once. The two apps keep their data in different folders,
-and **Settings > Copy existing Speechify data** copies the old history across.
+Pull requests run the tests and build every installer, and publish nothing. A commit message containing `[no-release]` on a push skips publishing and keeps the build artifacts (kept for 7 days).
 
-## Which version am I running?
+If a release for that tag exists already, the publish step prints a notice and exits without changing it. To ship a fix, bump the version.
 
-- **Settings > Data and diagnostics**
-- `speechify --version`
-- the `VERSION` file in the portable archive
-- the release title on GitHub
+## Cutting a stable release
 
-Every release is permanent. Tags and assets are never moved, deleted, or
-overwritten; a fix is always a new patch version.
+```
+git switch main
+git switch -c release/0.2                 # branch from main at the commit to ship
+# set version = "0.2.0" in the root Cargo.toml, commit, push
+git push -u origin release/0.2
+```
 
-## Cut a stable release
+That builds and publishes `v0.2.0`. Concurrent runs on `release/*` are never cancelled, so no patch release is skipped.
 
-`main` always carries the next minor version, so nightlies sort after the
-newest stable release.
+## Patch releases
 
-1. Check that the version in `src-tauri/Cargo.toml` on `main` is `X.Y.0`.
-2. Create and push the branch:
+Fixes ship from the release branch they belong to.
 
-   ```bash
-   git switch -c release/X.Y main && git push -u origin release/X.Y
-   ```
+1. Land the fix on `main` first (or cherry-pick it from there).
+2. Cherry-pick it onto `release/0.2`.
+3. Bump the patch version in `Cargo.toml` (0.2.0 to 0.2.1) in the same push, so the workflow has a new tag to create.
 
-   CI publishes `vX.Y.0`.
-3. Open a PR on `main` that bumps `src-tauri/Cargo.toml` to `X.(Y+1).0`
-   (and run `cargo update -p speechify` so `Cargo.lock` matches).
-
-Release branches are always `release/<major>.<minor>`, never `release/0.1.0`:
-one branch carries every patch release of its line. CI rejects a branch whose
-version doesn't start with `X.Y.`.
-
-## Fix a released version
-
-1. Branch from the release line: `git switch -c fix/<topic> origin/release/X.Y`.
-2. Make the fix and bump `src-tauri/Cargo.toml` to `X.Y.(Z+1)` in the same PR.
-3. Open the PR against `release/X.Y`, not `main`. Merging it publishes
-   `vX.Y.(Z+1)`. A push that leaves the version unchanged builds but doesn't
-   publish.
-4. If `main` has the same bug, open a separate PR that cherry-picks the fix
-   onto `main`. Never merge a release branch back into `main`.
-
-## How CI does it
-
-Two workflows, one job each for every step:
-
-- [`ci.yml`](../.github/workflows/ci.yml) runs the behavioral tests on Linux,
-  macOS and Windows and then requires full coverage. Pull requests run it
-  directly.
-- [`release.yml`](../.github/workflows/release.yml) runs on pull requests and
-  on every push to `main` and `release/**`:
-  1. **Version**: reads `src-tauri/Cargo.toml` and picks the channel from the
-     branch.
-  2. **Tests** (pushes only): runs `ci.yml`.
-  3. **Package**: builds the installer on each system with the version
-     stamped in, and checks that `speechify --version` prints it.
-  4. **Publish** (pushes only, never pull requests): after tests and packages
-     pass, creates the GitHub release with the installers and `SHA256SUMS`.
-     Nightlies are prereleases. If a stable tag already exists, it skips
-     publishing and says why in the log.
-
-To merge without publishing, put `[no-release]` in the merge or squash commit
-message. Packages are still built and kept as workflow artifacts.
 
 ## Dependencies
 
-- Security fixes merge as soon as CI passes. A security fix that bumps a major
-  version gets a PR right away, labelled `security-major` for same-day review.
-- Every other new version waits 14 days after release
-  ([`.github/dependabot.yml`](../.github/dependabot.yml) covers npm, Cargo and
-  GitHub Actions). The optional Python environments use hash-locked files
-  compiled with `--exclude-newer`.
-- Overrides of transitive dependencies are a last resort. Each one is logged
-  in [`.github/dependency-overrides.yml`](../.github/dependency-overrides.yml).
+The policy is in `.github/dependabot.yml`.
 
-The `DEPENDABOT_ALERTS_TOKEN` Dependabot secret (a fine-grained token with
-read-only Dependabot alerts access to this repository) lets the security
-workflow tell security PRs apart so they can auto-merge. Without it, nothing
-auto-merges and the workflow says so in a warning:
+- **Security fixes** are proposed and merged as soon as the required checks pass. Cooldown never applies to them.
+- **Everything else** waits 14 days after a version is released (`cooldown.default-days: 14` for all semver levels), and minor and patch updates are grouped into one pull request per ecosystem. Dependabot checks npm and Cargo daily and GitHub Actions weekly, so a version is proposed soon after its 14 days are up.
+- **Auto-merge** is done by `.github/workflows/dependabot-security.yml`. It looks up whether a Dependabot pull request fixes a security advisory. Patch and minor security fixes get auto-merge with squash once required checks pass. Major security fixes get the `security-major` label and need a same-day review by a person.
+- **The secret.** Looking up advisories needs a token the default `GITHUB_TOKEN` does not have. Create a token that can read Dependabot alerts and store it as the repository secret `DEPENDABOT_ALERTS_TOKEN`. Without it the workflow warns and nothing is auto-merged.
+- **Overrides.** An npm override or a Cargo `[patch]` must have an entry in `.github/dependency-overrides.yml` in the same commit, and is removed, with its entry, once upstream no longer needs it. The file lists no overrides today.
+- **Pins.** Manifests use exact versions, and the workflows pin actions by commit hash. Update them through Dependabot, not by hand.
 
-```bash
-gh secret set DEPENDABOT_ALERTS_TOKEN --app dependabot --repo Sumedhbhat/speechify
-```
+## Branch protection
+
+The `main` ruleset requires these checks by name: `Test (ubuntu-24.04)`, `Test (windows-2025)` and `Tauri full coverage gate`. If you rename a job in `ci.yml`, update the ruleset in the same change. A cancelled macOS run needs a rerun, not a rewrite.

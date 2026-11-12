@@ -32,8 +32,8 @@ jobs:
       - name: Determine version and channel
         id: version
         run: |
-          # src-tauri/Cargo.toml is the only place the version is written.
-          manifest="$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -n 1)"
+          # The workspace Cargo.toml is the only place the version is written.
+          manifest="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
           case "$GITHUB_REF" in
             refs/heads/release/*)
               line="${GITHUB_REF#refs/heads/release/}"
@@ -42,7 +42,7 @@ jobs:
               esac
               case "$manifest" in
                 "$line".*) ;;
-                *) echo "src-tauri/Cargo.toml version $manifest does not belong to release/$line." >&2; exit 1 ;;
+                *) echo "Cargo.toml version $manifest does not belong to release/$line." >&2; exit 1 ;;
               esac
               channel=stable
               version="$manifest"
@@ -88,7 +88,6 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       # Read at compile time by `speechify --version` and the Settings page.
       SPEECHIFY_VERSION: ${{ needs.version.outputs.version }}
-      PYTHON: ${{ matrix.python }}
     defaults:
       run:
         shell: bash
@@ -105,55 +104,54 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libx11-dev libxtst-dev
-      - name: Install locked dependencies and the pinned native runtime
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libx11-dev libxtst-dev libxi-dev
+      - name: Install locked dependencies and the pinned speech runtime
         run: |
           npm ci
-          "$PYTHON" scripts/prepare-native.py
+          "${{ matrix.python }}" scripts/fetch-native.py
 
       - name: Build (Linux)
         if: runner.os == 'Linux'
         run: |
           npm run tauri -- build --ci --config "{\"version\":\"$VERSION\"}" --bundles deb -- --locked
-          test "$(src-tauri/target/release/speechify --version)" = "speechify $VERSION"
-          mkdir -p dist
-          cp src-tauri/target/release/bundle/deb/*.deb "dist/Speechify-$VERSION-linux-amd64.deb"
-          python3 scripts/package-portable.py
-          cp artifacts/*.tar.gz dist/
+          test "$(target/release/speechify --version)" = "speechify $VERSION"
+          mkdir -p artifacts
+          cp target/release/bundle/deb/*.deb "artifacts/Speechify-$VERSION-linux-amd64.deb"
 
       - name: Build (macOS)
         if: runner.os == 'macOS'
         run: |
           npm run tauri -- build --ci --config "{\"version\":\"$VERSION\"}" --bundles app -- --locked
-          bundle=src-tauri/target/release/bundle/macos/Speechify.app
-          test "$(src-tauri/target/release/speechify --version)" = "speechify $VERSION"
+          bundle=target/release/bundle/macos/Speechify.app
+          test "$(target/release/speechify --version)" = "speechify $VERSION"
           # Ad-hoc signed until there is an Apple Developer ID.
           codesign --force --deep --sign - --entitlements src-tauri/Entitlements.plist "$bundle"
           codesign --verify --deep --strict --verbose=2 "$bundle"
-          mkdir -p artifacts/dmg-stage dist
+          mkdir -p artifacts/dmg-stage
           cp -R "$bundle" artifacts/dmg-stage/
           ln -s /Applications artifacts/dmg-stage/Applications
-          hdiutil create -volname Speechify -srcfolder artifacts/dmg-stage -ov -format UDZO "dist/Speechify-$VERSION-mac-arm64.dmg"
+          hdiutil create -volname Speechify -srcfolder artifacts/dmg-stage -ov -format UDZO "artifacts/Speechify-$VERSION-mac-arm64.dmg"
+          rm -rf artifacts/dmg-stage
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
         run: |
           npm run tauri -- build --ci --config "{\"version\":\"$VERSION\"}" --bundles nsis -- --locked
-          test "$(src-tauri/target/release/speechify.exe --version | tr -d '\r')" = "speechify $VERSION"
-          mkdir -p dist
-          cp src-tauri/target/release/bundle/nsis/*-setup.exe "dist/Speechify-$VERSION-windows-x64-installer.exe"
+          test "$(target/release/speechify.exe --version | tr -d '\r')" = "speechify $VERSION"
+          mkdir -p artifacts
+          cp target/release/bundle/nsis/*-setup.exe "artifacts/Speechify-$VERSION-windows-x64-installer.exe"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer-${{ matrix.platform }}
-          path: dist/*
+          path: artifacts/*
           if-no-files-found: error
           retention-days: 7
 
   publish:
     name: Publish ${{ needs.version.outputs.channel }} release
     needs: [version, tests, package]
-    # A merge can explicitly retain build/test artifacts without publishing.
+    # A merge can explicitly keep build and test artifacts without publishing.
     if: github.event_name == 'push' && needs.version.outputs.channel != 'none' && !contains(github.event.head_commit.message, '[no-release]')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -179,7 +177,7 @@ jobs:
         run: |
           tag="v$VERSION"
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "::notice::$tag is already released. Bump the patch version in src-tauri/Cargo.toml to publish a fix."
+            echo "::notice::$tag is already released. Bump the patch version in Cargo.toml to publish a fix."
             exit 0
           fi
           prerelease=""
@@ -190,8 +188,7 @@ jobs:
           - **Windows**: [Speechify-$VERSION-windows-x64-installer.exe]($url/Speechify-$VERSION-windows-x64-installer.exe)
           - **macOS** (Apple silicon): [Speechify-$VERSION-mac-arm64.dmg]($url/Speechify-$VERSION-mac-arm64.dmg)
           - **Ubuntu, Debian**: [Speechify-$VERSION-linux-amd64.deb]($url/Speechify-$VERSION-linux-amd64.deb)
-          - **Other Linux** (portable): [Speechify-$VERSION-linux-x86_64.tar.gz]($url/Speechify-$VERSION-linux-x86_64.tar.gz)
 
-          To update, install the new version over the old one. Your recordings, corrections, settings and models are kept. See docs/releases.md for channels."
+          To update, install the new version over the old one. Your dictations, dictionary, settings and models are kept. See docs/releases.md for channels."
           gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "Speechify $VERSION" \
             --notes "$notes" --generate-notes $prerelease
