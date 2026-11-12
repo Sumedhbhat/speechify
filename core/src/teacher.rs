@@ -11,12 +11,12 @@ use crate::asr::{strip_tags, Hint, Recognizer};
 use crate::context::Target;
 use crate::diff::{normalize, wer, words};
 use crate::format::Replacement;
-use crate::learn::{corrections, corroborated, notable_terms};
+use crate::learn::{corrections, corroborated, evidence, notable_terms, Evidence};
 use crate::llm::{vet_cleanup, Rewriter};
 use crate::pipeline::compose;
 use crate::settings::Settings;
 use crate::store::{Clock, Dictation, Store, MAX_TERM};
-use crate::{audio, Result};
+use crate::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -46,19 +46,31 @@ struct Learner<'a> {
     settings: &'a Settings,
     clock: Clock,
     student: &'a str,
+    /// The recogniser's confidence in each word of `student`.
+    heard: &'a [crate::asr::Heard],
 }
 
 impl Learner<'_> {
-    fn take(&self, found: Vec<Replacement>, weight: u32, source: &str, report: &mut Report) -> Result<()> {
+    /// Counts corrections by the evidence for each. A correction that changes
+    /// the meaning is dropped. One that sounds like what was heard is learned
+    /// at once if the recogniser was unsure of those words, and otherwise only
+    /// once it has come up `learn_after` times.
+    fn take(&self, found: Vec<Replacement>, source: &str, report: &mut Report) -> Result<()> {
         for correction in found {
             if correction.from.chars().count() > MAX_TERM || correction.to.chars().count() > MAX_TERM {
                 continue;
             }
             // Zero means it is already in the dictionary, or the user deleted it.
-            let weight = if source == "teacher" && corroborated(&correction, self.student, &self.store.vocabulary()) {
-                self.settings.teacher.learn_after
-            } else {
-                weight
+            let enough = self.settings.teacher.learn_after;
+            let weight = match evidence(&correction, self.heard) {
+                Evidence::None => continue,
+                Evidence::Strong => enough,
+                Evidence::Weak
+                    if source == "teacher" && corroborated(&correction, self.student, &self.store.vocabulary()) =>
+                {
+                    enough
+                }
+                Evidence::Weak => 1,
             };
             let count = self.store.suggest(&correction.from, &correction.to, weight)?;
             if count >= self.settings.teacher.learn_after && self.settings.auto_learn {
@@ -91,9 +103,9 @@ pub fn learn_from_edit(
             settings,
             clock,
             student: &before.raw,
+            heard: &before.heard,
         };
-        let found = corrections(&before.text, text);
-        learner.take(found, settings.teacher.learn_after, "edit", &mut report)?;
+        learner.take(corrections(&before.text, text), "edit", &mut report)?;
     }
     if !same_words(&before.text, text) && !text.trim().is_empty() && !before.command {
         store.add_example(before.category, &before.raw, text.trim(), clock)?;
@@ -138,7 +150,7 @@ pub fn review(
             report.skipped += 1;
             continue;
         };
-        let trimmed = audio::trim(&samples);
+        let trimmed = crate::asr::isolate(recognizer, &samples)?;
         if trimmed.samples.is_empty() {
             store.skip_review(dictation.id, clock)?;
             report.skipped += 1;
@@ -180,8 +192,9 @@ pub fn review(
                 settings,
                 clock,
                 student: &dictation.raw,
+                heard: &dictation.heard,
             };
-            learner.take(corrections(&dictation.raw, &heard), 1, "teacher", &mut report)?;
+            learner.take(corrections(&dictation.raw, &heard), "teacher", &mut report)?;
             if settings.auto_learn {
                 // Shared recognition is independent evidence of the spelling.
                 // Vocabulary biases capable recognisers but never fuzzy-rewrites
@@ -577,15 +590,35 @@ mod tests {
         );
     }
 
+    /// A dictation as `recorded` makes it, with the recogniser's confidence in each raw word.
+    fn heard_with(store: &Store, raw: &str, text: &str, sure: &[(&str, f32)]) -> i64 {
+        let heard = raw
+            .split_whitespace()
+            .map(|word| crate::asr::Heard {
+                word: word.into(),
+                p: sure.iter().find(|(w, _)| *w == word).map_or(0.98, |(_, p)| *p),
+            })
+            .collect();
+        store
+            .add_dictation(&Dictation {
+                raw: raw.into(),
+                heard,
+                category: Category::Work,
+                ..dictation(text, "Slack", NOW.now)
+            })
+            .unwrap()
+    }
+
     #[test]
-    fn a_hand_correction_is_learned_immediately() {
+    fn a_hand_fix_of_words_the_recogniser_was_unsure_of_is_learned_at_once() {
         let store = Store::memory();
-        let mut settings = Settings::default();
-        let id = recorded(
+        let settings = Settings::default();
+        let raw = "deploy with cube control tonight please";
+        let id = heard_with(
             &store,
-            "deploy with cube control tonight please",
+            raw,
             "Deploy with cube control tonight please.",
-            "a.wav",
+            &[("cube", 0.41), ("control", 0.55)],
         );
         let learned = learn_from_edit(&store, &settings, id, "Deploy with kubectl tonight please.", NOW).unwrap();
         assert_eq!(learned, vec![Replacement::new("cube control", "kubectl")]);
@@ -594,16 +627,64 @@ mod tests {
             store.examples(Category::Work, 1)[0].1,
             "Deploy with kubectl tonight please."
         );
-        // Punctuation-only edits and switched-off learning teach nothing.
-        settings.auto_learn = false;
-        let other = recorded(&store, "ping vikram soon", "Ping vikram soon.", "b.wav");
+    }
+
+    #[test]
+    fn a_hand_fix_of_confident_words_must_come_up_twice() {
+        let store = Store::memory();
+        let settings = Settings::default();
+        let first = heard_with(&store, "ask sumit bat today", "Ask sumit bat today.", &[]);
+        assert!(learn_from_edit(&store, &settings, first, "Ask Sumedh Bhat today.", NOW)
+            .unwrap()
+            .is_empty());
+        assert_eq!(store.suggestions().unwrap()[0].count, 1);
+        assert!(store.dictionary().unwrap().is_empty());
+        // The same fix again, on a recording with no confidence at all, is enough.
+        let second = recorded(
+            &store,
+            "tell sumit bat it shipped",
+            "Tell sumit bat it shipped.",
+            "b.wav",
+        );
+        let learned = learn_from_edit(&store, &settings, second, "Tell Sumedh Bhat it shipped.", NOW).unwrap();
+        assert_eq!(learned, vec![Replacement::new("sumit bat", "Sumedh Bhat")]);
+    }
+
+    #[test]
+    fn an_edit_that_changes_the_meaning_is_never_learned() {
+        let store = Store::memory();
+        let settings = Settings::default();
+        // Even where the recogniser was unsure, "open" to "close" is a new
+        // instruction, not a misheard word; nor is a change of number.
+        let unsure = [("open", 0.3), ("three", 0.3)];
+        for (raw, text, edit) in [
+            ("open the file now", "Open the file now.", "Close the file now."),
+            ("open the file now", "Open the file now.", "Close the file now."),
+            ("order three boxes", "Order three boxes.", "Order two boxes."),
+        ] {
+            let id = heard_with(&store, raw, text, &unsure);
+            assert!(learn_from_edit(&store, &settings, id, edit, NOW).unwrap().is_empty());
+        }
+        assert!(store.dictionary().unwrap().is_empty() && store.suggestions().unwrap().is_empty());
+        // The corrected text is still a good example of what the user meant.
+        assert_eq!(store.examples(Category::Work, 9).len(), 2);
+    }
+
+    #[test]
+    fn edits_teach_nothing_when_learning_is_off_or_the_text_is_unchanged() {
+        let store = Store::memory();
+        let settings = Settings {
+            auto_learn: false,
+            ..Settings::default()
+        };
+        let other = heard_with(&store, "ping vikram soon", "Ping vikram soon.", &[("vikram", 0.2)]);
         assert!(learn_from_edit(&store, &settings, other, "Ping Vikraam soon.", NOW)
             .unwrap()
             .is_empty());
-        assert_eq!(store.dictionary().unwrap().len(), 1);
+        assert!(store.dictionary().unwrap().is_empty());
         let third = recorded(&store, "all good", "All good.", "c.wav");
         learn_from_edit(&store, &settings, third, "All good!", NOW).unwrap();
-        assert_eq!(store.examples(Category::Work, 9).len(), 2);
+        assert_eq!(store.examples(Category::Work, 9).len(), 1);
         assert!(learn_from_edit(&store, &settings, 999, "x", NOW).is_err());
     }
 

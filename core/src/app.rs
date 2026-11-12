@@ -345,11 +345,9 @@ impl<P: Platform, E: Engines> Controller<P, E> {
         }
         if settings.keep_audio {
             let name = format!("{}-{}.wav", clock.now, self.platform.now_ms() % 100_000);
-            if self
-                .platform
-                .save_audio(&name, &crate::audio::trim(audio).samples)
-                .is_ok()
-            {
+            // The whole recording is kept: the nightly review finds the
+            // speech again itself, and quiet speech must not be cut here.
+            if self.platform.save_audio(&name, audio).is_ok() {
                 record.audio = name;
             }
         }

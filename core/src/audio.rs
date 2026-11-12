@@ -44,16 +44,101 @@ pub fn level(samples: &[f32]) -> f32 {
     ((db + 50.0) / 40.0).clamp(0.0, 1.0)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// The voice detector's settings. A lower threshold than Silero's default
+/// (0.5) keeps soft and whispered speech; the minimum length still rejects
+/// taps and clicks. Chosen on the development half of the test set in
+/// docs/evaluation.md, not on the half it is reported on.
+pub const DETECTION: crate::native::Detection = crate::native::Detection {
+    threshold: 0.35,
+    min_speech_ms: 200,
+    min_silence_ms: 300,
+};
+
+/// The second, lower threshold for recordings the detector rejects but that
+/// have sustained sound above their background: very soft whispers. Chosen
+/// on the development half: it kept every whispered clip there, and let
+/// through a third of non-speech sounds, half as many as loudness alone.
+pub const FALLBACK_THRESHOLD: f64 = 0.15;
+
+/// Below this the microphone delivered no usable signal (about -80 dBFS):
+/// it is muted, unplugged or switched off.
+const NO_SIGNAL: f32 = 1e-4;
+/// Quiet recordings are raised until their loud moments reach this level.
+const TARGET_PEAK: f32 = 0.25;
+/// At most 50 dB of gain, so a near-silent microphone is not turned into hiss.
+const MAX_GAIN: f32 = 316.0;
+/// Room kept before and after detected speech so word edges are not cut.
+const LEAD_SAMPLES: usize = 3200; // 200 ms
+const TAIL_SAMPLES: usize = 4800; // 300 ms
+
+/// Raises a quiet recording to a normal level. The gain comes from the
+/// 99.5th-percentile sample, so a single loud click does not stop a soft
+/// voice from being raised. Loud recordings are left as they are. Returns
+/// `None` when there is no signal at all.
+pub fn normalize(samples: &[f32]) -> Option<Vec<f32>> {
+    let mut magnitudes: Vec<f32> = samples.iter().map(|sample| sample.abs()).collect();
+    let rank = magnitudes.len().checked_sub(1)? * 995 / 1000;
+    let (_, peak, _) = magnitudes.select_nth_unstable_by(rank, |a, b| a.total_cmp(b));
+    if *peak < NO_SIGNAL {
+        return None;
+    }
+    let gain = (TARGET_PEAK / *peak).clamp(1.0, MAX_GAIN);
+    Some(samples.iter().map(|sample| (sample * gain).clamp(-1.0, 1.0)).collect())
+}
+
+/// Cuts a recording down to the detected speech, with a little room around
+/// it. No regions means no speech. `also` widens the cut: the voice detector
+/// is least sure at the soft start and end of whispered speech, and cutting
+/// there loses words, so the loudness span is kept as well.
+pub fn trim_to(samples: &[f32], regions: &[std::ops::Range<usize>], also: Option<std::ops::Range<usize>>) -> Trimmed {
+    let (Some(first), Some(last)) = (regions.first(), regions.last()) else { return Trimmed::default() };
+    let (lead, tail) = also.map_or((usize::MAX, 0), |span| (span.start, span.end));
+    let start = first.start.saturating_sub(LEAD_SAMPLES).min(lead).min(samples.len());
+    let end = (last.end + TAIL_SAMPLES).max(tail).clamp(start, samples.len());
+    let spoken: usize = regions.iter().map(|region| region.len()).sum();
+    Trimmed {
+        samples: samples[start..end].to_vec(),
+        speech_ms: spoken as u64 * 1000 / RATE as u64,
+        span: start..end,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Trimmed {
     pub samples: Vec<f32>,
     /// Time spent speaking, used for words-per-minute.
     pub speech_ms: u64,
+    /// Where the kept samples sit in the original recording.
+    pub span: std::ops::Range<usize>,
 }
 
 /// Cuts leading and trailing silence. Returns no samples when nobody spoke,
 /// which also keeps the recogniser from inventing words out of noise.
 pub fn trim(samples: &[f32]) -> Trimmed {
+    let Some((span, speech_ms, peak)) = loudness(samples) else { return Trimmed::default() };
+    let (start, end) = (span.start, span.end);
+    Trimmed {
+        // Raise only quiet, already-detected speech. Bound both amplification
+        // and sample peaks; silence/noise is never amplified into speech.
+        samples: {
+            let amplitude = samples[start..end].iter().fold(0.0_f32, |peak, s| peak.max(s.abs()));
+            let gain = (0.02 / peak).min(16.0).min(0.9 / amplitude).max(1.0);
+            samples[start..end].iter().map(|s| s * gain).collect()
+        },
+        speech_ms,
+        span: start..end,
+    }
+}
+
+/// Where a recording is louder than its own background, with room around
+/// it: (sample span, sound time, loudest frame). `None` for no sustained sound.
+/// Being relative to the room, it follows soft whispered syllables that a
+/// voice detector is less sure of.
+pub fn loudness_span(samples: &[f32]) -> Option<std::ops::Range<usize>> {
+    loudness(samples).map(|(span, _, _)| span)
+}
+
+fn loudness(samples: &[f32]) -> Option<(std::ops::Range<usize>, u64, f32)> {
     let energies: Vec<f32> = samples.chunks(FRAME).map(rms).collect();
     let mut sorted = energies.clone();
     sorted.sort_by(|a, b| a.total_cmp(b));
@@ -64,36 +149,19 @@ pub fn trim(samples: &[f32]) -> Trimmed {
     let threshold = (noise * 3.0).min(0.03).max(peak * 0.12).max(1e-6);
     let speech: Vec<usize> = (0..energies.len()).filter(|i| energies[*i] > threshold).collect();
     let speech_ms = speech.len() as u64 * 20;
-    let (Some(first), Some(last)) = (speech.first(), speech.last()) else {
-        return Trimmed {
-            samples: vec![],
-            speech_ms: 0,
-        };
-    };
+    let (first, last) = (speech.first()?, speech.last()?);
     // Isolated clicks can accumulate 160 ms over a long recording. Require
     // at least one sustained 80 ms sound as well as enough total speech.
     let sustained = energies
         .windows(4)
         .any(|run| run.iter().all(|energy| *energy > threshold));
     if speech_ms < MIN_SPEECH_MS || !sustained {
-        return Trimmed {
-            samples: vec![],
-            speech_ms: 0,
-        };
+        return None;
     }
     // Keep a little room so word edges are not clipped.
     let start = first.saturating_sub(10) * FRAME;
     let end = ((last + 15) * FRAME).min(samples.len());
-    Trimmed {
-        // Raise only quiet, already-detected speech. Bound both amplification
-        // and sample peaks; silence/noise is never amplified into speech.
-        samples: {
-            let amplitude = samples[start..end].iter().fold(0.0_f32, |peak, s| peak.max(s.abs()));
-            let gain = (0.02 / peak).min(16.0).min(0.9 / amplitude).max(1.0);
-            samples[start..end].iter().map(|s| s * gain).collect()
-        },
-        speech_ms,
-    }
+    Some((start..end, speech_ms, peak))
 }
 
 /// 16-bit mono WAV at 16 kHz.
@@ -190,6 +258,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn quiet_recordings_are_raised_and_silence_is_refused() {
+        assert_eq!(normalize(&[]), None);
+        assert_eq!(normalize(&[0.0; 1000]), None);
+        assert_eq!(normalize(&[0.00005; 1000]), None);
+        let raised = normalize(&tone(500, 0.01)).unwrap();
+        let peak = raised.iter().fold(0f32, |peak, s| peak.max(s.abs()));
+        assert!((0.24..=0.26).contains(&peak), "{peak}");
+        let loud = tone(500, 0.6);
+        assert_eq!(normalize(&loud).unwrap(), loud);
+        // At most 50 dB of gain.
+        assert!((normalize(&[0.0002; 1000]).unwrap()[0] - 0.0632).abs() < 1e-3);
+        // One loud click neither stops a soft voice being raised nor overflows.
+        let mut clicked = tone(1000, 0.01);
+        clicked[100] = 0.9;
+        let raised = normalize(&clicked).unwrap();
+        assert_eq!(raised[100], 1.0);
+        assert!(raised.iter().filter(|s| s.abs() > 0.2).count() > 100);
+    }
+
+    #[test]
+    fn trims_to_detected_speech_with_room_around_it() {
+        let samples: Vec<f32> = (0..32_000).map(|i| i as f32).collect();
+        assert_eq!(trim_to(&samples, &[], None), Trimmed::default());
+        let both = trim_to(&samples, &[8000..12_000, 16_000..20_000], None);
+        assert_eq!(
+            (both.samples[0], both.samples.len(), both.speech_ms),
+            (4800.0, 20_000, 500)
+        );
+        assert_eq!(both.span, 4800..24_800);
+        let edges = trim_to(&samples, std::slice::from_ref(&(1000..31_000)), None);
+        assert_eq!(
+            (edges.samples[0], edges.samples.len(), edges.speech_ms),
+            (0.0, 32_000, 1875)
+        );
+        let past = trim_to(&samples, std::slice::from_ref(&(40_000..41_000)), None);
+        assert_eq!((past.samples.len(), past.speech_ms), (0, 62));
+        // The loudness span widens the cut on either side, never narrows it.
+        let soft_edges = trim_to(&samples, std::slice::from_ref(&(16_000..20_000)), Some(2000..30_000));
+        assert_eq!(
+            (soft_edges.samples[0], soft_edges.samples.len(), soft_edges.speech_ms),
+            (2000.0, 28_000, 250)
+        );
+        let inside = trim_to(&samples, std::slice::from_ref(&(16_000..20_000)), Some(17_000..18_000));
+        assert_eq!((inside.samples[0], inside.samples.len()), (12_800.0, 12_000));
+        assert_eq!(trim_to(&samples, &[], Some(0..32_000)), Trimmed::default());
+        assert_eq!(loudness_span(&[0.0; 16_000]), None);
+    }
+
+    #[test]
     fn mixes_and_resamples() {
         assert_eq!(to_mono_16k(&[0.2, 0.4, -1.0, 1.0], 2, RATE), vec![0.3, 0.0]);
         let down = to_mono_16k(&vec![0.5; 48_000], 1, 48_000);
@@ -222,17 +339,12 @@ mod tests {
         // Speech running to the very end is not cut short.
         let abrupt = trim(&tone(400, 0.3));
         assert_eq!(abrupt.samples.len(), 6400);
+        assert_eq!(abrupt.span, 0..6400);
     }
 
     #[test]
     fn silence_and_clicks_yield_nothing() {
-        assert_eq!(
-            trim(&[]),
-            Trimmed {
-                samples: vec![],
-                speech_ms: 0
-            }
-        );
+        assert_eq!(trim(&[]), Trimmed::default());
         assert!(trim(&vec![0.001; 32_000]).samples.is_empty());
         let mut click = vec![0.0; 16_000];
         click.extend(tone(60, 0.5));

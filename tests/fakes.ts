@@ -63,6 +63,7 @@ export function status(over: Partial<Status> = {}): Status {
     version: "1.2.3",
     platform: "linux",
     wayland: false,
+    shortcuts: true,
     speech_ready: true,
     speech_device: "vulkan NVIDIA GeForce RTX 4060",
     speech_error: "",

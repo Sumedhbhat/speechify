@@ -70,7 +70,7 @@ describe("home header", () => {
   it("guides a new user and explains Wayland", async () => {
     ctx.api.getInsights.mockResolvedValue(insights({ today_words: 0, streak: 1 }));
     ctx.api.getStatus.mockResolvedValue(
-      status({ speech_ready: false, rewrite_reachable: false, wayland: true }),
+      status({ speech_ready: false, rewrite_reachable: false, wayland: true, shortcuts: false }),
     );
     await setup([]);
     expect(document.querySelector(".lede")!.textContent).toBe(
@@ -84,6 +84,15 @@ describe("home header", () => {
     byText<HTMLButtonElement>(document, "button", "Set up").click();
     expect(ctx.navigate).toHaveBeenCalledWith("models");
     expect(ctx.navigate).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks a Mac user for Accessibility access when shortcuts cannot be read", async () => {
+    ctx.api.getStatus.mockResolvedValue(status({ platform: "macos", shortcuts: false }));
+    await setup([]);
+    const checklist = document.querySelector(".checklist")!.textContent!;
+    expect(checklist).toContain("Let Speechify see your shortcut");
+    expect(checklist).toContain("Privacy & Security › Accessibility");
+    expect(checklist).not.toContain("Wayland");
   });
 });
 

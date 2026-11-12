@@ -104,7 +104,16 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("Speechify could not start")
-        .run(|_, event| {
+        .run(|app, event| {
+            // The Dock icon stays visible on a Mac; clicking it brings the
+            // window back after it was closed to the tray.
+            #[cfg(target_os = "macos")]
+            if let RunEvent::Reopen { .. } = event {
+                shell::show_main(app, "home");
+                return;
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = app;
             if let RunEvent::ExitRequested { api, code, .. } = event {
                 // Only an explicit Quit (which passes a code) ends the app.
                 if code.is_none() {

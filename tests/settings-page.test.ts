@@ -42,9 +42,16 @@ describe("settings page", () => {
   });
 
   it("explains shortcuts on Wayland", async () => {
-    ctx.api.getStatus.mockResolvedValue(status({ wayland: true }));
+    ctx.api.getStatus.mockResolvedValue(status({ wayland: true, shortcuts: false }));
     await setup();
     expect(document.body.textContent).toContain("Global shortcuts are not available on Wayland");
+  });
+
+  it("asks for Accessibility access when the keyboard cannot be read outside Wayland", async () => {
+    ctx.api.getStatus.mockResolvedValue(status({ platform: "macos", shortcuts: false }));
+    await setup();
+    expect(document.body.textContent).toContain("Speechify cannot see your keyboard yet");
+    expect(document.body.textContent).not.toContain("Wayland");
   });
 
   it("saves the rest of the controls", async () => {

@@ -228,7 +228,7 @@ pub fn run_guarded(
     circuit: (&mut RewriteCircuit, u64),
 ) -> Result<Outcome> {
     let started = Instant::now();
-    let trimmed = audio::trim(request.audio);
+    let trimmed = crate::asr::isolate(recognizer, request.audio)?;
     if trimmed.samples.is_empty() {
         return Ok(Outcome::Silent);
     }
@@ -256,6 +256,7 @@ pub fn run_guarded(
         duration_ms: (request.audio.len() as u64 * 1000 / audio::RATE as u64) as u32,
         speech_ms: trimmed.speech_ms as u32,
         raw: raw.clone(),
+        heard: recognizer.heard(),
         speech_model: recognizer.name().to_string(),
         asr_ms,
         ..Dictation::default()

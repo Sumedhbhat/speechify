@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Speechify listens only while you hold the dictation shortcut, and transcribes on this Mac.</string>
+  <string>Speechify listens only while you are dictating. Audio is transcribed on this Mac unless you set up a speech server.</string>
   <key>LSUIElement</key>
   <false/>
 </dict>

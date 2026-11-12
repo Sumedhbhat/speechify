@@ -49,17 +49,21 @@ function checklist(
       onclick: () => navigate(page),
     });
   const key = h("kbd", { textContent: settings.hotkeys.push_to_talk });
-  const shortcut = status.wayland
-    ? step(false, "Start dictating from the bar", [
-        "Global shortcuts are not available on Wayland. Click the small bar at the bottom of the screen, or bind ",
-        h("code", { textContent: "speechify --toggle" }),
-        " to a shortcut in your system settings.",
-      ])
-    : step(true, "Hold your shortcut and speak", [
+  const shortcut = status.shortcuts
+    ? step(true, "Hold your shortcut and speak", [
         "Hold ",
         key,
         " in any app, speak, and let go. The text is typed where your cursor is.",
-      ]);
+      ])
+    : status.wayland
+      ? step(false, "Start dictating from the bar", [
+          "Global shortcuts are not available on Wayland. Click the small bar at the bottom of the screen, or bind ",
+          h("code", { textContent: "speechify --toggle" }),
+          " to a shortcut in your system settings.",
+        ])
+      : step(false, "Let Speechify see your shortcut", [
+          "Allow Speechify under System Settings › Privacy & Security › Accessibility, then restart it. Until then, click the small bar at the bottom of the screen to dictate.",
+        ]);
   const items = [
     status.speech_ready
       ? step(true, "Speech model ready", ["Everything you say is recognised on this computer."])
