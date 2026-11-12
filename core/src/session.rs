@@ -209,6 +209,12 @@ impl Session {
                 }
             }
 
+            (State::TapWait { until, .. }, _) if starts && now >= until => {
+                self.state = State::Idle;
+                let mut effects = vec![Effect::Discard { keep: false }];
+                effects.extend(self.handle(event, now));
+                effects
+            }
             (State::TapWait { started, command, .. }, _) if starts => {
                 self.state = State::Locked {
                     started,
@@ -468,5 +474,34 @@ mod tests {
         assert_eq!(s.handle(Down(PasteLast), 200), vec![]);
         assert_eq!(s.handle(Down(CopyLast), 210), vec![]);
         assert_eq!(s.handle(Released, 300), vec![]);
+    }
+
+    #[test]
+    fn expired_tap_starts_a_fresh_recording_without_a_tick() {
+        for event in [Down(PushToTalk), Down(Command), Down(HandsFree), BarClick] {
+            let mut s = Session::new();
+            s.handle(Down(PushToTalk), 0);
+            s.handle(Up(PushToTalk), 100);
+            let mut fresh = Session::new();
+            let mut expected = vec![Effect::Discard { keep: false }];
+            expected.extend(fresh.handle(event, 600));
+            assert_eq!(s.handle(event, 600), expected);
+            assert!(s.is_recording());
+        }
+        let mut s = Session::new();
+        s.handle(Down(PushToTalk), 0);
+        s.handle(Up(PushToTalk), 100);
+        assert_eq!(
+            s.handle(Down(PushToTalk), 800),
+            vec![
+                Effect::Discard { keep: false },
+                Effect::Start,
+                Effect::Mode {
+                    command: false,
+                    locked: false
+                }
+            ]
+        );
+        assert_eq!(s.handle(Up(PushToTalk), 1400), vec![Effect::Stop { command: false }]);
     }
 }
