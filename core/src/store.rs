@@ -306,7 +306,14 @@ impl Store {
 
     /// Newest first. `search` matches the text, what was heard and the app.
     pub fn history(&self, search: &str, limit: u32, offset: u32) -> Result<Vec<Dictation>> {
-        let like = format!("%{}%", search.trim().replace('%', "\\%").replace('_', "\\_"));
+        let like = format!(
+            "%{}%",
+            search
+                .trim()
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
         self.select(
             "WHERE text LIKE ?1 ESCAPE '\\' OR raw LIKE ?1 ESCAPE '\\' OR app LIKE ?1 ESCAPE '\\' ORDER BY id DESC LIMIT ?2 OFFSET ?3",
             params![like, limit, offset],
@@ -360,8 +367,15 @@ impl Store {
 
     /// Deletes dictations and returns their audio files for removal.
     pub fn delete_dictations(&self, ids: Option<&[i64]>) -> Result<Vec<String>> {
+        let transaction = self.conn.unchecked_transaction().map_err(err)?;
         let rows = match ids {
-            Some(ids) => ids.iter().filter_map(|id| self.dictation(*id).ok()).collect(),
+            Some(ids) => {
+                let mut rows = Vec::new();
+                for id in ids {
+                    rows.extend(self.select("WHERE id = ?1", params![id])?);
+                }
+                rows
+            }
             None => self.all()?,
         };
         for row in &rows {
@@ -369,6 +383,7 @@ impl Store {
                 .execute("DELETE FROM dictations WHERE id = ?1", [row.id])
                 .map_err(err)?;
         }
+        transaction.commit().map_err(err)?;
         Ok(rows
             .into_iter()
             .map(|row| row.audio)
@@ -688,7 +703,8 @@ impl Store {
 
     /// Moves a counted correction into the dictionary.
     pub fn accept(&self, heard: &str, term: &str, source: &str, clock: Clock) -> Result<()> {
-        self.add_word(heard, term, source, clock)?;
+        let heard = heard.trim().to_lowercase();
+        self.add_word(&heard, term, source, clock)?;
         let sql = "UPDATE suggestions SET status = 'accepted' WHERE heard = ?1 AND term = ?2";
         self.conn.execute(sql, params![heard, term]).map_err(err)?;
         Ok(())
@@ -773,9 +789,7 @@ impl Store {
     /// Keeps a worked example (what was heard → the ideal text) for the
     /// everyday model's prompt. Only the newest 200 are kept.
     pub fn add_example(&self, category: Category, raw: &str, gold: &str, clock: Clock) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM examples WHERE raw = ?1", [raw])
-            .map_err(err)?;
+        self.remove_example(raw, None)?;
         self.conn
             .execute(
                 "INSERT INTO examples (category, raw, gold, created_at) VALUES (?1, ?2, ?3, ?4)",
@@ -789,6 +803,16 @@ impl Store {
             )
             .map_err(err)?;
         Ok(())
+    }
+
+    pub(crate) fn remove_example(&self, raw: &str, gold: Option<&str>) -> Result<bool> {
+        self.conn
+            .execute(
+                "DELETE FROM examples WHERE raw = ?1 AND (?2 IS NULL OR gold = ?2)",
+                params![raw, gold],
+            )
+            .map(|count| count > 0)
+            .map_err(err)
     }
 
     /// The newest examples, preferring the same kind of app.
@@ -1137,5 +1161,55 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(store.examples(Category::Other, 500).len(), 200);
+    }
+
+    #[test]
+    fn accept_normalizes_the_suggestion_key() {
+        let store = Store::memory();
+        store.suggest(" Sumit ", "Sumedh", 1).unwrap();
+        store.accept(" Sumit ", "Sumedh", "manual", NOW).unwrap();
+        assert!(store.suggestions().unwrap().is_empty());
+        assert_eq!(store.dictionary().unwrap()[0].heard, "sumit");
+    }
+
+    #[test]
+    fn history_search_treats_backslashes_and_wildcards_literally() {
+        let store = Store::memory();
+        store
+            .add_dictation(&dictation(r"C:\work\50%_done", "Notes", 1))
+            .unwrap();
+        store.add_dictation(&dictation("C:work50abcXdone", "Notes", 2)).unwrap();
+        for search in [r"C:\work", r"\50%_", r"\", "%", "_"] {
+            let rows = store.history(search, 10, 0).unwrap();
+            assert_eq!(rows.len(), 1, "{search}");
+            assert_eq!(rows[0].text, r"C:\work\50%_done");
+        }
+    }
+
+    #[test]
+    fn failed_bulk_delete_rolls_back_and_preserves_audio_references() {
+        let store = Store::memory();
+        let first = store
+            .add_dictation(&Dictation {
+                audio: "a.wav".into(),
+                ..dictation("a", "Notes", 1)
+            })
+            .unwrap();
+        let second = store
+            .add_dictation(&Dictation {
+                audio: "b.wav".into(),
+                ..dictation("b", "Notes", 2)
+            })
+            .unwrap();
+        store.conn.execute_batch("CREATE TRIGGER fail_delete BEFORE DELETE ON dictations WHEN OLD.text = 'b' BEGIN SELECT RAISE(ABORT, 'blocked'); END;").unwrap();
+        assert!(store
+            .delete_dictations(Some(&[first, second]))
+            .unwrap_err()
+            .contains("blocked"));
+        assert_eq!(store.all().unwrap().len(), 2);
+        assert_eq!(store.dictation(first).unwrap().audio, "a.wav");
+        store.conn.execute_batch("DROP TRIGGER fail_delete").unwrap();
+        assert_eq!(store.delete_dictations(None).unwrap(), vec!["a.wav", "b.wav"]);
+        assert!(store.all().unwrap().is_empty());
     }
 }

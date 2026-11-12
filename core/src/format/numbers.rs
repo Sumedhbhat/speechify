@@ -113,7 +113,7 @@ pub fn regroup(text: &str, system: NumberSystem) -> String {
 
 /// One parsed run of number words starting at a token.
 struct Run {
-    value: u64,
+    value: Option<u64>,
     tokens: usize,
     /// Exactly "<n> lakh" and the like: kept in words, as people write it.
     short_scale: Option<&'static str>,
@@ -122,7 +122,7 @@ struct Run {
 }
 
 fn parse(words: &[String]) -> Option<Run> {
-    let mut total = 0u64;
+    let mut total = Some(0u64);
     let mut current: Option<u64> = None;
     let (mut last_scale, mut after_tens, mut after_hundred) = (u64::MAX, false, false);
     let (mut tokens, mut words_only, mut plain, mut scales) = (0, true, true, 0);
@@ -146,7 +146,7 @@ fn parse(words: &[String]) -> Option<Run> {
             current = current.map(|c| c * 100);
             (after_tens, after_hundred, plain) = (false, true, false);
         } else if let (Some(s), Some(c)) = (scale(&word).filter(|s| *s < last_scale), current) {
-            total += c * s;
+            total = total.and_then(|t| c.checked_mul(s).and_then(|scaled| t.checked_add(scaled)));
             current = None;
             last_scale = s;
             scales += 1;
@@ -180,7 +180,7 @@ fn parse(words: &[String]) -> Option<Run> {
         short_scale = None;
     }
     Some(Run {
-        value: total + current.unwrap_or(0),
+        value: total.and_then(|t| t.checked_add(current.unwrap_or(0))),
         tokens,
         short_scale,
         words_only,
@@ -208,6 +208,11 @@ fn convert_line(line: &str, system: NumberSystem, edits: &mut Edits) -> String {
         let Some(run) = parse(&words[i..]) else {
             out.push(words[i].clone());
             i += 1;
+            continue;
+        };
+        let Some(value) = run.value else {
+            out.extend_from_slice(&words[i..i + run.tokens]);
+            i += run.tokens;
             continue;
         };
         let last = &words[i + run.tokens - 1];
@@ -248,7 +253,7 @@ fn convert_line(line: &str, system: NumberSystem, edits: &mut Edits) -> String {
             vec![]
         };
         let is_digits = !run.words_only && run.tokens == 1 && decimals.is_empty();
-        let lone_small = run.tokens == 1 && run.value < 10;
+        let lone_small = run.tokens == 1 && value < 10;
         let keep = is_digits
             || ORDINALS.contains(&next.as_str())
             || (lone_small && !UNIT_WORDS.contains(&next.as_str()) && decimals.is_empty() && scale(&next).is_none());
@@ -258,21 +263,21 @@ fn convert_line(line: &str, system: NumberSystem, edits: &mut Edits) -> String {
             continue;
         }
         let mut rendered = match run.short_scale {
-            Some(name) => format!("{} {name}", run.value / scale(name).unwrap()),
-            None => group_digits(run.value, system),
+            Some(name) => format!("{} {name}", value / scale(name).unwrap()),
+            None => group_digits(value, system),
         };
         let mut used = run.tokens;
         // "nineteen ninety nine", "twenty twenty six": a year said as two pairs.
-        if run.plain && run.words_only && (18..=21).contains(&run.value) && mark.is_empty() {
-            if let Some(second) =
-                parse(&words[i + used..]).filter(|r| r.plain && r.words_only && (10..100).contains(&r.value))
+        if run.plain && run.words_only && (18..=21).contains(&value) && mark.is_empty() {
+            if let Some(second) = parse(&words[i + used..])
+                .filter(|r| r.plain && r.words_only && r.value.is_some_and(|v| (10..100).contains(&v)))
             {
-                rendered = format!("{}{}", run.value, second.value);
+                rendered = format!("{}{}", value, second.value.unwrap());
                 used += second.tokens;
             }
         }
         if !decimals.is_empty() && used == run.tokens {
-            rendered = format!("{}.{}", run.value, decimals.concat());
+            rendered = format!("{}.{}", value, decimals.concat());
             used += 1 + decimals.len();
         }
         out.push(format!("{rendered}{}", trailing(&words[i + used - 1])));
@@ -385,5 +390,21 @@ mod tests {
         assert_eq!(out, "20\n31");
         assert_eq!(edits.numbers, 2);
         assert!(is_number_word("lakh") && is_number_word("hundred") && !is_number_word("many"));
+    }
+
+    #[test]
+    fn overflowing_numbers_keep_the_complete_spoken_run() {
+        for raw in [
+            "999999999999 billion",
+            "18446744073 billion 710 million",
+            "18446744073 billion 709 million 551 thousand 616",
+            "999999999999 billion fifty thousand",
+        ] {
+            assert_eq!(run(raw), raw);
+        }
+        assert_eq!(
+            run("18446744073 billion 709 million 551 thousand 615"),
+            "1,84,46,74,40,73,70,95,51,615"
+        );
     }
 }

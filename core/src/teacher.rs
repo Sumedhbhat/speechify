@@ -15,7 +15,7 @@ use crate::learn::{corrections, corroborated, notable_terms};
 use crate::llm::{vet_cleanup, Rewriter};
 use crate::pipeline::compose;
 use crate::settings::Settings;
-use crate::store::{Clock, Dictation, Store};
+use crate::store::{Clock, Dictation, Store, MAX_TERM};
 use crate::{audio, Result};
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +51,9 @@ struct Learner<'a> {
 impl Learner<'_> {
     fn take(&self, found: Vec<Replacement>, weight: u32, source: &str, report: &mut Report) -> Result<()> {
         for correction in found {
+            if correction.from.chars().count() > MAX_TERM || correction.to.chars().count() > MAX_TERM {
+                continue;
+            }
             // Zero means it is already in the dictionary, or the user deleted it.
             let weight = if source == "teacher" && corroborated(&correction, self.student, &self.store.vocabulary()) {
                 self.settings.teacher.learn_after
@@ -82,7 +85,7 @@ pub fn learn_from_edit(
     let before = store.dictation(id)?;
     store.set_edited(id, text)?;
     let mut report = Report::default();
-    if settings.auto_learn {
+    if settings.auto_learn && !before.command {
         let learner = Learner {
             store,
             settings,
@@ -94,6 +97,19 @@ pub fn learn_from_edit(
     }
     if !same_words(&before.text, text) && !text.trim().is_empty() && !before.command {
         store.add_example(before.category, &before.raw, text.trim(), clock)?;
+    } else if before.edited.is_some()
+        && !before.command
+        && store.remove_example(&before.raw, before.edited.as_deref())?
+    {
+        // Another dictation of the same words may still have a valid user edit.
+        if let Some(other) = store.all()?.into_iter().rev().find(|d| {
+            d.id != id
+                && !d.command
+                && d.raw == before.raw
+                && d.edited.as_ref().is_some_and(|gold| !same_words(gold, &d.text))
+        }) {
+            store.add_example(other.category, &other.raw, other.edited.as_ref().unwrap(), clock)?;
+        }
     }
     Ok(report.learned)
 }
@@ -184,7 +200,7 @@ pub fn review(
         let trusted = dictation.edited.is_some();
         let safe = agreed && plausible_example(&heard, &ideal) && plausible_example(&dictation.raw, &ideal);
         let gold = dictation.edited.clone().unwrap_or(ideal);
-        if (trusted || safe) && !gold.is_empty() && !same_words(&gold, &dictation.text) {
+        if !dictation.command && (trusted || safe) && !gold.is_empty() && !same_words(&gold, &dictation.text) {
             store.add_example(dictation.category, &dictation.raw, &gold, clock)?;
             report.examples += 1;
         }
@@ -226,7 +242,8 @@ pub fn export(dictations: &[Dictation]) -> String {
             "heard": d.raw,
             "teacher_heard": d.teacher_raw,
             "typed": d.text,
-            "ideal": d.edited.as_ref().or(d.teacher_text.as_ref()),
+            "ideal": if d.command { None } else { d.edited.as_ref().or(d.teacher_text.as_ref()) },
+            "command": d.command,
             "corrected_by_user": d.edited.is_some(),
             "app": d.app,
             "category": d.category,
@@ -635,5 +652,86 @@ mod tests {
         assert_eq!(lines[1]["ideal"], "Hello Aasha.");
         assert_eq!(lines[1]["heard"], "hello asha");
         assert_eq!(lines[1]["category"], "other");
+    }
+
+    #[test]
+    fn command_output_edits_never_teach_recognition_or_cleanup() {
+        let store = Store::memory();
+        let id = store
+            .add_dictation(&Dictation {
+                raw: "make it shorter".into(),
+                command: true,
+                audio: "a.wav".into(),
+                ..dictation("Deploy kubectl tonight please", "Notes", NOW.now)
+            })
+            .unwrap();
+        assert!(
+            learn_from_edit(&store, &Settings::default(), id, "Deploy Docker tonight please", NOW)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(store.dictionary().unwrap().is_empty());
+        assert!(store.suggestions().unwrap().is_empty());
+        assert!(store.examples(Category::Other, 5).is_empty());
+        let report = review(
+            &store,
+            &Settings::default(),
+            &mut Fixed::new(&["make it shorter"]),
+            None,
+            &loader,
+            NOW,
+            &|| true,
+        )
+        .unwrap();
+        assert_eq!(report.examples, 0);
+        assert!(store.examples(Category::Other, 5).is_empty());
+        let exported: serde_json::Value = serde_json::from_str(export(&store.all().unwrap()).trim()).unwrap();
+        assert_eq!(exported["command"], true);
+        assert!(exported["ideal"].is_null());
+        assert_eq!(exported["teacher_heard"], "make it shorter");
+    }
+
+    #[test]
+    fn clearing_an_edit_removes_its_example_and_preserves_another_edit() {
+        let store = Store::memory();
+        let settings = Settings {
+            auto_learn: false,
+            ..Settings::default()
+        };
+        let a = recorded(&store, "call asha", "Call asha.", "a.wav");
+        let b = recorded(&store, "call asha", "Call asha.", "b.wav");
+        learn_from_edit(&store, &settings, a, "Call Aasha now.", NOW).unwrap();
+        learn_from_edit(&store, &settings, b, "Call Asha later.", NOW).unwrap();
+        learn_from_edit(&store, &settings, b, "Call asha.", NOW).unwrap();
+        assert_eq!(
+            store.examples(Category::Work, 5),
+            vec![("call asha".into(), "Call Aasha now.".into())]
+        );
+        learn_from_edit(&store, &settings, a, "", NOW).unwrap();
+        assert!(store.examples(Category::Work, 5).is_empty());
+        assert!(store.dictation(a).unwrap().edited.is_none());
+    }
+
+    #[test]
+    fn overlong_corrections_do_not_create_unacceptable_suggestions() {
+        let store = Store::memory();
+        let from = ["a".repeat(30), "b".repeat(30), "c".repeat(30)].join(" ");
+        let to = ["d".repeat(30), "e".repeat(30), "f".repeat(30)].join(" ");
+        for (from, to) in [
+            (from.as_str(), "Zephyr"),
+            ("Zephyr", to.as_str()),
+            (from.as_str(), to.as_str()),
+        ] {
+            let raw = format!("please ask the team about {from} today");
+            let edited = format!("please ask the team about {to} today");
+            assert_eq!(corrections(&raw, &edited).len(), 1);
+            let id = recorded(&store, &raw, &raw, "a.wav");
+            assert!(learn_from_edit(&store, &Settings::default(), id, &edited, NOW)
+                .unwrap()
+                .is_empty());
+            assert!(store.suggestions().unwrap().is_empty());
+            assert!(store.dictionary().unwrap().is_empty());
+            assert_eq!(store.dictation(id).unwrap().edited.as_deref(), Some(edited.as_str()));
+        }
     }
 }

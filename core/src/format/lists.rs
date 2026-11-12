@@ -100,6 +100,16 @@ fn numbered(words: &[&str], loose_needed: usize) -> Option<String> {
             chain.push(*marker);
         }
     }
+    // Mid-sentence quantities need an explicit list introduction.
+    if chain.iter().any(|m| !m.firm)
+        && chain[0].start > 0
+        && !words[chain[0].end - 1].ends_with(',')
+        && !words[..chain[0].start]
+            .iter()
+            .any(|w| matches!(core(w).as_str(), "things" | "items" | "steps" | "list"))
+    {
+        return None;
+    }
     // Loose markers ("one buy milk two call mom three…") need a third to be believed.
     let needed = if chain.iter().all(|m| m.firm) { 2 } else { loose_needed };
     if chain.len() < needed {
@@ -288,5 +298,16 @@ mod tests {
         let mut edits = Edits::default();
         apply("One, a. Two, b.", &mut edits);
         assert_eq!(edits.lists, 1);
+    }
+
+    #[test]
+    fn three_prose_quantities_are_not_enumerations() {
+        let text = "I have one dog and two cats and three birds";
+        assert_eq!(run(text), text);
+        assert!(!enumerated(text));
+        assert_eq!(
+            run("one buy milk two call mom three pay bills"),
+            "1. Buy milk\n2. Call mom\n3. Pay bills"
+        );
     }
 }

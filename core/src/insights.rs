@@ -133,7 +133,7 @@ pub fn compute(dictations: &[Dictation], clock: Clock) -> Insights {
         *per_day.entry(day).or_default() += d.words;
         if d.speech_ms > 0 {
             speech_ms += d.speech_ms as u64;
-            timed_words += d.words as u64;
+            timed_words += if d.command { d.raw.split_whitespace().count() as u64 } else { d.words as u64 };
         }
         saved += d.words as f64 / TYPING_WPM - d.duration_ms as f64 / 60_000.0;
         rewritten += u32::from(d.rewritten);
@@ -347,5 +347,25 @@ mod tests {
         let json = serde_json::to_value(insights).unwrap();
         assert!(json["accuracy"].is_null());
         assert_eq!(json["teacher_agreement"], 0.8);
+    }
+
+    #[test]
+    fn command_speed_counts_spoken_instruction_not_generated_output() {
+        let command = Dictation {
+            command: true,
+            raw: "make it shorter".into(),
+            words: 100,
+            speech_ms: 1500,
+            ..at(0, "generated text", "Notes")
+        };
+        let ordinary = Dictation {
+            words: 7,
+            speech_ms: 3500,
+            ..at(0, "ordinary words", "Notes")
+        };
+        let insights = compute(&[command, ordinary], NOW);
+        assert_eq!(insights.wpm, 120);
+        assert_eq!(insights.words, 107);
+        assert_eq!(insights.apps[0].words, 107);
     }
 }

@@ -24,10 +24,15 @@ fn explain(url: &str, error: ureq::Error) -> String {
 type Response = ureq::http::Response<ureq::Body>;
 
 impl Http {
-    /// `timeout` covers the whole request; `None` waits indefinitely (downloads).
+    /// `timeout` covers the whole request; downloads instead bound each read.
     pub fn new(timeout: Option<Duration>) -> Http {
+        Self::with_timeouts(timeout, timeout.is_none().then_some(Duration::from_secs(30)))
+    }
+
+    fn with_timeouts(timeout: Option<Duration>, per_read: Option<Duration>) -> Http {
         let config = ureq::Agent::config_builder()
             .timeout_global(timeout)
+            .timeout_per_read(per_read)
             .http_status_as_error(false)
             .build();
         Http { agent: config.into() }
@@ -308,5 +313,31 @@ mod tests {
             .download(&server.url("/m"), &dir.join("no/such/file"), &mut |_, _| { true })
             .unwrap_err()
             .starts_with("Could not write"));
+    }
+
+    #[test]
+    fn stalled_download_body_times_out_and_keeps_the_partial_file() {
+        use std::net::TcpListener;
+        use std::sync::mpsc::channel;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/model", listener.local_addr().unwrap());
+        let (release, wait) = channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            assert!(stream.read(&mut request).unwrap() > 0);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc")
+                .unwrap();
+            wait.recv().unwrap();
+        });
+        let http = Http::with_timeouts(None, Some(Duration::from_millis(100)));
+        let dest = temp_dir("stalled-download").join("model.gguf");
+        let error = http.download(&url, &dest, &mut |_, _| true).unwrap_err();
+        release.send(()).unwrap();
+        server.join().unwrap();
+        assert!(error.contains("interrupted"));
+        assert!(!dest.exists());
+        assert_eq!(std::fs::read(dest.with_extension("part")).unwrap(), b"abc");
     }
 }
