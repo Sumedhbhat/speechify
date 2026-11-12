@@ -36,8 +36,9 @@ fn lowercase_starts(text: &str) -> String {
         if start && plain {
             let at = word.find(char::is_alphabetic).unwrap();
             out.push_str(&word[..at]);
-            out.push_str(&word[at..at + 1].to_lowercase());
-            out.push_str(&word[at + 1..]);
+            let first = word[at..].chars().next().unwrap();
+            out.extend(first.to_lowercase());
+            out.push_str(&word[at + first.len_utf8()..]);
         } else {
             out.push_str(word);
         }
@@ -121,5 +122,13 @@ mod tests {
         assert_eq!(apply_style("Does it?", Style::Excited), "Does it?");
         assert_eq!(apply_style("Hmm...", Style::Excited), "Hmm...");
         assert_eq!(apply_style("- A\n- B", Style::Excited), "- A\n- B");
+    }
+
+    #[test]
+    fn very_casual_handles_multibyte_sentence_starts() {
+        assert_eq!(
+            apply_style("École demain. Über alles.\nİstanbul tomorrow.", Style::VeryCasual),
+            "école demain. über alles.\ni\u{307}stanbul tomorrow"
+        );
     }
 }

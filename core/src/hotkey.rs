@@ -167,11 +167,9 @@ impl Tracker {
                 // Extra keys are fine only when they extend this shortcut into
                 // another one (Ctrl+Meta → Ctrl+Meta+Space). Ctrl+Meta+Left is
                 // somebody else's shortcut and must not start dictation.
-                let foreign = pressed.difference(&chord.0).any(|key| {
-                    !chords
-                        .iter()
-                        .any(|other| other.0.is_superset(&chord.0) && other.0.contains(key))
-                });
+                let foreign = !chords
+                    .iter()
+                    .any(|other| other.0.is_superset(&chord.0) && pressed.is_subset(&other.0));
                 if !foreign {
                     *active = true;
                     edges.push(Edge::Down(*bind));
@@ -288,6 +286,18 @@ mod tests {
         assert_eq!(
             tracker.update(&keys(&[Key::Escape])),
             vec![Edge::Up(Bind::PushToTalk), Edge::Down(Bind::Cancel)]
+        );
+    }
+
+    #[test]
+    fn extra_keys_must_belong_to_a_single_extension() {
+        let mut tracker = Tracker::new(&windows()).unwrap();
+        assert!(tracker
+            .update(&keys(&[Key::Ctrl, Key::Meta, Key::Space, Key::Alt]))
+            .is_empty());
+        assert_eq!(
+            tracker.update(&keys(&[Key::Ctrl, Key::Meta, Key::Space])),
+            vec![Edge::Down(Bind::PushToTalk), Edge::Down(Bind::HandsFree)]
         );
     }
 }

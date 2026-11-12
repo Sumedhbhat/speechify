@@ -29,32 +29,33 @@ pub fn apply_replacements(text: &str, replacements: &[Replacement]) -> (String, 
     if order.is_empty() {
         return (text.to_string(), vec![]);
     }
-    let pattern = order
-        .iter()
-        .map(|i| {
-            let words: Vec<String> = replacements[*i].from.split_whitespace().map(regex::escape).collect();
-            format!("({})", words.join(r"[,.]?\s+"))
-        })
-        .collect::<Vec<_>>()
-        .join("|");
-    let matcher = Regex::new(&format!("(?i){pattern}")).expect("escaped phrases always compile");
+    let mut candidates = Vec::new();
+    for index in order {
+        let words: Vec<String> = replacements[index].from.split_whitespace().map(regex::escape).collect();
+        let matcher = Regex::new(&format!("(?i){}", words.join(r"[,.]?\s+"))).expect("escaped phrases always compile");
+        for found in matcher.find_iter(text) {
+            let before = text[..found.start()].chars().next_back();
+            let rest = &text[found.end()..];
+            let whole = !before.is_some_and(|c| c.is_alphanumeric())
+                && !rest.chars().next().is_some_and(|c| c.is_alphanumeric())
+                // "can't" and "don't" must not match "can" and "do"; "Asha's" may.
+                && !rest.to_lowercase().starts_with("n't")
+                && !contraction(rest)
+                && before != Some('\'');
+            if whole {
+                candidates.push((found, index));
+            }
+        }
+    }
+    // Stable sorting preserves longest-rule priority at the same position.
+    candidates.sort_by_key(|(found, _)| found.start());
     let mut out = String::with_capacity(text.len());
     let mut fired = Vec::new();
     let mut last = 0;
-    for caps in matcher.captures_iter(text) {
-        let found = caps.get(0).unwrap();
-        let before = text[..found.start()].chars().next_back();
-        let rest = &text[found.end()..];
-        let whole = !before.is_some_and(|c| c.is_alphanumeric())
-            && !rest.chars().next().is_some_and(|c| c.is_alphanumeric())
-            // "can't" and "don't" must not match rules for "can" and "do"; "Asha's" may.
-            && !rest.to_lowercase().starts_with("n't")
-            && !contraction(rest)
-            && !before.is_some_and(|c| c == '\'');
-        if !whole || found.start() < last {
+    for (found, index) in candidates {
+        if found.start() < last {
             continue;
         }
-        let index = order[(1..caps.len()).position(|group| caps.get(group).is_some()).unwrap()];
         out.push_str(&text[last..found.start()]);
         out.push_str(&replacements[index].to);
         last = found.end();
@@ -120,5 +121,17 @@ mod tests {
     fn empty_rules_change_nothing() {
         assert_eq!(run("hello", &[]), ("hello".into(), vec![]));
         assert_eq!(run("hello", &[(" ", "x")]), ("hello".into(), vec![]));
+    }
+
+    #[test]
+    fn invalid_longer_rules_do_not_hide_valid_shorter_rules() {
+        assert_eq!(
+            run("foo barista foo bar", &[("foo bar", "long"), ("foo", "short")]),
+            ("short barista long".into(), vec![0, 1])
+        );
+        assert_eq!(
+            run("foo barista", &[("foo bar", "long"), ("barista", "B")]),
+            ("foo B".into(), vec![1])
+        );
     }
 }

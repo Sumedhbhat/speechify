@@ -433,8 +433,14 @@ mod tests {
             down.fallback.as_deref(),
             Some("Could not reach 127.0.0.1:11434. Is it running?")
         );
+        let empty = compose(raw, &target, Category::Other, &settings, &store, Some(&llm)).unwrap();
+        assert_eq!(empty.text, "What is the capital of france please tell me.");
+        assert!(!empty.rewritten && empty.fallback.is_some());
+        let filler = Scripted::new(vec![Ok("EMPTY".into())]);
+        let mut settings = settings;
+        settings.rewrite.min_words = 0;
         assert_eq!(
-            compose(raw, &target, Category::Other, &settings, &store, Some(&llm)),
+            compose("uh um", &target, Category::Other, &settings, &store, Some(&filler)),
             None
         );
     }
@@ -620,7 +626,7 @@ mod tests {
             &mut asr,
             None,
         ));
-        assert_eq!(paste, "Git status");
+        assert_eq!(paste, "git status");
         assert_eq!(record.category, Category::Terminal);
     }
 

@@ -95,7 +95,7 @@ pub struct Controller<P: Platform, E: Engines> {
     target: Target,
     command: bool,
     /// The last cancelled or failed recording, for Undo and retry.
-    kept: Option<(Vec<f32>, Target, bool)>,
+    kept: Option<(Vec<f32>, Target, bool, String)>,
     muted: bool,
     rewrite_circuit: RewriteCircuit,
     rewrite_settings: crate::settings::Rewrite,
@@ -174,18 +174,22 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                         self.platform.chime(Chime::Stop);
                     }
                     let target = self.target.clone();
-                    self.process(&settings, audio, target, command);
+                    let selection = if command { self.platform.selection() } else { String::new() };
+                    self.process(&settings, audio, target, command, selection);
                     self.session.handle(Event::Finished, self.platform.now_ms());
                 }
                 Effect::Discard { keep } => {
                     let audio = self.platform.stop_capture();
                     self.unmute();
-                    self.kept = keep.then(|| (audio, self.target.clone(), self.command));
+                    self.kept = keep.then(|| {
+                        let selection = if self.command { self.platform.selection() } else { String::new() };
+                        (audio, self.target.clone(), self.command, selection)
+                    });
                     self.platform.show(Bar::Idle);
                 }
                 Effect::Retry => {
-                    if let Some((audio, target, command)) = self.kept.take() {
-                        self.process(&settings, audio, target, command);
+                    if let Some((audio, target, command, selection)) = self.kept.take() {
+                        self.process(&settings, audio, target, command, selection);
                     }
                     self.session.handle(Event::Finished, self.platform.now_ms());
                 }
@@ -228,9 +232,8 @@ impl<P: Platform, E: Engines> Controller<P, E> {
         true
     }
 
-    fn process(&mut self, settings: &Settings, audio: Vec<f32>, target: Target, command: bool) {
+    fn process(&mut self, settings: &Settings, audio: Vec<f32>, target: Target, command: bool, selection: String) {
         self.platform.show(Bar::Processing);
-        let selection = if command { self.platform.selection() } else { String::new() };
         let clock = self.platform.clock();
         let request = Request {
             audio: &audio,
@@ -265,8 +268,21 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                 record.outcome = if pasted { store::Outcome::Pasted } else { store::Outcome::Copied };
                 // A bare "press enter" typed nothing, so there is nothing to keep.
                 let typed = !record.text.is_empty();
-                let _ = typed && self.remember(settings, &mut record, &audio, clock);
-                if pasted {
+                let saved = if typed { self.remember(settings, &mut record, &audio, clock) } else { Ok(false) };
+                if let Err(error) = saved {
+                    if pasted {
+                        self.notice(
+                            &format!("Text pasted, but history could not be saved: {error}"),
+                            true,
+                            false,
+                        );
+                    } else {
+                        self.platform.show(Bar::Card {
+                            text: paste.trim_end().into(),
+                            message: format!("History could not be saved: {error}. Copy your text here."),
+                        });
+                    }
+                } else if pasted {
                     self.platform.show(Bar::Done { words: record.words });
                 }
             }
@@ -275,7 +291,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                     self.platform.chime(Chime::Error);
                 }
                 // Keep the recording so nothing said is lost to a failure.
-                self.kept = Some((audio, target, command));
+                self.kept = Some((audio, target, command, selection));
                 self.session.offer_undo();
                 self.notice(&error, true, true);
             }
@@ -314,9 +330,18 @@ impl<P: Platform, E: Engines> Controller<P, E> {
     }
 
     /// Saves the dictation and its recording. Returns whether it was stored.
-    fn remember(&mut self, settings: &Settings, record: &mut store::Dictation, audio: &[f32], clock: Clock) -> bool {
+    fn remember(
+        &mut self,
+        settings: &Settings,
+        record: &mut store::Dictation,
+        audio: &[f32],
+        clock: Clock,
+    ) -> Result<bool> {
+        for stale in self.store.prune(settings.retention, clock)? {
+            self.platform.delete_audio(&stale);
+        }
         if settings.retention == Retention::Never {
-            return false;
+            return Ok(false);
         }
         if settings.keep_audio {
             let name = format!("{}-{}.wav", clock.now, self.platform.now_ms() % 100_000);
@@ -328,11 +353,13 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                 record.audio = name;
             }
         }
-        let _ = self.store.add_dictation(record);
-        for stale in self.store.prune(settings.retention, clock).unwrap_or_default() {
-            self.platform.delete_audio(&stale);
+        if let Err(error) = self.store.add_dictation(record) {
+            if !record.audio.is_empty() {
+                self.platform.delete_audio(&record.audio);
+            }
+            return Err(error);
         }
-        true
+        Ok(true)
     }
 
     fn paste_last(&mut self) {
@@ -385,7 +412,9 @@ impl<P: Platform, E: Engines> Controller<P, E> {
             )
         });
         if let Ok(report) = &result {
-            let _ = self.store.set("teacher_last_run", &clock.now.to_string());
+            if keep_going() {
+                let _ = self.store.set("teacher_last_run", &clock.now.to_string());
+            }
             let _ = self.store.set(
                 "teacher_last_report",
                 &serde_json::to_string(report).unwrap_or_default(),
@@ -415,6 +444,8 @@ mod tests {
         copy_error: Option<String>,
         saved: Vec<String>,
         save_fails: bool,
+        selected: Option<String>,
+        selection_reads: u32,
     }
 
     impl Platform for Fake {
@@ -437,7 +468,8 @@ mod tests {
             self.focus.unwrap_or(Focus::Editable)
         }
         fn selection(&mut self) -> String {
-            "selected words".into()
+            self.selection_reads += 1;
+            self.selected.clone().unwrap_or_else(|| "selected words".into())
         }
         fn paste(&mut self, text: &str, keys: PasteKeys, restore_ms: u64) -> Result<()> {
             // The clipboard-restore delay differs by operating system; the tests
@@ -769,7 +801,7 @@ mod tests {
         // "Never store" keeps no history at all.
         set(&mut app, |s| s.retention = Retention::Never);
         dictate(&mut app);
-        assert_eq!(app.store.all().unwrap().len(), 1);
+        assert!(app.store.all().unwrap().is_empty());
     }
 
     #[test]
@@ -917,5 +949,109 @@ mod tests {
         );
         set(&mut app, |s| s.retention = Retention::Never);
         assert!(app.review_if_due(true, &|| true).is_none());
+    }
+
+    #[test]
+    fn command_retry_uses_the_original_selection() {
+        let mut app = app(&["make it formal", "make it formal"]);
+        app.platform.selected = Some("the original selection".into());
+        app.engines.llm = Some(Scripted::new(vec![
+            Err("server unavailable".into()),
+            Ok("Original selection, formally.".into()),
+        ]));
+        app.handle(Event::Down(Bind::Command));
+        app.platform.now += 1500;
+        app.handle(Event::Up(Bind::Command));
+        app.platform.selected = Some("different selected words".into());
+        app.handle(Event::Undo);
+        let seen = app.engines.llm.as_ref().unwrap().seen.borrow();
+        assert_eq!(seen.len(), 2);
+        for (_, user) in seen.iter() {
+            assert!(user.contains("the original selection"));
+            assert!(!user.contains("different selected words"));
+        }
+        assert_eq!(app.platform.selection_reads, 1);
+        assert_eq!(app.store.last().unwrap().text, "Original selection, formally.");
+    }
+
+    #[test]
+    fn cancelled_commands_keep_the_selection_for_undo() {
+        let mut app = app(&["make it formal"]);
+        app.engines.llm = Some(Scripted::new(vec![Ok("Original selection, formally.".into())]));
+        app.platform.selected = Some("original selection".into());
+        app.handle(Event::Down(Bind::Command));
+        app.platform.now += 1000;
+        app.handle(Event::BarCancel);
+        app.platform.selected = Some(String::new());
+        app.handle(Event::Undo);
+        assert_eq!(app.platform.selection_reads, 1);
+        assert!(app.engines.llm.as_ref().unwrap().seen.borrow()[0]
+            .1
+            .contains("original selection"));
+    }
+
+    #[test]
+    fn failed_history_insert_deletes_audio_and_preserves_delivery_status() {
+        for pasted in [true, false] {
+            let mut app = app(&["please save these dictated words"]);
+            let path = crate::testing::temp_dir("failed-history").join("history.db");
+            app.store = Store::open(&path).unwrap();
+            let db = rusqlite::Connection::open(&path).unwrap();
+            db.execute_batch(
+                "CREATE TRIGGER fail_insert BEFORE INSERT ON dictations BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+            )
+            .unwrap();
+            if !pasted {
+                app.platform.focus = Some(Focus::NotEditable);
+            }
+            dictate(&mut app);
+            assert!(app.store.all().unwrap().is_empty());
+            assert_eq!(app.platform.saved.len(), 1);
+            let name = app.platform.saved[0].split(':').next().unwrap();
+            assert!(app.platform.log.contains(&format!("delete:{name}")));
+            let bar = app.platform.bars.last().unwrap();
+            if pasted {
+                assert!(matches!(bar, Bar::Notice { message, error: true, undo: false }
+                    if message.contains("Text pasted") && message.contains("disk full")));
+            } else {
+                assert!(matches!(bar, Bar::Card { text, message }
+                    if text == "Please save these dictated words." && message.contains("disk full")));
+            }
+        }
+    }
+
+    #[test]
+    fn never_retention_prunes_existing_history_and_recordings() {
+        let mut app = app(&["previous recording", "private recording"]);
+        dictate(&mut app);
+        let audio = app.store.last().unwrap().audio;
+        set(&mut app, |s| s.retention = Retention::Never);
+        dictate(&mut app);
+        assert!(app.store.all().unwrap().is_empty());
+        assert!(app.platform.log.contains(&format!("delete:{audio}")));
+        assert_eq!(app.platform.saved.len(), 1);
+    }
+
+    #[test]
+    fn interrupted_teacher_review_remains_due_the_same_day() {
+        use std::cell::Cell;
+        let mut app = app(&["first recording for review", "second recording for review"]);
+        dictate(&mut app);
+        dictate(&mut app);
+        app.engines.teacher_asr = Fixed::new(&["first recording for review", "second recording for review"]);
+        let polls = Cell::new(0);
+        let first = app
+            .review_if_due(false, &|| {
+                let n = polls.get();
+                polls.set(n + 1);
+                n == 0
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.reviewed, 1);
+        assert!(app.store.get("teacher_last_run").is_none());
+        assert_eq!(app.store.pending_review(10).unwrap().len(), 1);
+        assert_eq!(app.review_if_due(false, &|| true).unwrap().unwrap().reviewed, 1);
+        assert!(app.store.get("teacher_last_run").is_some());
     }
 }

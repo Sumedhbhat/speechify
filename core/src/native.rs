@@ -246,17 +246,35 @@ unsafe fn load_runtime(dir: &Path, mask: u32) -> Result<Runtime> {
     let library = Library::new(&path).map_err(|e| format!("The speech runtime could not be opened: {e}"))?;
     let api = Api::load(&library)?;
     check_abi(&api)?;
-    let mut init: BackendInit = std::mem::zeroed();
-    (api.transcribe_backend_init_params_init)(&mut init);
-    let artifacts = c_string(&dir.to_string_lossy());
-    init.artifact_dir = artifacts.as_ptr();
-    init.allowed_backends = mask;
-    check((api.transcribe_init_backends_ex)(&init))?;
     Ok(Runtime {
         api,
         mask,
         _library: library,
     })
+}
+
+fn runtime<'a>(cache: &'a OnceLock<Result<Runtime>>, dir: &Path, mask: u32) -> Result<&'a Runtime> {
+    if let Some(loaded) = cache.get() {
+        return loaded.as_ref().map_err(Clone::clone);
+    }
+    // Loading and checking the ABI has no backend side effects. Only failures
+    // after calling init_backends must be cached: its process-wide state is fixed.
+    let loaded = unsafe { load_runtime(dir, mask)? };
+    cache
+        .get_or_init(|| unsafe { init_backends(loaded, dir) })
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+unsafe fn init_backends(runtime: Runtime, dir: &Path) -> Result<Runtime> {
+    let api = &runtime.api;
+    let mut init: BackendInit = std::mem::zeroed();
+    (api.transcribe_backend_init_params_init)(&mut init);
+    let artifacts = c_string(&dir.to_string_lossy());
+    init.artifact_dir = artifacts.as_ptr();
+    init.allowed_backends = runtime.mask;
+    check((api.transcribe_init_backends_ex)(&init))?;
+    Ok(runtime)
 }
 
 /// A loaded speech model.
@@ -284,10 +302,7 @@ impl Engine {
     /// device the model landed on.
     fn open_if(runtime_dir: &Path, model: &Path, device: &str, usable: fn(&str) -> bool) -> Result<Engine> {
         let cpu_only = device == "cpu";
-        let runtime = RUNTIME
-            .get_or_init(|| unsafe { load_runtime(runtime_dir, if cpu_only { MASK_CPU } else { MASK_ALL }) })
-            .as_ref()
-            .map_err(Clone::clone)?;
+        let runtime = runtime(&RUNTIME, runtime_dir, if cpu_only { MASK_CPU } else { MASK_ALL })?;
         if !cpu_only && runtime.mask == MASK_CPU {
             // GPU backends were never registered in this process and cannot be added now.
             return Err("Restart Speechify to switch from CPU to the graphics card".into());
@@ -376,6 +391,12 @@ impl Engine {
 
 impl Recognizer for Engine {
     fn transcribe(&mut self, audio: &[f32], hint: &Hint) -> Result<String> {
+        if !hint.language.is_empty()
+            && !self.languages.is_empty()
+            && !self.languages.contains(&hint.language.to_string())
+        {
+            return Err(explain(10));
+        }
         let api = &self.runtime.api;
         let supports = |feature| unsafe { (api.transcribe_model_supports)(self.model, feature) };
         let language = c_string(hint.language);
@@ -519,5 +540,51 @@ mod tests {
         std::fs::write(dir.join(LIBRARY), b"junk").unwrap();
         let error = unsafe { load_runtime(&dir, MASK_CPU) }.err().unwrap();
         assert!(error.starts_with("The speech runtime could not be opened"), "{error}");
+    }
+
+    #[test]
+    fn runtime_loading_recovers_before_backend_initialization() {
+        let Some((dir, _)) = fixture() else { return };
+        let missing = crate::testing::temp_dir("runtime-retry");
+        let cache = OnceLock::new();
+        assert!(runtime(&cache, &missing, MASK_CPU)
+            .err()
+            .unwrap()
+            .contains("not installed"));
+        assert_eq!(runtime(&cache, &dir, MASK_CPU).unwrap().mask, MASK_CPU);
+        assert!(runtime(&cache, &missing, MASK_CPU).is_ok());
+        let failed = OnceLock::new();
+        failed.set(Err("backend initialization failed".into())).ok().unwrap();
+        assert_eq!(
+            runtime(&failed, &dir, MASK_CPU).err().unwrap(),
+            "backend initialization failed"
+        );
+    }
+
+    #[test]
+    fn explicit_unsupported_languages_fail_without_transcription() {
+        let Some((runtime, model)) = fixture() else { return };
+        let mut engine = Engine::open(&runtime, &model, "cpu").unwrap();
+        assert!(engine.languages.contains(&"en".into()));
+        assert!(engine
+            .transcribe(
+                &[0.0; 16000],
+                &Hint {
+                    language: "hi",
+                    vocabulary: &[]
+                }
+            )
+            .unwrap_err()
+            .contains("language"));
+        engine.languages.clear();
+        assert!(engine
+            .transcribe(
+                &[0.0; 16000],
+                &Hint {
+                    language: "en",
+                    vocabulary: &[]
+                }
+            )
+            .is_ok());
     }
 }

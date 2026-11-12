@@ -4,6 +4,8 @@
 use crate::audio::encode_wav;
 use crate::http::Http;
 use crate::Result;
+use regex::Regex;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 /// What the recogniser is told about the speaker.
@@ -82,17 +84,13 @@ pub fn is_phantom(text: &str, speech_ms: u64) -> bool {
 
 /// Removes bracketed sound tags ("[BLANK_AUDIO]", "(music)") and tidies spaces.
 pub fn strip_tags(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut depth = 0;
-    for ch in text.chars() {
-        match ch {
-            '[' | '(' => depth += 1,
-            ']' | ')' if depth > 0 => depth -= 1,
-            _ if depth == 0 => out.push(ch),
-            _ => {}
-        }
-    }
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
+    static TAGS: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)\[(?:blank_audio|silence|music|noise|applause|laughter|inaudible)\]|\((?:blank_audio|silence|music|noise|applause|laughter|inaudible)\)").unwrap()
+    });
+    TAGS.replace_all(text, "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A recogniser behind an OpenAI-compatible `/audio/transcriptions` endpoint,
@@ -106,8 +104,14 @@ pub struct Remote {
 
 impl Remote {
     pub fn new(url: &str, key: &str, model: &str) -> Remote {
+        // Allow a full 20-minute recording to upload and transcribe on a remote CPU.
+        Self::with_timeout(url, key, model, Duration::from_secs(25 * 60))
+    }
+
+    /// Sets the complete upload and transcription budget for a speech server.
+    pub fn with_timeout(url: &str, key: &str, model: &str, timeout: Duration) -> Remote {
         Remote {
-            http: Http::new(Some(Duration::from_secs(60))),
+            http: Http::new(Some(timeout)),
             url: url.trim().trim_end_matches('/').to_string(),
             key: key.into(),
             model: model.into(),
@@ -300,5 +304,31 @@ mod tests {
         );
         assert_eq!(fixed.heard, vec![(3, "en".to_string(), vec![])]);
         assert_eq!(fixed.name(), "fixed");
+    }
+
+    #[test]
+    fn sound_tags_preserve_parentheses_brackets_and_unclosed_content() {
+        assert_eq!(
+            strip_tags("Meet me (tomorrow) [at noon]. (MUSIC)"),
+            "Meet me (tomorrow) [at noon]."
+        );
+        assert_eq!(strip_tags("Keep (an unfinished thought"), "Keep (an unfinished thought");
+        assert_eq!(
+            strip_tags("Use array[index] and (nested (notes))"),
+            "Use array[index] and (nested (notes))"
+        );
+    }
+
+    #[test]
+    fn remote_transcription_timeout_can_be_set_for_the_server() {
+        let server = Server::start(vec![Reply::json(r#"{"text":"hello"}"#).delayed(250)]);
+        let mut remote = Remote::with_timeout(&server.base(), "", "asr", Duration::from_millis(50));
+        assert!(remote
+            .transcribe(&[0.0; 160], &Hint::default())
+            .unwrap_err()
+            .contains("took too long"));
+        let server = Server::start(vec![Reply::json(r#"{"text":"hello"}"#).delayed(250)]);
+        let mut remote = Remote::with_timeout(&server.base(), "", "asr", Duration::from_secs(5));
+        assert_eq!(remote.transcribe(&[0.0; 160], &Hint::default()).unwrap(), "hello");
     }
 }
