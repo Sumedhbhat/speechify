@@ -151,3 +151,16 @@ impl Server {
         self.requests.lock().unwrap()
     }
 }
+
+/// Deterministic white noise at `amplitude`, like a microphone's own hiss.
+pub fn hiss(length: usize, amplitude: f32) -> Vec<f32> {
+    let mut state = 0x9E37_79B9u32;
+    (0..length)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            (state as f32 / u32::MAX as f32 * 2.0 - 1.0) * amplitude
+        })
+        .collect()
+}

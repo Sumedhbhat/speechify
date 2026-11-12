@@ -110,14 +110,97 @@ pub fn find(id: &str) -> Result<Model> {
         .ok_or_else(|| format!("Unknown speech model \"{id}\""))
 }
 
-/// The model to start with: Whisper turbo where a graphics card can run it
-/// quickly, Parakeet otherwise.
-pub fn recommended(has_gpu: bool) -> &'static str {
-    if has_gpu {
-        "whisper-large-v3-turbo"
-    } else {
-        "parakeet-tdt-0.6b-v3"
+/// What kind of compute device a model could run on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceClass {
+    Cpu,
+    /// A graphics card with its own memory.
+    Gpu,
+    /// Graphics built into the processor, sharing system memory.
+    IntegratedGpu,
+    /// Anything else (BLAS accelerators and the like).
+    Other,
+}
+
+impl DeviceClass {
+    /// From the runtime's `transcribe_device_type` code.
+    pub fn from_code(code: i32) -> DeviceClass {
+        match code {
+            0 => DeviceClass::Cpu,
+            1 => DeviceClass::Gpu,
+            2 => DeviceClass::IntegratedGpu,
+            _ => DeviceClass::Other,
+        }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Device {
+    pub name: String,
+    /// The backend: "cpu", "vulkan", "cuda", "metal" and so on.
+    pub kind: String,
+    pub memory_mb: u64,
+    pub class: DeviceClass,
+}
+
+/// The models chosen for this machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Plan {
+    pub speech_model: &'static str,
+    pub teacher_model: &'static str,
+    /// Language-model cleanup: only worth its delay on a graphics card.
+    pub rewrite: bool,
+    /// One sentence for the user on why these were picked.
+    pub reason: String,
+}
+
+/// Enough graphics memory for Whisper turbo plus a 4B language model.
+const GPU_MEMORY_MB: u64 = 4000;
+
+/// Picks models so that everyday dictation is always fast. A graphics card
+/// runs Whisper turbo in well under a second; without one, Parakeet is the
+/// only model that keeps up (about 2 s per dictation on a laptop CPU against
+/// 35 s for Whisper turbo; see docs/evaluation.md), and the larger Whisper
+/// does the nightly review where nobody is waiting.
+pub fn plan(devices: &[Device]) -> Plan {
+    let card = devices
+        .iter()
+        .filter(|device| device.class == DeviceClass::Gpu && device.memory_mb >= GPU_MEMORY_MB)
+        .max_by_key(|device| device.memory_mb);
+    match card {
+        Some(card) => Plan {
+            speech_model: "whisper-large-v3-turbo",
+            teacher_model: "whisper-large-v3",
+            rewrite: true,
+            reason: format!(
+                "Found {} with {} GB: using Whisper turbo on it",
+                card.name,
+                card.memory_mb / 1000
+            ),
+        },
+        None => Plan {
+            speech_model: "parakeet-tdt-0.6b-v3",
+            teacher_model: "whisper-large-v3-turbo",
+            rewrite: false,
+            reason: "No graphics card with enough memory: using Parakeet, the fastest model on a CPU".into(),
+        },
+    }
+}
+
+/// On the very first start, before any settings exist, chooses the models
+/// for this machine and saves them. Later starts keep the user's choices.
+pub fn first_run(store: &crate::store::Store, devices: &[Device]) -> Result<Option<Plan>> {
+    if store.get("settings").is_some() {
+        return Ok(None);
+    }
+    let chosen = plan(devices);
+    let mut settings = crate::settings::Settings::default();
+    settings.speech.model = chosen.speech_model.into();
+    settings.teacher.speech_model = chosen.teacher_model.into();
+    settings.rewrite.enabled = chosen.rewrite;
+    store.save_settings(&settings)?;
+    Ok(Some(chosen))
 }
 
 pub fn path(dir: &Path, model: &Model) -> PathBuf {
@@ -187,12 +270,84 @@ mod tests {
         }
         assert_eq!(find("whisper-large-v3").unwrap().name, "Whisper large-v3");
         assert_eq!(find("nope").unwrap_err(), "Unknown speech model \"nope\"");
-        assert!(find(recommended(true)).unwrap().wants_gpu);
-        assert!(!find(recommended(false)).unwrap().wants_gpu);
+
         // The defaults in Settings must exist here.
         let settings = crate::settings::Settings::default();
         find(&settings.speech.model).unwrap();
         find(&settings.teacher.speech_model).unwrap();
+    }
+
+    fn device(class: DeviceClass, memory_mb: u64, name: &str) -> Device {
+        Device {
+            name: name.into(),
+            kind: "vulkan".into(),
+            memory_mb,
+            class,
+        }
+    }
+
+    #[test]
+    fn a_graphics_card_gets_whisper_and_a_cpu_gets_parakeet() {
+        let cpu = device(DeviceClass::Cpu, 16_000, "AMD Ryzen 5 3500U");
+        let igpu = device(DeviceClass::IntegratedGpu, 8000, "AMD Radeon Vega 8");
+        let small = device(DeviceClass::Gpu, 2048, "GeForce MX150");
+        let rtx = device(DeviceClass::Gpu, 8188, "NVIDIA GeForce RTX 4060 Laptop GPU");
+        let bigger = device(DeviceClass::Gpu, 12_288, "NVIDIA GeForce RTX 4070");
+        let laptop = plan(&[cpu.clone(), rtx.clone()]);
+        assert_eq!(
+            (laptop.speech_model, laptop.teacher_model, laptop.rewrite),
+            ("whisper-large-v3-turbo", "whisper-large-v3", true)
+        );
+        assert_eq!(
+            laptop.reason,
+            "Found NVIDIA GeForce RTX 4060 Laptop GPU with 8 GB: using Whisper turbo on it"
+        );
+        assert!(plan(&[rtx, bigger]).reason.contains("RTX 4070"));
+        // Integrated graphics, a small card or no card at all: Parakeet, no cleanup model.
+        for machine in [vec![cpu.clone()], vec![cpu.clone(), igpu], vec![cpu, small], vec![]] {
+            let chosen = plan(&machine);
+            assert_eq!(
+                (chosen.speech_model, chosen.teacher_model, chosen.rewrite),
+                ("parakeet-tdt-0.6b-v3", "whisper-large-v3-turbo", false)
+            );
+            assert!(chosen.reason.starts_with("No graphics card"));
+        }
+        // Every model a plan names is in the catalog.
+        for chosen in [laptop, plan(&[])] {
+            assert!(find(chosen.speech_model).is_ok() && find(chosen.teacher_model).is_ok());
+        }
+        let codes: Vec<DeviceClass> = (0..5).map(DeviceClass::from_code).collect();
+        assert_eq!(
+            codes,
+            [
+                DeviceClass::Cpu,
+                DeviceClass::Gpu,
+                DeviceClass::IntegratedGpu,
+                DeviceClass::Other,
+                DeviceClass::Other
+            ]
+        );
+    }
+
+    #[test]
+    fn the_first_start_chooses_models_and_later_starts_keep_them() {
+        let store = crate::store::Store::memory();
+        let chosen = first_run(&store, &[]).unwrap().unwrap();
+        let settings = store.settings();
+        assert_eq!(
+            (settings.speech.model.as_str(), settings.rewrite.enabled),
+            (chosen.speech_model, false)
+        );
+        assert_eq!(settings.teacher.speech_model, "whisper-large-v3-turbo");
+        // The user changes their mind; a later start must not undo that.
+        let mut changed = settings;
+        changed.speech.model = "whisper-small".into();
+        store.save_settings(&changed).unwrap();
+        assert_eq!(
+            first_run(&store, &[device(DeviceClass::Gpu, 8000, "RTX")]).unwrap(),
+            None
+        );
+        assert_eq!(store.settings().speech.model, "whisper-small");
     }
 
     fn tiny(server: &Server, sha256: &str) -> Model {

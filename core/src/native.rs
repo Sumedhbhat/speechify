@@ -8,6 +8,7 @@ use crate::asr::{prompt, Hint, Recognizer};
 use crate::Result;
 use libloading::Library;
 use std::ffi::{c_char, c_void, CStr, CString};
+use std::ops::Range;
 use std::path::Path;
 use std::ptr;
 use std::sync::OnceLock;
@@ -94,6 +95,57 @@ struct Capabilities {
     spare: Spare,
 }
 
+// The voice detector's structs, from transcribe/vad.h 0.4.1.
+#[repr(C)]
+struct Token {
+    struct_size: u64,
+    id: i32,
+    p: f32,
+    t0_ms: i64,
+    t1_ms: i64,
+    seg_index: i32,
+    word_index: i32,
+    text: *const c_char,
+    spare: Spare,
+}
+
+#[repr(C)]
+struct VadSessionParams {
+    struct_size: u64,
+    n_threads: i32,
+    spare: Spare,
+}
+
+#[repr(C)]
+struct VadParams {
+    struct_size: u64,
+    threshold: f64,
+    neg_threshold: f64,
+    min_speech_ms: i32,
+    min_silence_ms: i32,
+    speech_pad_ms: i32,
+    max_speech_ms: i32,
+    spare: Spare,
+}
+
+#[repr(C)]
+struct VadResult {
+    struct_size: u64,
+    n_probs: i32,
+    first_frame: i64,
+    n_segments: i32,
+    spare: Spare,
+}
+
+#[repr(C)]
+struct VadSegment {
+    struct_size: u64,
+    start_sample: i64,
+    end_sample: i64,
+    spare: Spare,
+}
+
+const ROLE_VAD: u32 = 1 << 3;
 const FEATURE_PNC: i32 = 4;
 const FEATURE_VOCABULARY: i32 = 7;
 const FEATURE_CONTEXT_PROMPT: i32 = 8;
@@ -133,6 +185,21 @@ api! {
     transcribe_full_text: unsafe extern "C" fn(*mut c_void) -> *const c_char,
     transcribe_session_free: unsafe extern "C" fn(*mut c_void),
     transcribe_model_free: unsafe extern "C" fn(*mut c_void),
+    transcribe_model_roles: unsafe extern "C" fn(*mut c_void) -> u32,
+    transcribe_vad_session_params_init: unsafe extern "C" fn(*mut VadSessionParams),
+    transcribe_vad_session_init: unsafe extern "C" fn(*mut c_void, *const VadSessionParams, *mut *mut c_void) -> i32,
+    transcribe_vad_params_init: unsafe extern "C" fn(*mut VadParams),
+    transcribe_vad_result_init: unsafe extern "C" fn(*mut VadResult),
+    transcribe_vad_segment_init: unsafe extern "C" fn(*mut VadSegment),
+    transcribe_vad_run: unsafe extern "C" fn(*mut c_void, *const f32, i32, *const VadParams) -> i32,
+    transcribe_vad_get_result: unsafe extern "C" fn(*mut c_void, *mut VadResult) -> i32,
+    transcribe_vad_get_segment: unsafe extern "C" fn(*mut c_void, i32, *mut VadSegment) -> i32,
+    transcribe_vad_session_free: unsafe extern "C" fn(*mut c_void),
+    transcribe_n_tokens: unsafe extern "C" fn(*mut c_void) -> i32,
+    transcribe_token_init: unsafe extern "C" fn(*mut Token),
+    transcribe_get_token: unsafe extern "C" fn(*mut c_void, i32, *mut Token) -> i32,
+    transcribe_device_count: unsafe extern "C" fn() -> i32,
+    transcribe_device_get: unsafe extern "C" fn(i32) -> *mut c_void,
 }
 
 struct Runtime {
@@ -207,9 +274,14 @@ unsafe fn check_abi(api: &Api) -> Result<()> {
         (0, std::mem::size_of::<LoadParams>()),
         (1, std::mem::size_of::<SessionParams>()),
         (2, std::mem::size_of::<RunParams>()),
+        (8, std::mem::size_of::<Token>()),
         (4, std::mem::size_of::<Capabilities>()),
         (13, std::mem::size_of::<DeviceInfo>()),
         (15, std::mem::size_of::<BackendInit>()),
+        (25, std::mem::size_of::<VadSessionParams>()),
+        (26, std::mem::size_of::<VadParams>()),
+        (27, std::mem::size_of::<VadResult>()),
+        (28, std::mem::size_of::<VadSegment>()),
     ];
     let fits = sizes
         .iter()
@@ -277,6 +349,150 @@ unsafe fn init_backends(runtime: Runtime, dir: &Path) -> Result<Runtime> {
     Ok(runtime)
 }
 
+/// Every compute device the runtime can place a model on. Registers the
+/// GPU backends, so call it before anything has opened a model on the CPU.
+pub fn devices(runtime_dir: &Path) -> Result<Vec<crate::catalog::Device>> {
+    let runtime = runtime(&RUNTIME, runtime_dir, MASK_ALL)?;
+    let api = &runtime.api;
+    let count = unsafe { (api.transcribe_device_count)() }.max(0);
+    let listed = (0..count).map(|index| unsafe {
+        let device = (api.transcribe_device_get)(index);
+        let mut info: DeviceInfo = std::mem::zeroed();
+        (api.transcribe_device_info_init)(&mut info);
+        let _ = !device.is_null() && (api.transcribe_device_get_info)(device, &mut info) == 0;
+        crate::catalog::Device {
+            name: text(info.description),
+            kind: text(info.kind),
+            memory_mb: info.memory_total / (1 << 20),
+            class: crate::catalog::DeviceClass::from_code(info.device_type),
+        }
+    });
+    Ok(listed.collect())
+}
+
+/// Joins tokens into words with the recogniser's confidence in each: the
+/// lowest probability among a word's tokens. A token starting with a space
+/// begins a new word; control tokens such as `<|en|>` are skipped. Models that
+/// report no probabilities (NaN) give no words at all.
+fn group(pieces: impl Iterator<Item = (String, f32)>) -> Vec<crate::asr::Heard> {
+    let mut words: Vec<crate::asr::Heard> = Vec::new();
+    for (piece, p) in pieces {
+        if piece.trim().is_empty() || piece.starts_with("<|") || piece.starts_with("[_") {
+            continue;
+        }
+        let fresh = words.is_empty() || piece.starts_with([' ', '\u{2581}']);
+        let bare = piece.trim_start_matches([' ', '\u{2581}']).to_string();
+        match words.last_mut().filter(|_| !fresh) {
+            Some(word) => {
+                word.word.push_str(&bare);
+                word.p = word.p.min(p);
+            }
+            None => words.push(crate::asr::Heard { word: bare, p }),
+        }
+    }
+    if words.iter().all(|word| word.p.is_finite()) {
+        words
+    } else {
+        Vec::new()
+    }
+}
+
+/// The voice-activity model shipped next to the runtime (Silero VAD 6.2).
+pub const DETECTOR_FILE: &str = "silero-vad-v6.2-F32.gguf";
+
+/// How the voice detector decides what counts as speech.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Detection {
+    /// Speech probability from which a frame starts speech, 0 to 1.
+    pub threshold: f64,
+    /// Shorter bursts are dropped: clicks, taps, a single cough.
+    pub min_speech_ms: i32,
+    /// A pause this long ends a stretch of speech.
+    pub min_silence_ms: i32,
+}
+
+/// A neural voice-activity detector. Unlike a loudness threshold, it tells
+/// a whisper from a keyboard, so quiet speech is kept and noise is not.
+pub struct Detector {
+    runtime: &'static Runtime,
+    model: *mut c_void,
+    session: *mut c_void,
+}
+
+// Owned by one worker thread at a time, like `Engine`.
+unsafe impl Send for Detector {}
+
+impl Detector {
+    /// Loads the detector model. It always runs on the CPU (it is tiny), but
+    /// `device` fixes which backends the process may use, as for `Engine`.
+    pub fn open(runtime_dir: &Path, model: &Path, device: &str) -> Result<Detector> {
+        let runtime = runtime(&RUNTIME, runtime_dir, if device == "cpu" { MASK_CPU } else { MASK_ALL })?;
+        let api = &runtime.api;
+        unsafe {
+            let mut params: LoadParams = std::mem::zeroed();
+            (api.transcribe_model_load_params_init)(&mut params);
+            params.backend = 1;
+            let path = c_string(&model.to_string_lossy());
+            let mut handle = ptr::null_mut();
+            check((api.transcribe_model_load_file)(path.as_ptr(), &params, &mut handle))?;
+            let mut detector = Detector {
+                runtime,
+                model: handle,
+                session: ptr::null_mut(),
+            };
+            if (api.transcribe_model_roles)(handle) & ROLE_VAD == 0 {
+                return Err("That file is not a voice-detection model".into());
+            }
+            let mut session: VadSessionParams = std::mem::zeroed();
+            (api.transcribe_vad_session_params_init)(&mut session);
+            session.n_threads = 1;
+            check((api.transcribe_vad_session_init)(
+                handle,
+                &session,
+                &mut detector.session,
+            ))?;
+            Ok(detector)
+        }
+    }
+
+    /// The stretches of 16 kHz audio that contain speech, as sample ranges.
+    pub fn speech(&mut self, audio: &[f32], how: &Detection) -> Result<Vec<Range<usize>>> {
+        let api = &self.runtime.api;
+        unsafe {
+            let mut params: VadParams = std::mem::zeroed();
+            (api.transcribe_vad_params_init)(&mut params);
+            params.threshold = how.threshold;
+            params.min_speech_ms = how.min_speech_ms;
+            params.min_silence_ms = how.min_silence_ms;
+            // The runtime rejects empty input; empty audio simply has no speech.
+            let samples = audio.len().max(1);
+            let padded = [0.0f32];
+            let pcm = if audio.is_empty() { padded.as_ptr() } else { audio.as_ptr() };
+            check((api.transcribe_vad_run)(self.session, pcm, samples as i32, &params))?;
+            let mut result: VadResult = std::mem::zeroed();
+            (api.transcribe_vad_result_init)(&mut result);
+            check((api.transcribe_vad_get_result)(self.session, &mut result))?;
+            let mut regions = Vec::with_capacity(result.n_segments.max(0) as usize);
+            for index in 0..result.n_segments {
+                let mut segment: VadSegment = std::mem::zeroed();
+                (api.transcribe_vad_segment_init)(&mut segment);
+                check((api.transcribe_vad_get_segment)(self.session, index, &mut segment))?;
+                regions.push(segment.start_sample as usize..segment.end_sample.min(audio.len() as i64) as usize);
+            }
+            Ok(regions)
+        }
+    }
+}
+
+impl Drop for Detector {
+    fn drop(&mut self) {
+        unsafe {
+            (self.runtime.api.transcribe_vad_session_free)(self.session);
+            (self.runtime.api.transcribe_model_free)(self.model);
+        }
+    }
+}
+
 /// A loaded speech model.
 pub struct Engine {
     runtime: &'static Runtime,
@@ -286,6 +502,8 @@ pub struct Engine {
     device: String,
     max_samples: usize,
     languages: Vec<String>,
+    detector: Option<Detector>,
+    heard: Vec<crate::asr::Heard>,
 }
 
 // An engine is owned by one worker thread at a time.
@@ -341,6 +559,8 @@ impl Engine {
             device: "cpu".into(),
             max_samples: 0,
             languages: vec![],
+            detector: None,
+            heard: vec![],
         };
 
         let mut session: SessionParams = std::mem::zeroed();
@@ -383,6 +603,24 @@ impl Engine {
         unsafe { (self.runtime.api.transcribe_model_supports)(self.model, FEATURE_VOCABULARY) }
     }
 
+    /// The last run's words, from its tokens and their probabilities.
+    unsafe fn words(&self) -> Vec<crate::asr::Heard> {
+        let api = &self.runtime.api;
+        let pieces = (0..(api.transcribe_n_tokens)(self.session).max(0)).map(|index| {
+            let mut token: Token = std::mem::zeroed();
+            (api.transcribe_token_init)(&mut token);
+            let _ = (api.transcribe_get_token)(self.session, index, &mut token);
+            (text(token.text), token.p)
+        });
+        group(pieces)
+    }
+
+    /// Uses `detector` to find speech before recognising it.
+    pub fn with_detector(mut self, detector: Detector) -> Engine {
+        self.detector = Some(detector);
+        self
+    }
+
     /// The device the model actually runs on, e.g. "vulkan NVIDIA GeForce RTX 4060".
     pub fn device(&self) -> &str {
         &self.device
@@ -407,6 +645,7 @@ impl Recognizer for Engine {
         let terms: Vec<CString> = hint.vocabulary.iter().map(|term| c_string(term)).collect();
         let pointers: Vec<*const c_char> = terms.iter().map(|term| term.as_ptr()).collect();
         let mut pieces = Vec::new();
+        self.heard.clear();
         for chunk in audio.chunks(self.max_samples.max(16_000)) {
             unsafe {
                 let mut params: RunParams = std::mem::zeroed();
@@ -432,6 +671,8 @@ impl Recognizer for Engine {
                 if !text.is_null() {
                     pieces.push(CStr::from_ptr(text).to_string_lossy().trim().to_string());
                 }
+                let words = self.words();
+                self.heard.extend(words);
             }
         }
         Ok(pieces.join(" ").trim().to_string())
@@ -439,6 +680,21 @@ impl Recognizer for Engine {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn heard(&self) -> Vec<crate::asr::Heard> {
+        self.heard.clone()
+    }
+
+    fn detect(&mut self, audio: &[f32], threshold: f64) -> Option<Result<Vec<Range<usize>>>> {
+        let detector = self.detector.as_mut()?;
+        Some(detector.speech(
+            audio,
+            &crate::native::Detection {
+                threshold,
+                ..crate::audio::DETECTION
+            },
+        ))
     }
 }
 
@@ -513,6 +769,8 @@ mod tests {
             .unwrap()
             .to_lowercase();
         assert!(text.contains("ask not what your country can do for you"), "{text}");
+        // Whisper does not report token probabilities in this runtime.
+        assert!(engine.heard().is_empty());
         // Silence must not crash, and a second run reuses the session.
         engine.transcribe(&vec![0.0; 16_000], &Hint::default()).unwrap();
         // A device that cannot be trusted is swapped for the CPU.
@@ -530,6 +788,104 @@ mod tests {
         let junk = crate::testing::temp_dir("native").join("junk.gguf");
         std::fs::write(&junk, b"not a model").unwrap();
         assert!(Engine::open(&runtime, &junk, "cpu").is_err());
+    }
+
+    #[test]
+    fn the_voice_detector_keeps_quiet_speech_and_ignores_hiss() {
+        let Some((runtime, model)) = fixture() else { return };
+        let mut detector = Detector::open(&runtime, &runtime.join(DETECTOR_FILE), "cpu").unwrap();
+        let speech = crate::audio::decode_wav(include_bytes!("../tests/fixtures/jfk.wav")).unwrap();
+        let how = crate::audio::DETECTION;
+        let regions = detector.speech(&speech, &how).unwrap();
+        assert!(!regions.is_empty() && regions.iter().all(|r| r.start < r.end && r.end <= speech.len()));
+        assert!(detector.speech(&vec![0.0; 32_000], &how).unwrap().is_empty());
+        assert!(detector.speech(&[], &how).unwrap().is_empty());
+        assert!(detector.speech(&[f32::NAN; 600], &how).is_err());
+        // A speech model is not a detector, and a missing file is reported.
+        let not_a_detector = Detector::open(&runtime, &model, "cpu").err().unwrap();
+        assert_eq!(not_a_detector, "That file is not a voice-detection model");
+        assert!(Detector::open(&runtime, &runtime.join("missing.gguf"), "cpu").is_err());
+
+        // End to end: 50 dB quieter than recorded, under microphone hiss,
+        // the speech is still found and understood; the hiss alone is not speech.
+        let engine = Engine::open(&runtime, &model, "cpu").unwrap();
+        let mut plain = Engine::open(&runtime, &model, "cpu").unwrap();
+        assert!(plain.detect(&speech, 0.35).is_none());
+        let mut engine = engine.with_detector(detector);
+        let hiss = crate::testing::hiss(speech.len(), 0.0005);
+        let quiet: Vec<f32> = speech.iter().zip(&hiss).map(|(s, n)| s * 0.003 + n).collect();
+        let found = crate::asr::isolate(&mut engine, &quiet).unwrap();
+        assert!(found.speech_ms > 6000, "only {} ms of speech found", found.speech_ms);
+        let hint = Hint {
+            language: "en",
+            vocabulary: &[],
+        };
+        let text = engine.transcribe(&found.samples, &hint).unwrap().to_lowercase();
+        assert!(text.contains("what your country can do for you"), "{text}");
+        assert!(crate::asr::isolate(&mut engine, &hiss).unwrap().samples.is_empty());
+        // The loudness trim alone hears much less of it.
+        let by_loudness = crate::audio::trim(&quiet).speech_ms;
+        assert!(
+            by_loudness * 3 < found.speech_ms * 2,
+            "{by_loudness} vs {} ms",
+            found.speech_ms
+        );
+    }
+
+    #[test]
+    fn lists_the_devices_a_model_can_run_on() {
+        let Some((runtime, _)) = fixture() else { return };
+        let listed = devices(&runtime).unwrap();
+        // Every machine has its CPU; tests register only the CPU backend.
+        assert!(
+            listed
+                .iter()
+                .any(|device| device.class == crate::catalog::DeviceClass::Cpu),
+            "{listed:?}"
+        );
+        assert!(listed.iter().all(|device| !device.kind.is_empty()));
+    }
+
+    #[test]
+    fn tokens_join_into_words_with_the_least_certain_piece() {
+        let pieces = [
+            (" Sum", 0.9),
+            ("edh", 0.4),
+            ("<|en|>", 0.1),
+            (" ", 0.2),
+            ("\u{2581}Bhat", 0.8),
+            (",", 0.99),
+        ];
+        let words = group(pieces.iter().map(|(text, p)| (text.to_string(), *p)));
+        let shown: Vec<(&str, f32)> = words.iter().map(|w| (w.word.as_str(), w.p)).collect();
+        assert_eq!(shown, [("Sumedh", 0.4), ("Bhat,", 0.8)]);
+        // A first token without a leading space still starts a word.
+        assert_eq!(group([("Hi".to_string(), 0.7)].into_iter())[0].word, "Hi");
+        assert!(group([(" Hi".to_string(), f32::NAN)].into_iter()).is_empty());
+        assert!(group(std::iter::empty()).is_empty());
+    }
+
+    #[test]
+    fn a_transducer_model_reports_how_sure_it_was_of_each_word() {
+        let Some((runtime, _)) = fixture() else { return };
+        let path = std::env::var_os("SPEECHIFY_TEST_TOKEN_MODEL")
+            .map(PathBuf::from)
+            .expect("token model fixture");
+        let mut engine = Engine::open(&runtime, &path, "cpu").unwrap();
+        let speech = crate::audio::decode_wav(include_bytes!("../tests/fixtures/jfk.wav")).unwrap();
+        let text = engine
+            .transcribe(
+                &speech,
+                &Hint {
+                    language: "en",
+                    vocabulary: &[],
+                },
+            )
+            .unwrap();
+        let heard = engine.heard();
+        assert_eq!(heard.len(), text.split_whitespace().count(), "{heard:?}");
+        assert!(heard.iter().all(|word| (0.0..=1.0).contains(&word.p)), "{heard:?}");
+        assert!(heard.iter().any(|word| word.word.starts_with("Americans")));
     }
 
     #[test]

@@ -1,8 +1,13 @@
 //! Finds corrections worth remembering in the difference between what was
 //! written and what it should have been.
 
+use crate::asr::Heard;
 use crate::diff::{align, normalize, words, Op};
 use crate::format::Replacement;
+
+/// Below this the recogniser was close to guessing between words, as in
+/// a 50/50 call. Confidence is the lowest token probability in a word.
+pub const UNSURE: f32 = 0.6;
 
 /// Everyday words are never dictionary material on their own; swapping one
 /// for another is a rewording, not a recognition error.
@@ -18,6 +23,8 @@ fn learnable(word: &str) -> bool {
     !bare.is_empty()
         && bare.chars().count() <= 40
         && !bare.chars().any(|c| c.is_ascii_digit())
+        // "two" to "three" is a change of fact, never a spelling fix.
+        && !crate::format::is_number_word(&bare.to_lowercase())
         && !word.contains(['/', '\\', '@', '_', '=', '(', '{', '<'])
         && !word.contains("://")
         && !word.contains("::")
@@ -103,6 +110,96 @@ pub fn notable_terms(text: &str) -> Vec<String> {
     terms
 }
 
+/// A rough sound of a word: letters grouped by how they are spoken, vowels
+/// merged, silent letters dropped, repeats collapsed. "Sumedh Bhat" and
+/// "sumit bat" share one sound; "open" and "close" do not.
+fn sound(text: &str) -> Vec<char> {
+    let letters: Vec<char> = text.to_lowercase().chars().filter(char::is_ascii_alphabetic).collect();
+    let mut key: Vec<char> = Vec::new();
+    for (index, letter) in letters.iter().enumerate() {
+        let next = letters.get(index + 1).copied().unwrap_or(' ');
+        let class = match letter {
+            'a' | 'e' | 'i' | 'o' | 'u' | 'y' => 'V',
+            'b' | 'p' => 'B',
+            'f' | 'v' => 'F',
+            'd' | 't' => 'T',
+            'l' => 'L',
+            'm' | 'n' => 'M',
+            'r' => 'R',
+            'c' if matches!(next, 'e' | 'i' | 'y') => 'S',
+            'c' | 'k' | 'q' | 'g' => 'K',
+            's' | 'z' | 'x' => 'S',
+            'j' => 'J',
+            // h and w: silent, or part of a vowel, in most words and names.
+            _ => continue,
+        };
+        if key.last() != Some(&class) {
+            key.push(class);
+        }
+    }
+    key
+}
+
+/// Levenshtein distance between two sequences.
+fn distance(a: &[char], b: &[char]) -> usize {
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, left) in a.iter().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, right) in b.iter().enumerate() {
+            let previous = row[j + 1];
+            row[j + 1] = (diagonal + usize::from(left != right))
+                .min(row[j] + 1)
+                .min(previous + 1);
+            diagonal = previous;
+        }
+    }
+    row[b.len()]
+}
+
+/// Whether `to` sounds like `from`: a fix of what the recogniser heard,
+/// rather than a change of what the user meant.
+pub fn sounds_alike(from: &str, to: &str) -> bool {
+    let (a, b) = (sound(from), sound(to));
+    !a.is_empty() && distance(&a, &b) * 5 <= a.len().max(b.len()) * 2
+}
+
+/// How sure the recogniser was of `phrase`: the lowest confidence among its
+/// words, or `None` when the recogniser did not say or the words are not found.
+pub fn certainty(phrase: &str, heard: &[Heard]) -> Option<f32> {
+    let wanted: Vec<String> = words(phrase).into_iter().map(normalize).collect();
+    let found: Vec<f32> = heard
+        .iter()
+        .filter(|h| wanted.contains(&normalize(&h.word)))
+        .map(|h| h.p)
+        .collect();
+    (found.len() >= wanted.len() && !wanted.is_empty()).then(|| found.iter().copied().fold(1.0, f32::min))
+}
+
+/// How much a correction proves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Evidence {
+    /// It sounds like what was heard, and the recogniser was unsure: learn it now.
+    Strong,
+    /// It sounds alike, but the recogniser was confident or did not say:
+    /// learn it only if the same correction comes up again.
+    Weak,
+    /// It changes the meaning: never learn it.
+    None,
+}
+
+/// Judges a correction of words the recogniser heard (`heard` is its
+/// per-word confidence for that dictation, possibly empty).
+pub fn evidence(correction: &Replacement, heard: &[Heard]) -> Evidence {
+    if !sounds_alike(&correction.from, &correction.to) {
+        return Evidence::None;
+    }
+    match certainty(&correction.from, heard) {
+        Some(p) if p < UNSURE => Evidence::Strong,
+        _ => Evidence::Weak,
+    }
+}
+
 /// A single recognition mismatch needs independent spelling evidence as well
 /// as a small edit distance. Title case alone is not proof of a correction.
 /// Ordinary lower-case words never qualify for automatic one-shot replacement.
@@ -122,24 +219,77 @@ pub fn corroborated(correction: &Replacement, before: &str, vocabulary: &[String
     {
         return false;
     }
-    let mut row: Vec<usize> = (0..=b.len()).collect();
-    for (i, left) in a.iter().enumerate() {
-        let mut diagonal = row[0];
-        row[0] = i + 1;
-        for (j, right) in b.iter().enumerate() {
-            let previous = row[j + 1];
-            row[j + 1] = (diagonal + usize::from(left != right))
-                .min(row[j] + 1)
-                .min(previous + 1);
-            diagonal = previous;
-        }
-    }
-    row[b.len()] <= a.len().max(b.len()).div_ceil(3)
+    distance(&a, &b) <= a.len().max(b.len()).div_ceil(3)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn heard(words: &[(&str, f32)]) -> Vec<Heard> {
+        words
+            .iter()
+            .map(|(word, p)| Heard {
+                word: (*word).into(),
+                p: *p,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sound_alike_fixes_are_recognition_errors_and_rewordings_are_not() {
+        for (from, to) in [
+            ("sumit bat", "Sumedh Bhat"),
+            ("cube control", "kubectl"),
+            ("github", "GitHub"),
+            ("ekanatha", "Ekanatham"),
+            ("vikram", "Vikraam"),
+        ] {
+            assert!(sounds_alike(from, to), "{from} -> {to}");
+        }
+        for (from, to) in [
+            ("open", "close"),
+            ("thursday", "wednesday"),
+            ("send", "delete"),
+            ("yes", "no"),
+            ("", "x"),
+        ] {
+            assert!(!sounds_alike(from, to), "{from} -> {to}");
+        }
+        // Every letter has a sound class; c softens before e, i and y.
+        assert_eq!(
+            sound("Jumping over the quick brown fox, lazy dog, cinema")
+                .iter()
+                .collect::<String>(),
+            "JVMBVMKVFVRTVKVKBRVMFVSLVSVTVKSVMVMV"
+        );
+    }
+
+    #[test]
+    fn certainty_is_the_least_sure_word_of_the_phrase() {
+        let said = heard(&[("cube", 0.4), ("control,", 0.9), ("tonight", 0.99)]);
+        assert_eq!(certainty("cube control", &said), Some(0.4));
+        assert_eq!(certainty("Tonight.", &said), Some(0.99));
+        assert_eq!(certainty("kubectl", &said), None);
+        assert_eq!(certainty("cube control", &[]), None);
+        assert_eq!(certainty("", &said), None);
+    }
+
+    #[test]
+    fn evidence_combines_sound_and_certainty() {
+        let unsure = heard(&[("sumit", 0.45), ("bat", 0.7), ("open", 0.2)]);
+        let sure = heard(&[("sumit", 0.95), ("bat", 0.97)]);
+        let name = Replacement::new("sumit bat", "Sumedh Bhat");
+        assert_eq!(evidence(&name, &unsure), Evidence::Strong);
+        assert_eq!(evidence(&name, &sure), Evidence::Weak);
+        assert_eq!(evidence(&name, &[]), Evidence::Weak);
+        assert_eq!(evidence(&Replacement::new("open", "close"), &unsure), Evidence::None);
+    }
+
+    #[test]
+    fn number_words_are_never_vocabulary() {
+        assert!(corrections("order three boxes today", "order two boxes today").is_empty());
+    }
 
     fn pairs(before: &str, after: &str) -> Vec<(String, String)> {
         corrections(before, after).into_iter().map(|r| (r.from, r.to)).collect()

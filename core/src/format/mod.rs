@@ -16,7 +16,7 @@ mod tidy;
 
 pub(crate) use fillers::remove as remove_fillers;
 pub(crate) use lists::enumerated;
-pub use numbers::group_digits;
+pub use numbers::{group_digits, is_number_word};
 pub use replace::{apply_replacements, Replacement};
 pub use style::apply_style;
 pub use tidy::tidy;
