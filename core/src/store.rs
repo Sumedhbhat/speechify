@@ -136,9 +136,12 @@ pub struct Dictation {
     pub teacher_wer: Option<f64>,
     pub reviewed_at: Option<i64>,
     pub flagged: bool,
+    /// Each recognised word with how sure the recogniser was, 0 to 1.
+    /// Empty when the recogniser does not report it.
+    pub heard: Vec<crate::asr::Heard>,
 }
 
-const DICTATION_COLUMNS: &str = "id, created_at, offset_min, app, process, title, category, command, duration_ms, speech_ms, raw, text, words, rewritten, speech_model, rewrite_model, asr_ms, rewrite_ms, total_ms, outcome, fixes, audio, edited, teacher_raw, teacher_text, teacher_wer, reviewed_at, flagged";
+const DICTATION_COLUMNS: &str = "id, created_at, offset_min, app, process, title, category, command, duration_ms, speech_ms, raw, text, words, rewritten, speech_model, rewrite_model, asr_ms, rewrite_ms, total_ms, outcome, fixes, audio, edited, teacher_raw, teacher_text, teacher_wer, reviewed_at, flagged, heard";
 
 fn read_dictation(row: &Row) -> rusqlite::Result<Dictation> {
     Ok(Dictation {
@@ -170,6 +173,7 @@ fn read_dictation(row: &Row) -> rusqlite::Result<Dictation> {
         teacher_wer: row.get(25)?,
         reviewed_at: row.get(26)?,
         flagged: row.get(27)?,
+        heard: serde_json::from_str(&row.get::<_, String>(28)?).unwrap_or_default(),
     })
 }
 
@@ -237,6 +241,8 @@ impl Store {
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")
             .map_err(err)?;
         conn.execute_batch(SCHEMA).map_err(err)?;
+        // Added after the first release: fails harmlessly when already there.
+        let _ = conn.execute("ALTER TABLE dictations ADD COLUMN heard TEXT NOT NULL DEFAULT '[]'", []);
         Ok(Store { conn })
     }
 
@@ -287,9 +293,9 @@ impl Store {
     pub fn add_dictation(&self, d: &Dictation) -> Result<i64> {
         self.conn
             .execute(
-                "INSERT INTO dictations (created_at, offset_min, app, process, title, category, command, duration_ms, speech_ms, raw, text, words, rewritten, speech_model, rewrite_model, asr_ms, rewrite_ms, total_ms, outcome, fixes, audio)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
-                params![d.created_at, d.offset_min, d.app, d.process, d.title, category_name(d.category), d.command, d.duration_ms, d.speech_ms, d.raw, d.text, d.words, d.rewritten, d.speech_model, d.rewrite_model, d.asr_ms, d.rewrite_ms, d.total_ms, d.outcome.name(), d.fixes, d.audio],
+                "INSERT INTO dictations (created_at, offset_min, app, process, title, category, command, duration_ms, speech_ms, raw, text, words, rewritten, speech_model, rewrite_model, asr_ms, rewrite_ms, total_ms, outcome, fixes, audio, heard)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+                params![d.created_at, d.offset_min, d.app, d.process, d.title, category_name(d.category), d.command, d.duration_ms, d.speech_ms, d.raw, d.text, d.words, d.rewritten, d.speech_model, d.rewrite_model, d.asr_ms, d.rewrite_ms, d.total_ms, d.outcome.name(), d.fixes, d.audio, serde_json::to_string(&d.heard).map_err(err)?],
             )
             .map_err(err)?;
         Ok(self.conn.last_insert_rowid())

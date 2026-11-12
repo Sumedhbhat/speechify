@@ -21,6 +21,47 @@ pub trait Recognizer {
     /// Transcribes 16 kHz mono audio.
     fn transcribe(&mut self, audio: &[f32], hint: &Hint) -> Result<String>;
     fn name(&self) -> &str;
+    /// Where the speech is, as sample ranges, judged at `threshold` (a speech
+    /// probability), if this recogniser has a voice detector. `None` means
+    /// "no detector": the loudness trim is used.
+    fn detect(&mut self, _audio: &[f32], _threshold: f64) -> Option<Result<Vec<std::ops::Range<usize>>>> {
+        None
+    }
+    /// The words of the last transcription with the recogniser's confidence
+    /// in each. Empty when the recogniser does not report it.
+    fn heard(&self) -> Vec<Heard> {
+        Vec::new()
+    }
+}
+
+/// One recognised word and how sure the recogniser was of it, 0 to 1.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Heard {
+    pub word: String,
+    pub p: f32,
+}
+
+/// The part of a recording to recognise. Quiet recordings are first raised
+/// to a normal level, so a soft voice reaches the detector and the model as
+/// clearly as a loud one. A recording with no signal at all yields nothing.
+pub fn isolate(recognizer: &mut dyn Recognizer, samples: &[f32]) -> Result<crate::audio::Trimmed> {
+    let Some(loud) = crate::audio::normalize(samples) else { return Ok(crate::audio::Trimmed::default()) };
+    let span = crate::audio::loudness_span(samples);
+    let Some(found) = recognizer.detect(&loud, crate::audio::DETECTION.threshold) else {
+        return Ok(crate::audio::trim(samples));
+    };
+    let mut regions = found?;
+    // A very soft whisper can stay under the detector's usual threshold. If
+    // the recording also has sustained sound above its own background, a lower
+    // threshold decides: losing someone's words is worse than a stray noise.
+    if regions.is_empty() && span.is_some() {
+        regions = recognizer
+            .detect(&loud, crate::audio::FALLBACK_THRESHOLD)
+            .unwrap_or(Ok(Vec::new()))?;
+    }
+    // The detector decides whether anyone spoke; the cut also keeps the span
+    // loudness finds, so soft whispered words at the edges survive.
+    Ok(crate::audio::trim_to(&loud, &regions, span))
 }
 
 /// Whisper copies the style of its prompt. Without one it sometimes drops
@@ -69,6 +110,17 @@ const PHANTOMS: &[&str] = &[
     "music",
 ];
 
+/// The shortest believable time to say one of the phrases above: a fixed
+/// start plus time per word (nobody speaks faster than about six words a
+/// second). A real "Thank you." said faster than this is dropped along with
+/// the invented ones; the two cannot be told apart from text and timing.
+///
+/// Kept deliberately strict for now (decided 2026-11-13). To let brief
+/// replies through later, lower these, or check the voice detector's
+/// speech probability for the clip instead of its length.
+pub const PHANTOM_BASE_MS: u64 = 350;
+pub const PHANTOM_MS_PER_WORD: u64 = 170;
+
 /// True when `text` is one of those phrases and there was too little speech
 /// to have said it in earnest.
 pub fn is_phantom(text: &str, speech_ms: u64) -> bool {
@@ -78,8 +130,7 @@ pub fn is_phantom(text: &str, speech_ms: u64) -> bool {
         .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '\'')
         .collect();
     let words = plain.split_whitespace().count() as u64;
-    // Nobody speaks faster than about six words a second.
-    PHANTOMS.contains(&plain.trim()) && speech_ms < 350 + words * 170
+    PHANTOMS.contains(&plain.trim()) && speech_ms < PHANTOM_BASE_MS + words * PHANTOM_MS_PER_WORD
 }
 
 /// Removes bracketed sound tags ("[BLANK_AUDIO]", "(music)") and tidies spaces.
@@ -189,6 +240,71 @@ mod tests {
     use super::*;
     use crate::testing::{Reply, Server};
 
+    /// A recogniser whose detector gives these answers in turn, then none.
+    struct Detecting(Vec<Option<Result<Vec<std::ops::Range<usize>>>>>);
+
+    impl Recognizer for Detecting {
+        fn transcribe(&mut self, audio: &[f32], _: &Hint) -> Result<String> {
+            Ok(audio.len().to_string())
+        }
+        fn name(&self) -> &str {
+            "detecting"
+        }
+        fn detect(&mut self, _: &[f32], _: f64) -> Option<Result<Vec<std::ops::Range<usize>>>> {
+            if self.0.is_empty() {
+                None
+            } else {
+                self.0.remove(0)
+            }
+        }
+    }
+
+    #[test]
+    fn isolate_uses_the_detector_and_falls_back_to_loudness() {
+        let speech = crate::audio::tone(1000, 0.01);
+        let mut found = Detecting(vec![Some(Ok(std::iter::once(4000..8000).collect()))]);
+        let trimmed = isolate(&mut found, &speech).unwrap();
+        assert_eq!((trimmed.speech_ms, trimmed.samples.len()), (250, 12_000));
+        // What reaches the recogniser has been raised to a normal level.
+        assert!(trimmed.samples.iter().any(|sample| sample.abs() > 0.2));
+        assert_eq!(found.transcribe(&trimmed.samples, &Hint::default()).unwrap(), "12000");
+        assert_eq!(found.name(), "detecting");
+        // With no detector, the loudness trim of the original recording is used.
+        assert_eq!(isolate(&mut found, &speech).unwrap(), crate::audio::trim(&speech));
+        let mut broken = Detecting(vec![Some(Err("The voice detector failed".into()))]);
+        assert_eq!(isolate(&mut broken, &speech).unwrap_err(), "The voice detector failed");
+        // No signal at all: nothing to recognise, and the detector is not asked.
+        let mut untouched = Detecting(vec![Some(Err("must not run".into()))]);
+        assert_eq!(
+            isolate(&mut untouched, &[0.0; 16_000]).unwrap(),
+            crate::audio::Trimmed::default()
+        );
+    }
+
+    #[test]
+    fn a_soft_whisper_gets_a_second_look_at_a_lower_threshold() {
+        // Sustained soft sound over a quiet room: the loudness trim finds it.
+        let mut soft = vec![0.0005; 8000];
+        soft.extend(crate::audio::tone(1000, 0.02));
+        soft.extend(vec![0.0005; 8000]);
+        let mut second_look = Detecting(vec![
+            Some(Ok(vec![])),
+            Some(Ok(std::iter::once(9000..20_000).collect())),
+        ]);
+        let kept = isolate(&mut second_look, &soft).unwrap();
+        assert_eq!(kept.speech_ms, 687);
+        assert!(!kept.samples.is_empty());
+        // Nothing at the lower threshold either: nothing is kept.
+        let mut nothing = Detecting(vec![Some(Ok(vec![])), Some(Ok(vec![]))]);
+        assert!(isolate(&mut nothing, &soft).unwrap().samples.is_empty());
+        let mut gone = Detecting(vec![Some(Ok(vec![]))]);
+        assert!(isolate(&mut gone, &soft).unwrap().samples.is_empty());
+        // Without sustained sound the lower threshold is never consulted.
+        let steady = crate::audio::tone(1000, 0.01);
+        let mut untouched = Detecting(vec![Some(Ok(vec![])), Some(Err("must not run".into()))]);
+        assert!(isolate(&mut untouched, &steady).unwrap().samples.is_empty());
+    }
+
     #[test]
     fn prompt_sets_style_and_newest_terms() {
         assert_eq!(
@@ -266,6 +382,7 @@ mod tests {
             "Hello there."
         );
         assert_eq!(remote.name(), "whisper-large-v3-turbo");
+        assert!(remote.detect(&[0.0], 0.35).is_none());
         {
             let requests = server.requests();
             let body = String::from_utf8_lossy(&requests[0].body).to_string();
