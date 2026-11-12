@@ -127,7 +127,10 @@ fn runtime_dir(app: &AppHandle) -> PathBuf {
         .resource_dir()
         .map(|dir| dir.join("resources").join("native"))
         .unwrap_or_default();
-    if bundled.exists() {
+    // A debug build run from source also finds the runtime in the source
+    // tree. A release build only ever uses its bundled copy; if that is
+    // missing, loading fails and names the bundled path.
+    if bundled.exists() || !cfg!(debug_assertions) {
         return bundled;
     }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
