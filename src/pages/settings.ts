@@ -50,9 +50,11 @@ export function createSettingsPage({ api, settings: store }: Deps): Page {
       body.replaceChildren(
         section(
           "Shortcuts",
-          status.wayland
-            ? "Global shortcuts are not available on Wayland. Bind “speechify --toggle” to a system shortcut instead."
-            : "Write keys joined by +, like Ctrl+Meta+Space or Alt+Shift+D.",
+          status.shortcuts
+            ? "Write keys joined by +, like Ctrl+Meta+Space or Alt+Shift+D."
+            : status.wayland
+              ? "Global shortcuts are not available on Wayland. Bind “speechify --toggle” to a system shortcut instead."
+              : "Speechify cannot see your keyboard yet. Allow it under System Settings › Privacy & Security › Accessibility, then restart it.",
           HOTKEYS.map(([key, label, hint]) =>
             text(store, settings, {
               label,

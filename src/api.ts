@@ -172,7 +172,8 @@ export interface SpeechModel {
 export interface Status {
   version: string;
   platform: "windows" | "macos" | "linux";
-  wayland: boolean; // global shortcuts are unavailable; use the bar or CLI
+  wayland: boolean; // a Wayland session: apps cannot watch global keys
+  shortcuts: boolean; // global shortcuts work; false on Wayland, or on a Mac without Accessibility
   speech_ready: boolean;
   speech_device: string; // e.g. "vulkan NVIDIA GeForce RTX 4060"; empty until loaded
   speech_error: string; // empty when fine
