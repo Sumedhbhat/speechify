@@ -1,0 +1,203 @@
+{
+  "clips": 965,
+  "dev_clips": 441,
+  "report_clips": 524,
+  "threshold": "0.35",
+  "sweep_dev": {
+    "0.15": {
+      "speech_kept": 100.0,
+      "noise_kept": 37.5609756097561
+    },
+    "0.25": {
+      "speech_kept": 99.54954954954955,
+      "noise_kept": 12.682926829268293
+    },
+    "0.35": {
+      "speech_kept": 99.54954954954955,
+      "noise_kept": 9.75609756097561
+    },
+    "0.5": {
+      "speech_kept": 96.84684684684684,
+      "noise_kept": 6.341463414634147
+    },
+    "0.65": {
+      "speech_kept": 95.49549549549549,
+      "noise_kept": 3.4146341463414633
+    }
+  },
+  "speech": {
+    "clips": 232,
+    "old_kept": 98.70689655172414,
+    "new_kept": 100.0,
+    "old_wer": 21.381751889946933,
+    "new_wer": 20.342094344409528
+  },
+  "nonspeech": {
+    "clips": 290,
+    "old_kept": 71.03448275862068,
+    "new_kept": 41.724137931034484
+  },
+  "background_speech": {
+    "clips": 2,
+    "new_kept": 0.0
+  },
+  "by_level": {
+    "as recorded": {
+      "clips": 15,
+      "old_kept": 100.0,
+      "new_kept": 100.0,
+      "old_wer": 14.591852591852591,
+      "new_wer": 15.107725607725609
+    },
+    "-30": {
+      "clips": 30,
+      "old_kept": 100.0,
+      "new_kept": 100.0,
+      "old_wer": 14.75058275058275,
+      "new_wer": 16.41219891219891
+    },
+    "-40": {
+      "clips": 30,
+      "old_kept": 100.0,
+      "new_kept": 100.0,
+      "old_wer": 14.958374958374959,
+      "new_wer": 16.18997668997669
+    },
+    "-45": {
+      "clips": 30,
+      "old_kept": 100.0,
+      "new_kept": 100.0,
+      "old_wer": 15.053613053613054,
+      "new_wer": 15.967754467754466
+    },
+    "-50": {
+      "clips": 30,
+      "old_kept": 100.0,
+      "new_kept": 100.0,
+      "old_wer": 15.143102268102268,
+      "new_wer": 15.076964701964702
+    },
+    "-55": {
+      "clips": 30,
+      "old_kept": 100.0,
+      "new_kept": 100.0,
+      "old_wer": 20.852388352388353,
+      "new_wer": 17.919219669219668
+    },
+    "whisper": {
+      "clips": 45,
+      "old_kept": 93.33333333333333,
+      "new_kept": 100.0,
+      "old_wer": 38.458698998103465,
+      "new_wer": 32.73786691470812
+    },
+    "whisper -50": {
+      "clips": 11,
+      "old_kept": 100.0,
+      "new_kept": 100.0,
+      "old_wer": 25.39061825092867,
+      "new_wer": 23.7377256889452
+    },
+    "whisper -55": {
+      "clips": 11,
+      "old_kept": 100.0,
+      "new_kept": 100.0,
+      "old_wer": 28.09168658392605,
+      "new_wer": 28.313416073948222
+    }
+  },
+  "by_kind": {
+    "breathing": {
+      "clips": 24,
+      "old_kept": 100.0,
+      "new_kept": 25.0
+    },
+    "clock_tick": {
+      "clips": 15,
+      "old_kept": 60.0,
+      "new_kept": 13.333333333333334
+    },
+    "coughing": {
+      "clips": 24,
+      "old_kept": 100.0,
+      "new_kept": 91.66666666666667
+    },
+    "digital-silence": {
+      "clips": 1,
+      "old_kept": 0.0,
+      "new_kept": 0.0
+    },
+    "door_wood_knock": {
+      "clips": 18,
+      "old_kept": 100.0,
+      "new_kept": 22.22222222222222
+    },
+    "drinking_sipping": {
+      "clips": 18,
+      "old_kept": 83.33333333333333,
+      "new_kept": 94.44444444444444
+    },
+    "footsteps": {
+      "clips": 15,
+      "old_kept": 100.0,
+      "new_kept": 60.0
+    },
+    "keyboard_typing": {
+      "clips": 6,
+      "old_kept": 100.0,
+      "new_kept": 33.333333333333336
+    },
+    "mouse_click": {
+      "clips": 15,
+      "old_kept": 0.0,
+      "new_kept": 40.0
+    },
+    "muted-mic-lsb": {
+      "clips": 1,
+      "old_kept": 0.0,
+      "new_kept": 0.0
+    },
+    "room-tone-demand": {
+      "clips": 48,
+      "old_kept": 56.25,
+      "new_kept": 12.5
+    },
+    "room-tone-real": {
+      "clips": 6,
+      "old_kept": 0.0,
+      "new_kept": 0.0
+    },
+    "sneezing": {
+      "clips": 21,
+      "old_kept": 100.0,
+      "new_kept": 100.0
+    },
+    "snoring": {
+      "clips": 15,
+      "old_kept": 100.0,
+      "new_kept": 80.0
+    },
+    "vacuum_cleaner": {
+      "clips": 21,
+      "old_kept": 38.095238095238095,
+      "new_kept": 4.761904761904762
+    },
+    "washing_machine": {
+      "clips": 21,
+      "old_kept": 61.904761904761905,
+      "new_kept": 33.333333333333336
+    },
+    "white-noise": {
+      "clips": 6,
+      "old_kept": 0.0,
+      "new_kept": 0.0
+    },
+    "wind": {
+      "clips": 15,
+      "old_kept": 73.33333333333333,
+      "new_kept": 40.0
+    }
+  },
+  "detector_ms_median": 16.549661,
+  "asr_ms_median": 1428.9700994999998
+}

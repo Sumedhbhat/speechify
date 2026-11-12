@@ -12,6 +12,8 @@ use speechify_core::{
     store::{Clock, Store},
     teacher, Result,
 };
+mod quiet;
+
 use std::{
     cell::RefCell,
     fs,
@@ -19,7 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const ROOT: &str = "/workspaces/.cache-speechify/eval";
+pub(crate) const ROOT: &str = "/workspaces/.cache-speechify/eval";
 const CLOCK: Clock = Clock {
     now: 1_794_355_200,
     offset_min: 330,
@@ -740,7 +742,19 @@ fn run() -> Result<()> {
             let clips: Vec<Clip>=read(Path::new(args.get(2).ok_or("manifest required")?))?;
             cleanup_probe(&clips,Path::new(args.get(3).ok_or("native study required")?),Path::new(args.get(4).ok_or("learned study required")?),Path::new(args.get(5).ok_or("output required")?))
         }
+        Some("quiet-examples") => quiet::examples(
+            Path::new(args.get(2).ok_or("manifest required")?),
+            Path::new(args.get(3).ok_or("output required")?),
+            args.get(4).ok_or("model required")?,
+            &args[5..],
+        ),
+        Some("quiet") => quiet::run(
+            Path::new(args.get(2).ok_or("manifest required")?),
+            Path::new(args.get(3).ok_or("output required")?),
+            args.get(4).ok_or("model required")?,
+            args.get(5).is_none_or(|flag| flag != "no-asr"),
+        ),
         Some("format") => formatting(Path::new(args.get(2).ok_or("cases required")?), Path::new(args.get(3).ok_or("output required")?), args.get(4).is_some_and(|s| s == "llm"), args.get(5).map_or(Ok(6), |s| s.parse::<u64>().map_err(|e|e.to_string()))?),
-        _ => Err("Usage: speechify-bench download MODEL | student MANIFEST STUDY MODEL baseline|learned | teacher MANIFEST STUDY MODEL [history-only] | format CASES OUTPUT [llm] [timeout-seconds] | cleanup-study MANIFEST NATIVE_STUDY OUTPUT_DIR | quiet-probe MODEL AUDIO OUTPUT | example-probe STUDY OUTPUT | cleanup-probe MANIFEST NATIVE_STUDY LEARNED_STUDY OUTPUT".into()),
+        _ => Err("Usage: speechify-bench download MODEL | student MANIFEST STUDY MODEL baseline|learned | teacher MANIFEST STUDY MODEL [history-only] | format CASES OUTPUT [llm] [timeout-seconds] | cleanup-study MANIFEST NATIVE_STUDY OUTPUT_DIR | quiet MANIFEST OUTPUT MODEL [no-asr] | quiet-examples MANIFEST OUTPUT MODEL ID... | quiet-probe MODEL AUDIO OUTPUT | example-probe STUDY OUTPUT | cleanup-probe MANIFEST NATIVE_STUDY LEARNED_STUDY OUTPUT".into()),
     }
 }

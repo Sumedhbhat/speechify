@@ -4,7 +4,8 @@
 The speech engine is a prebuilt native library (CPU, Vulkan and Metal
 backends included), published as a Python wheel. This script fetches the
 wheel for the current platform, checks its SHA-256 and unpacks the
-libraries into src-tauri/resources/native, where the app bundles them.
+libraries into src-tauri/resources/native, where the app bundles them,
+together with the pinned voice-detection model.
 It installs nothing and needs only the Python standard library.
 """
 
@@ -44,6 +45,31 @@ WHEELS = {
 }
 
 
+# Silero VAD 6.2 (MIT), converted for transcribe.cpp: finds speech in a
+# recording, including quiet and whispered speech. About 1 MB.
+DETECTOR = (
+    "silero-vad-v6.2-F32.gguf",
+    "https://huggingface.co/handy-computer/silero-vad-v6.2-gguf/resolve/"
+    "a9b2d61c20ae4ddf3644edb34969e8185a485448/silero-vad-v6.2-F32.gguf",
+    "0d871a800c420fdd5d1b17a3aea4296d1c39608f0ff4a9295eb76457eb1c88e6",
+)
+
+
+def fetch_detector(dest: pathlib.Path) -> bool:
+    name, url, digest = DETECTOR
+    target = dest / name
+    if target.exists() and hashlib.sha256(target.read_bytes()).hexdigest() == digest:
+        return True
+    print("Downloading the voice detector")
+    data = urllib.request.urlopen(url, timeout=120).read()
+    if hashlib.sha256(data).hexdigest() != digest:
+        print("Checksum mismatch: refusing to save the voice detector", file=sys.stderr)
+        return False
+    dest.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return True
+
+
 def main() -> int:
     root = pathlib.Path(__file__).resolve().parents[1]
     dest = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else root / "src-tauri" / "resources" / "native"
@@ -55,7 +81,7 @@ def main() -> int:
     marker = dest / "provenance.json"
     if marker.exists() and json.loads(marker.read_text()).get("sha256") == digest:
         print(f"Speech runtime {VERSION} already in {dest}")
-        return 0
+        return 0 if fetch_detector(dest) else 1
     url = f"{BASE}/{path}"
     print(f"Downloading speech runtime {VERSION} for {key[0]} {key[1]}")
     data = urllib.request.urlopen(url, timeout=120).read()
@@ -77,7 +103,7 @@ def main() -> int:
             target.write_bytes(wheel.read(name))
     marker.write_text(json.dumps({"version": VERSION, "url": url, "sha256": digest}, indent=2) + "\n")
     print(f"Unpacked to {dest}")
-    return 0
+    return 0 if fetch_detector(dest) else 1
 
 
 if __name__ == "__main__":

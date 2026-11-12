@@ -713,3 +713,101 @@ interval; `after-fixes/summary.json` retains the full existing native analysis.
 retain the development and reproduction evidence. Source changes stay within
 core, bench and the two permitted documents. No dependency, dataset audio,
 commit, push, stash, reset, sudo, app launch or GUI was introduced.
+
+## Quiet and whispered speech — 13 November 2026
+
+Speechify should hear the user when they speak softly or whisper in an office,
+and still ignore a recording with no speech in it. This section measures the
+change from a loudness-only trim to a neural voice detector (Silero VAD 6.2,
+bundled with the speech runtime) with gain normalisation.
+
+### What changed
+
+- Quiet recordings are raised to a normal level before anything else looks at
+  them (gain from the 99.5th-percentile sample, at most 50 dB). A recording
+  with no signal at all (below about -80 dBFS) is still treated as a muted
+  microphone.
+- The voice detector decides whether anyone spoke: speech probability 0.35.
+  If it finds nothing but the recording has sustained sound above its own
+  background, it looks again at 0.15, because a lost whisper is worse than a
+  stray noise for this user.
+- The part passed to the recogniser runs from the earliest to the latest point
+  that either the detector or the loudness trim found, so soft first and last
+  words are not cut.
+- Whole recordings are kept for the nightly review instead of the loudness cut.
+
+### Data
+
+965 recordings, 16 kHz mono, 2 to 12 s, built by a reproducible script (seed 7):
+
+| Group | Clips | Source |
+|---|---:|---|
+| Real whispered English | 84 | Hebrish Whispered-Sentences (CC BY 4.0), Expresso and EARS whisper style (CC BY-NC 4.0) |
+| Real whispers made quieter (-50, -55 dBFS) | 40 | as above, attenuated |
+| Indian-English speech made quieter (-30 to -55 dBFS), with mic hiss or real room tone | 300 | Svarah clips from the earlier evaluation |
+| Indian-English speech as recorded | 30 | Svarah |
+| Non-speech: typing, clicks, breathing, coughs, sneezes, snoring, footsteps, knocks, sipping, ticking, appliances, wind, each at 3 levels | 390 | ESC-50 (CC BY-NC 3.0) |
+| Real room tone, white noise, digital silence, a muted microphone | 105 | DEMAND, Hebrish room tone, synthetic |
+| Cafeteria chatter (reported, not scored) | 16 | DEMAND |
+
+Attenuated speech stays voiced; only the real whispers are unvoiced. The real
+whispers come from 24 speakers, mostly studio or phone microphones; none was
+recorded on an office laptop. Licences include non-commercial ones, so the
+audio is used for evaluation only and is not in this repository.
+
+### Method
+
+`cargo run --release -p speechify-bench -- quiet MANIFEST OUT parakeet-tdt-0.6b-v3`
+runs the old loudness trim and the app's own `asr::isolate` on every clip, and
+Parakeet TDT 0.6B v3 on CPU on what each keeps. Word error rate counts a dropped
+recording as every word missed. Recordings are split into a development half and
+a report half by source recording (all levels of one recording on the same
+side). Thresholds were chosen on the development half; every number and chart
+below is from the report half. `bench/quiet_report.py` makes the tables and
+charts.
+
+### Results (report half: 232 speech, 290 non-speech recordings)
+
+| | Loudness trim (before) | Detector + gain (after) |
+|---|---:|---:|
+| Speech kept | 98.7% | **100%** |
+| Word error rate, all speech | 21.4% | **20.3%** |
+| Real whispers kept | 93.3% | **100%** |
+| Word error rate, real whispers | 38.5% | **32.7%** |
+| Word error rate, whispers at -50 / -55 dBFS | 25.4% / 28.1% | 23.7% / 28.3% |
+| Non-speech wrongly passed to the recogniser | 71.0% | **41.7%** |
+| Detector time per recording (median, CPU) | — | 17 ms |
+
+![Speech kept by loudness](evaluation/quiet/speech-kept.png)
+![Word error rate by loudness](evaluation/quiet/word-error-rate.png)
+![Non-speech sounds wrongly kept](evaluation/quiet/non-speech.png)
+![Threshold choice on the development half](evaluation/quiet/threshold.png)
+![What each method kept on real recordings](evaluation/quiet/examples.png)
+
+### Getting there took three attempts
+
+| Report half | Speech kept | Real whispers kept | WER real whispers | WER whispers -55 dBFS | Non-speech kept |
+|---|---:|---:|---:|---:|---:|
+| Loudness trim (before) | 98.7% | 93.3% | 38.5% | 28.1% | 71.0% |
+| 1. Detector cut only | 97.4% | 95.6% | 46.0% | 57.1% | 15.5% |
+| 2. Cut widened to the loudness span | 97.4% | 95.6% | 37.2% | 44.7% | 15.5% |
+| 3. Plus a second look at 0.15 (shipped) | 100% | 100% | 32.7% | 28.3% | 41.7% |
+
+The first attempt rejected far more noise but made whispers worse: the detector
+is least sure at the soft start and end of a whisper and cut words there
+("And why did you summon me…" lost "And why"). Widening the cut fixed real
+whispers. The quietest whispers were still sometimes rejected outright, so the
+second look trades some noise rejection for never losing them.
+
+### Costs and limits
+
+- More non-speech now reaches the recogniser than with the detector alone
+  (41.7% instead of 15.5%), though fewer than before (71%). Coughs, sneezes,
+  snoring and sipping mostly pass; they are human sounds close to speech.
+- Mouse clicks used to be rejected and now pass 40% of the time. In the example
+  above the recogniser turned one into "Yeah.", which would be pasted.
+- Normal-level soft speech (-30 to -45 dBFS) has a word error rate 1 to 1.6
+  points higher than before on the report half, and 0 to 3 points lower on the
+  development half. It is not a consistent cost, but it is not a gain either.
+- These are CPU numbers with Parakeet. Whisper turbo on a graphics card, and a
+  real office laptop microphone, were not measured.

@@ -22,6 +22,8 @@ env:
   SPEECHIFY_REQUIRE_NATIVE: '1'
   TEST_MODEL_URL: https://huggingface.co/handy-computer/whisper-tiny.en-gguf/resolve/9dd46e00ef0577e354e658c07b3ac5580e9cd211/whisper-tiny.en-Q8_0.gguf
   TEST_MODEL_SHA256: e8c9b73c06344307d8b346e07fbe93dd88d894627854bcff31523f1ce44394fa
+  TEST_TOKEN_MODEL_URL: https://huggingface.co/handy-computer/parakeet-tdt_ctc-110m-gguf/resolve/1c3f0d5378fdd358905cc410a93ed9e64f52d170/parakeet-tdt_ctc-110m-Q4_K_M.gguf
+  TEST_TOKEN_MODEL_SHA256: 486414fd90185a8c8a4ced7c123cfb133ff4f7958426c6b8bd9049946b56b448
 
 jobs:
   test:
@@ -58,7 +60,7 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .build/models
-          key: test-model-${{ env.TEST_MODEL_SHA256 }}
+          key: test-models-${{ env.TEST_MODEL_SHA256 }}-${{ env.TEST_TOKEN_MODEL_SHA256 }}
       - name: Fetch the speech runtime and the test model
         run: bash scripts/fetch-test-fixtures.sh "${{ matrix.python }}"
       - name: Frontend
@@ -101,7 +103,7 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .build/models
-          key: test-model-${{ env.TEST_MODEL_SHA256 }}
+          key: test-models-${{ env.TEST_MODEL_SHA256 }}-${{ env.TEST_TOKEN_MODEL_SHA256 }}
       - name: Install coverage tools
         run: |
           cargo install cargo-llvm-cov --version 0.9.1 --locked
