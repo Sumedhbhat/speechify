@@ -49,6 +49,9 @@ pub struct Status {
     version: String,
     platform: &'static str,
     wayland: bool,
+    /// Global shortcuts can be read: false on Wayland, or on a Mac where
+    /// Speechify has not been allowed Accessibility access.
+    shortcuts: bool,
     speech_ready: bool,
     speech_device: String,
     speech_error: String,
@@ -80,7 +83,8 @@ pub fn get_status(shared: App) -> Status {
         } else {
             "linux"
         },
-        wayland: !shared.keyboard_available,
+        wayland: speechify_os::is_wayland(),
+        shortcuts: shared.keyboard_available,
         speech_ready: speech.ready,
         speech_device: speech.device,
         speech_error: speech.error,

@@ -3,7 +3,7 @@
 use speechify_core::app::Engines;
 use speechify_core::asr::{Recognizer, Remote};
 use speechify_core::llm::{Chat, Rewriter};
-use speechify_core::native::Engine;
+use speechify_core::native::{Detector, Engine, DETECTOR_FILE};
 use speechify_core::settings::Settings;
 use speechify_core::{catalog, Result};
 use std::path::PathBuf;
@@ -52,7 +52,13 @@ impl Models {
                 model.name
             ));
         }
-        let engine = Engine::open(&self.runtime_dir, &catalog::path(&self.models_dir, &model), device)?;
+        let mut engine = Engine::open(&self.runtime_dir, &catalog::path(&self.models_dir, &model), device)?;
+        // The voice detector ships with the runtime. Without it, speech is
+        // found by loudness, which can miss very quiet speech.
+        let detector = self.runtime_dir.join(DETECTOR_FILE);
+        if let Ok(found) = Detector::open(&self.runtime_dir, &detector, device) {
+            engine = engine.with_detector(found);
+        }
         let device = engine.device().to_string();
         Ok((Box::new(engine), device))
     }

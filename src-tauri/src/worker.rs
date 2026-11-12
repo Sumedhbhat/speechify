@@ -117,7 +117,9 @@ impl Shared {
 /// Where the bundled speech runtime lives. `SPEECHIFY_NATIVE_DIR` overrides
 /// it when running from source.
 fn runtime_dir(app: &AppHandle) -> PathBuf {
-    if let Some(dir) = std::env::var_os("SPEECHIFY_NATIVE_DIR") {
+    // Only builds from source honour the override; an installed app always
+    // loads the runtime it shipped with.
+    if let Some(dir) = std::env::var_os("SPEECHIFY_NATIVE_DIR").filter(|_| cfg!(debug_assertions)) {
         return PathBuf::from(dir);
     }
     let bundled = app
@@ -204,6 +206,14 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
                     return;
                 }
             };
+            // First start: pick the models this machine runs fast. Listing
+            // devices registers the GPU backends, so it comes before any model.
+            if store.get("settings").is_none() {
+                let devices = speechify_core::native::devices(&state.runtime_dir).unwrap_or_default();
+                if let Ok(Some(plan)) = speechify_core::catalog::first_run(&store, &devices) {
+                    let _ = store.set("first_run_plan", &plan.reason);
+                }
+            }
             let desktop = Desktop::new(app.clone(), state.audio_dir(), state.quitting.clone());
             let models = Models::new(state.runtime_dir.clone(), state.models_dir(), state.speech.clone());
             let mut controller = Controller::new(desktop, models, store);
