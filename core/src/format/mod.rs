@@ -14,6 +14,7 @@ mod spoken;
 mod style;
 mod tidy;
 
+pub(crate) use fillers::remove as remove_fillers;
 pub(crate) use lists::enumerated;
 pub use numbers::group_digits;
 pub use replace::{apply_replacements, Replacement};
@@ -62,6 +63,9 @@ pub struct Formatted {
 /// The full rule-based pass, used when no language model rewrites the text.
 pub fn format(raw: &str, options: &Options) -> Formatted {
     let mut edits = Edits::default();
+    if options.literal {
+        return finish(raw, options, edits);
+    }
     let text = tidy::collapse(raw);
     let text = fillers::remove(&text, &mut edits);
     let text = backtrack::apply(&text, &mut edits);
@@ -74,14 +78,16 @@ pub fn format(raw: &str, options: &Options) -> Formatted {
 /// The passes that run after a language model: the user's own words,
 /// locale and style are enforced no matter what the model wrote.
 pub fn finish(text: &str, options: &Options, mut edits: Edits) -> Formatted {
-    let mut text = numbers::regroup(text, options.numbers);
+    let mut text = text.to_string();
     if !options.literal {
+        text = numbers::regroup(&text, options.numbers);
         text = spelling::apply(&text, options.spelling, &mut edits);
     }
     let (text, fired) = apply_replacements(&text, options.replacements);
     edits.replacements += fired.len() as u32;
-    let mut text = tidy(&text);
+    let mut text = text;
     if !options.literal {
+        text = tidy(&text);
         text = apply_style(&text, options.style);
     }
     Formatted { text, edits, fired }
@@ -132,5 +138,23 @@ mod tests {
         assert_eq!(out.text, "Push the color fix to GitHub.");
         assert_eq!(out.fired, vec![0]);
         assert_eq!(out.edits.total(), 1);
+    }
+
+    #[test]
+    fn literal_commands_keep_case_numbers_spacing_and_identifiers() {
+        let replacements = [Replacement::new("get hub", "GitHub")];
+        let options = Options {
+            style: Style::Formal,
+            spelling: Spelling::Indian,
+            numbers: NumberSystem::Indian,
+            replacements: &replacements,
+            literal: true,
+        };
+        let raw = "git status; printf '1,234'\n  color = get hub";
+        for result in [format(raw, &options), finish(raw, &options, Edits::default())] {
+            assert_eq!(result.text, "git status; printf '1,234'\n  color = GitHub");
+            assert_eq!(result.fired, vec![0]);
+            assert_eq!(result.edits.total(), 1);
+        }
     }
 }

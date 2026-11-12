@@ -246,7 +246,10 @@ fn content_words(text: &str) -> Vec<String> {
 fn unwrap_answer(output: &str) -> String {
     let mut text = THINK.replace_all(output, "").trim().to_string();
     if text.starts_with("```") {
-        text = text.trim_matches('`').trim().to_string();
+        text = match text.strip_prefix("```").unwrap().split_once('\n') {
+            Some((_, body)) => body.trim_end().trim_end_matches("```").trim().to_string(),
+            None => text.trim_matches('`').trim().to_string(),
+        };
     }
     for label in ["RESULT:", "OUTPUT:", "<<<"] {
         if let Some(rest) = text.strip_prefix(label) {
@@ -271,7 +274,8 @@ fn unwrap_answer(output: &str) -> String {
 pub fn vet_cleanup(raw: &str, output: &str) -> Option<String> {
     let text = unwrap_answer(output);
     if text == "EMPTY" {
-        return Some(String::new());
+        let source = crate::format::remove_fillers(&crate::asr::strip_tags(raw), &mut crate::format::Edits::default());
+        return (!source.chars().any(char::is_alphanumeric)).then(String::new);
     }
     if text.is_empty() {
         return None;
@@ -288,7 +292,7 @@ pub fn vet_cleanup(raw: &str, output: &str) -> Option<String> {
         return None;
     }
     let kept = written.iter().filter(|word| heard.contains(word)).count();
-    if written.len() >= 4 && (kept as f64) < written.len() as f64 * 0.5 {
+    if (kept as f64) < written.len() as f64 * 0.5 {
         return None;
     }
     Some(text)
@@ -505,11 +509,11 @@ mod tests {
             Some("I think we should go.")
         );
         assert_eq!(
-            vet_cleanup("x", "<think>hmm</think>\n\"Fine by me.\"").as_deref(),
+            vet_cleanup("fine by me", "<think>hmm</think>\n\"Fine by me.\"").as_deref(),
             Some("Fine by me.")
         );
-        assert_eq!(vet_cleanup("x", "RESULT: “Fine.”").as_deref(), Some("Fine."));
-        assert_eq!(vet_cleanup("x", "<<<\nFine.\n>>>").as_deref(), Some("Fine."));
+        assert_eq!(vet_cleanup("fine", "RESULT: “Fine.”").as_deref(), Some("Fine."));
+        assert_eq!(vet_cleanup("fine", "<<<\nFine.\n>>>").as_deref(), Some("Fine."));
         assert_eq!(
             vet_cleanup("he said \"no\" and then \"yes\"", "He said \"no\" and then \"yes\"").as_deref(),
             Some("He said \"no\" and then \"yes\"")
@@ -593,5 +597,42 @@ mod tests {
         assert_eq!(scripted.rewrite("s2", "u2").unwrap_err(), "down");
         assert_eq!(scripted.seen.borrow().len(), 2);
         assert_eq!(scripted.model(), "scripted");
+    }
+
+    #[test]
+    fn empty_sentinel_requires_a_source_without_meaningful_content() {
+        for raw in ["send the final report to Priya tomorrow", "I", "123", "Meet (tomorrow)"] {
+            assert_eq!(vet_cleanup(raw, "EMPTY"), None, "{raw}");
+        }
+        for raw in ["", "uh um", "[BLANK_AUDIO]", "uh, um..."] {
+            assert_eq!(vet_cleanup(raw, "EMPTY").as_deref(), Some(""), "{raw}");
+        }
+    }
+
+    #[test]
+    fn short_cleanup_answers_must_be_grounded() {
+        assert_eq!(
+            vet_cleanup("what is the capital of france please tell me", "Paris."),
+            None
+        );
+        assert_eq!(vet_cleanup("Please bring files tomorrow", "Sushi awaits."), None);
+        assert_eq!(
+            vet_cleanup("um bring files tomorrow", "Bring files tomorrow.").as_deref(),
+            Some("Bring files tomorrow.")
+        );
+    }
+
+    #[test]
+    fn command_code_fences_drop_the_language_tag() {
+        assert_eq!(
+            vet_command("```python\nprint('hello')\n``` ").as_deref(),
+            Some("print('hello')")
+        );
+        assert_eq!(
+            vet_command("```rust\nfn main() {}\n```").as_deref(),
+            Some("fn main() {}")
+        );
+        assert_eq!(vet_command("```hello```").as_deref(), Some("hello"));
+        assert_eq!(vet_command("print('hello')").as_deref(), Some("print('hello')"));
     }
 }

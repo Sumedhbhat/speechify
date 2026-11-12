@@ -53,6 +53,7 @@ const APPS: &[(Category, &[&str])] = &[
         &[
             "visual studio",
             "vs code",
+            "com.microsoft.vscode",
             "code.exe",
             "cursor",
             "windsurf",
@@ -370,5 +371,12 @@ mod tests {
         assert_eq!(restore_delay_ms(&target("Outlook", "", ""), Os::Windows), 3000);
         assert_eq!(restore_delay_ms(&target("Notes", "", ""), Os::Mac), 1500);
         assert_eq!(restore_delay_ms(&target("Notepad", "", ""), Os::Windows), 700);
+    }
+
+    #[test]
+    fn vscode_bundle_id_selects_literal_code_formatting() {
+        let category = categorize(&target("Code", "com.microsoft.VSCode", "main.rs"), &[]);
+        assert_eq!(category, Category::Code);
+        assert!(category.literal());
     }
 }
