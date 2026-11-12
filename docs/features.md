@@ -11,11 +11,12 @@ The model's answer is checked before it is used. It is thrown away, and the rule
 
 - the request fails or takes longer than the timeout (6 seconds by default);
 - the answer starts like a chat reply ("Sure", "Here is", "I'm sorry") and you did not;
-- the answer is much longer than what you said, or fewer than half of its words were spoken.
+- the answer is much longer than what you said, or fewer than half of its words were spoken;
+- the model returns `EMPTY` even though the source contains meaningful content.
 
-The last two checks catch a model that answers your dictation instead of cleaning it. For example, the test feeds in "what is the capital of france please tell me", the model answers with a paragraph about Paris, and the pasted text is "What is the capital of france please tell me."
+These checks catch a model that answers your dictation or drops its content instead of cleaning it. For example, the test feeds in "what is the capital of france please tell me", the model answers with a paragraph about Paris, and the pasted text is "What is the capital of france please tell me."
 
-Whatever the model returns still goes through the same final rule passes (number grouping, spelling, your dictionary and snippets, punctuation, tone). Your locale and your own words are enforced no matter what the model wrote.
+Whatever the model returns still goes through the final rule passes (number grouping, spelling, your dictionary and snippets, punctuation, tone). Code and terminal targets apply only your dictionary and snippets, preserving literal text.
 
 The cleanup level in Settings has three values: None (paste what was recognised, apart from your dictionary and snippets), Light (the default) and Medium (the model may also tighten wording).
 
@@ -140,7 +141,7 @@ The four styles:
 
 Casual drops the last full stop of a short message. Very casual lowercases the start of sentences but keeps names, acronyms and "I" ("NASA called. GitHub is down." keeps NASA and GitHub). Excited ends on an exclamation mark. Questions, ellipses and list lines are not changed.
 
-Code and Terminal are "literal": no respelling, no restyling, and no trailing space after the paste. The dictionary still applies. "Push the color fix to get hub." with a dictionary entry for "get hub" becomes "Push the color fix to GitHub."
+Code and Terminal are "literal": the rule-based formatter preserves case, numbers, spacing and identifiers, and the paste has no trailing space. Only dictionary and snippet replacements apply. "Push the color fix to get hub." with a dictionary entry for "get hub" becomes "Push the color fix to GitHub." `git status` and `printf '1,234'` keep their original case and numbers.
 
 In a Linux terminal the paste uses Ctrl+Shift+V. In a code editor on Windows it uses Shift+Insert. Elsewhere it uses Ctrl+V, or Cmd+V on a Mac. Remote-desktop apps get a longer wait before your clipboard is restored.
 
@@ -207,7 +208,7 @@ Automatic worked examples must have plausible length and word overlap with both 
 
 A review stops as soon as you start dictating. Days with nothing to review do not load the large models. Press "Review now" on the Learning page to run it by hand.
 
-Nothing is fine-tuned on your machine. "Export training data" writes `training.jsonl` to the app data folder, one line per reviewed dictation with the audio file name, what each model heard, what was typed, the ideal text, and whether you corrected it. You can use that to fine-tune models elsewhere. It needs the recordings, so keep audio on if you want it.
+Nothing is fine-tuned on your machine. "Export training data" writes `training.jsonl` to the app data folder, one line per reviewed dictation with the audio file name, what each model heard, what was typed, the ideal text, and whether you corrected it. Each row includes a `command` flag; command rows retain recognition data and have `ideal: null` because their generated output is not a cleanup target. You can use that to fine-tune models elsewhere. It needs the recordings, so keep audio on if you want it.
 
 Turn off "Learn from my corrections" in Settings to stop dictionary entries being added automatically.
 
