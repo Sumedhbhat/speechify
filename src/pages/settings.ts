@@ -54,7 +54,9 @@ export function createSettingsPage({ api, settings: store }: Deps): Page {
             ? "Write keys joined by +, like Ctrl+Meta+Space or Alt+Shift+D."
             : status.wayland
               ? "Global shortcuts are not available on Wayland. Bind “speechify --toggle” to a system shortcut instead."
-              : "Speechify cannot see your keyboard yet. Allow it under System Settings › Privacy & Security › Accessibility, then restart it.",
+              : status.platform === "macos"
+                ? "Speechify cannot see your keyboard yet. Allow it under System Settings › Privacy & Security › Accessibility, then restart it."
+                : "Speechify cannot read the keyboard on this system. Bind “speechify --toggle” to a system shortcut instead.",
           HOTKEYS.map(([key, label, hint]) =>
             text(store, settings, {
               label,
