@@ -54,6 +54,17 @@ describe("settings page", () => {
     expect(document.body.textContent).not.toContain("Wayland");
   });
 
+  it("offers the command-line toggle when the keyboard cannot be read on Linux outside Wayland", async () => {
+    ctx.api.getStatus.mockResolvedValue(
+      status({ platform: "linux", wayland: false, shortcuts: false }),
+    );
+    await setup();
+    expect(document.body.textContent).toContain(
+      "Speechify cannot read the keyboard on this system",
+    );
+    expect(document.body.textContent).not.toContain("Accessibility");
+  });
+
   it("saves the rest of the controls", async () => {
     await setup();
     const mic = byLabel<HTMLSelectElement>(document, "Microphone");

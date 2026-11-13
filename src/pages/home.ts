@@ -61,9 +61,15 @@ function checklist(
           h("code", { textContent: "speechify --toggle" }),
           " to a shortcut in your system settings.",
         ])
-      : step(false, "Let Speechify see your shortcut", [
-          "Allow Speechify under System Settings › Privacy & Security › Accessibility, then restart it. Until then, click the small bar at the bottom of the screen to dictate.",
-        ]);
+      : status.platform === "macos"
+        ? step(false, "Let Speechify see your shortcut", [
+            "Allow Speechify under System Settings › Privacy & Security › Accessibility, then restart it. Until then, click the small bar at the bottom of the screen to dictate.",
+          ])
+        : step(false, "Start dictating from the bar", [
+            "Speechify cannot read the keyboard on this system. Click the small bar at the bottom of the screen, or bind ",
+            h("code", { textContent: "speechify --toggle" }),
+            " to a shortcut in your system settings.",
+          ]);
   const items = [
     status.speech_ready
       ? step(true, "Speech model ready", ["Everything you say is recognised on this computer."])
@@ -116,7 +122,9 @@ export function createHomePage(deps: Deps): Page {
             textContent:
               insights.today_words > 0
                 ? `You have dictated ${plural(insights.today_words, "word")} today.`
-                : "Hold your shortcut anywhere and start talking.",
+                : status.shortcuts
+                  ? "Hold your shortcut anywhere and start talking."
+                  : "Click the small bar at the bottom of the screen and start talking.",
           }),
         ]),
         stats(insights),

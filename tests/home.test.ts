@@ -74,7 +74,7 @@ describe("home header", () => {
     );
     await setup([]);
     expect(document.querySelector(".lede")!.textContent).toBe(
-      "Hold your shortcut anywhere and start talking.",
+      "Click the small bar at the bottom of the screen and start talking.",
     );
     expect(document.querySelector(".stats")!.textContent).toContain("1day");
     expect(document.querySelector(".checklist h2")!.textContent).toBe("Getting started");
@@ -93,6 +93,25 @@ describe("home header", () => {
     expect(checklist).toContain("Let Speechify see your shortcut");
     expect(checklist).toContain("Privacy & Security › Accessibility");
     expect(checklist).not.toContain("Wayland");
+  });
+
+  it("points to the bar when the keyboard cannot be read on Linux outside Wayland", async () => {
+    ctx.api.getStatus.mockResolvedValue(
+      status({ platform: "linux", wayland: false, shortcuts: false }),
+    );
+    await setup([]);
+    const checklist = document.querySelector(".checklist")!.textContent!;
+    expect(checklist).toContain("Speechify cannot read the keyboard on this system");
+    expect(checklist).toContain("speechify --toggle");
+    expect(checklist).not.toContain("Accessibility");
+  });
+
+  it("tells a new user with working shortcuts to hold them", async () => {
+    ctx.api.getInsights.mockResolvedValue(insights({ today_words: 0 }));
+    await setup([]);
+    expect(document.querySelector(".lede")!.textContent).toBe(
+      "Hold your shortcut anywhere and start talking.",
+    );
   });
 });
 
