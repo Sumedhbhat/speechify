@@ -164,39 +164,91 @@ pub fn sounds_alike(from: &str, to: &str) -> bool {
     !a.is_empty() && distance(&a, &b) * 5 <= a.len().max(b.len()) * 2
 }
 
-/// How sure the recogniser was of `phrase`: the lowest confidence among its
-/// words, or `None` when the recogniser did not say or the words are not found.
+/// How sure the recogniser was of `phrase`. Each word counts at its most
+/// confident occurrence, so an unsure "sumit" elsewhere in the dictation
+/// cannot make a confident one look unsure. `None` when the recogniser did
+/// not say, or a word of the phrase is missing.
 pub fn certainty(phrase: &str, heard: &[Heard]) -> Option<f32> {
-    let wanted: Vec<String> = words(phrase).into_iter().map(normalize).collect();
-    let found: Vec<f32> = heard
-        .iter()
-        .filter(|h| wanted.contains(&normalize(&h.word)))
-        .map(|h| h.p)
-        .collect();
-    (found.len() >= wanted.len() && !wanted.is_empty()).then(|| found.iter().copied().fold(1.0, f32::min))
+    let each = words(phrase).into_iter().map(normalize).map(|wanted| {
+        heard
+            .iter()
+            .filter(|h| normalize(&h.word) == wanted)
+            .map(|h| h.p)
+            .reduce(f32::max)
+    });
+    each.collect::<Option<Vec<f32>>>()?.into_iter().reduce(f32::min)
+}
+
+/// Words that state a fact. Changing one changes what is true, so it is
+/// never a spelling fix, however alike the two sound ("Tuesday", "Thursday").
+const FACTS: &str = " monday tuesday wednesday thursday friday saturday sunday today tomorrow yesterday tonight january february march april may june july august september october november december morning evening afternoon night am pm yes no not never always before after above below more less ";
+
+fn states_a_fact(phrase: &str) -> bool {
+    words(phrase)
+        .into_iter()
+        .map(normalize)
+        .any(|word| FACTS.contains(&format!(" {word} ")) || crate::format::is_number_word(&word))
+}
+
+/// Plain letters only: the sound comparison can judge it.
+fn comparable(phrase: &str) -> bool {
+    phrase
+        .chars()
+        .all(|c| c.is_ascii_alphabetic() || c == ' ' || c == '\'' || c == '-')
+}
+
+/// Whether `to` reads as a name or term rather than an ordinary word:
+/// mixed case ("GitHub"), a capitalised word after the first ("Sumedh Bhat"),
+/// or a capital on a word that `written` has somewhere other than the start
+/// of a sentence ("sumit" or "Kerr" to "Kher", but not "Increase" to
+/// "Decrease" when it opens the sentence).
+fn name_like(from: &str, to: &str, written: &str) -> bool {
+    let capital = |word: &str| word.chars().next().is_some_and(char::is_uppercase);
+    let parts = words(to);
+    let mixed = parts.iter().any(|word| word.chars().skip(1).any(char::is_uppercase));
+    let later = parts.iter().skip(1).any(|word| capital(word));
+    let first = from.split_whitespace().next().unwrap_or_default();
+    let said = words(written);
+    let mid_sentence = (1..said.len()).any(|i| normalize(said[i]) == first && !said[i - 1].ends_with(['.', '!', '?']));
+    mixed || later || (parts.first().is_some_and(|word| capital(word)) && mid_sentence)
 }
 
 /// How much a correction proves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Evidence {
-    /// It sounds like what was heard, and the recogniser was unsure: learn it now.
+    /// A name or term that sounds like what was heard, and the recogniser
+    /// was unsure of it: learn it now.
     Strong,
-    /// It sounds alike, but the recogniser was confident or did not say:
-    /// learn it only if the same correction comes up again.
-    Weak,
-    /// It changes the meaning: never learn it.
+    /// A name or term that sounds alike, but the recogniser was sure or did
+    /// not say: learn it once the same correction comes up again.
+    Repeat,
+    /// Possibly a recognition fix, but between ordinary words, or in a form
+    /// the sound comparison cannot judge (another script, symbols such as
+    /// "C++"): offer it as a suggestion the user accepts in the Dictionary.
+    Ask,
+    /// A change of meaning or of a fact: never learn it.
     None,
 }
 
-/// Judges a correction of words the recogniser heard (`heard` is its
-/// per-word confidence for that dictation, possibly empty).
-pub fn evidence(correction: &Replacement, heard: &[Heard]) -> Evidence {
-    if !sounds_alike(&correction.from, &correction.to) {
+/// Judges a correction of `written` (the text the user corrected), using the
+/// recogniser's per-word confidence `heard` for that dictation (maybe empty).
+pub fn evidence(correction: &Replacement, written: &str, heard: &[Heard]) -> Evidence {
+    let (from, to) = (&correction.from, &correction.to);
+    if states_a_fact(from) || states_a_fact(to) {
         return Evidence::None;
     }
-    match certainty(&correction.from, heard) {
+    if !comparable(from) || !comparable(to) {
+        return Evidence::Ask;
+    }
+    if !sounds_alike(from, to) {
+        return Evidence::None;
+    }
+    if !name_like(from, to, written) {
+        return Evidence::Ask;
+    }
+    match certainty(from, heard) {
         Some(p) if p < UNSURE => Evidence::Strong,
-        _ => Evidence::Weak,
+        _ => Evidence::Repeat,
     }
 }
 
@@ -266,24 +318,65 @@ mod tests {
     }
 
     #[test]
-    fn certainty_is_the_least_sure_word_of_the_phrase() {
+    fn certainty_takes_each_word_at_its_surest_and_needs_every_word() {
         let said = heard(&[("cube", 0.4), ("control,", 0.9), ("tonight", 0.99)]);
         assert_eq!(certainty("cube control", &said), Some(0.4));
         assert_eq!(certainty("Tonight.", &said), Some(0.99));
         assert_eq!(certainty("kubectl", &said), None);
         assert_eq!(certainty("cube control", &[]), None);
         assert_eq!(certainty("", &said), None);
+        // An unsure "sumit" elsewhere does not make the confident one unsure,
+        // and two "sumit"s do not stand in for a missing "bat".
+        let twice = heard(&[("Sumit", 0.2), ("Sumit", 0.9)]);
+        assert_eq!(certainty("sumit", &twice), Some(0.9));
+        assert_eq!(certainty("sumit bat", &twice), None);
     }
 
     #[test]
-    fn evidence_combines_sound_and_certainty() {
-        let unsure = heard(&[("sumit", 0.45), ("bat", 0.7), ("open", 0.2)]);
+    fn names_are_learned_ordinary_words_are_only_suggested_and_facts_never() {
+        let unsure = heard(&[
+            ("sumit", 0.45),
+            ("bat", 0.7),
+            ("increase", 0.2),
+            ("include", 0.2),
+            ("tuesday", 0.2),
+            ("github", 0.3),
+        ]);
         let sure = heard(&[("sumit", 0.95), ("bat", 0.97)]);
-        let name = Replacement::new("sumit bat", "Sumedh Bhat");
-        assert_eq!(evidence(&name, &unsure), Evidence::Strong);
-        assert_eq!(evidence(&name, &sure), Evidence::Weak);
-        assert_eq!(evidence(&name, &[]), Evidence::Weak);
-        assert_eq!(evidence(&Replacement::new("open", "close"), &unsure), Evidence::None);
+        let said = "ask sumit bat to increase and include it on tuesday in github";
+        let judge = |from: &str, to: &str, heard: &[Heard]| evidence(&Replacement::new(from, to), said, heard);
+        assert_eq!(judge("sumit bat", "Sumedh Bhat", &unsure), Evidence::Strong);
+        assert_eq!(judge("sumit bat", "Sumedh Bhat", &sure), Evidence::Repeat);
+        assert_eq!(judge("sumit bat", "Sumedh Bhat", &[]), Evidence::Repeat);
+        assert_eq!(judge("sumit", "Sumedh", &unsure), Evidence::Strong);
+        assert_eq!(judge("github", "GitHub", &unsure), Evidence::Strong);
+        // Ordinary words that sound alike: possibly a mishearing, possibly a
+        // change of mind. Only the user can say, so they are only suggested.
+        assert_eq!(judge("increase", "decrease", &unsure), Evidence::Ask);
+        assert_eq!(judge("include", "exclude", &unsure), Evidence::Ask);
+        assert_eq!(judge("cube control", "kubectl", &unsure), Evidence::Ask);
+        // A capital at the start of a sentence does not make a word a name.
+        let opening = evidence(
+            &Replacement::new("increase", "Decrease"),
+            "Increase the volume",
+            &unsure,
+        );
+        assert_eq!(opening, Evidence::Ask);
+        let after_stop = evidence(&Replacement::new("increase", "Decrease"), "Done. Increase it", &unsure);
+        assert_eq!(after_stop, Evidence::Ask);
+        // A name the recogniser already capitalised, mid-sentence, is still a name.
+        assert_eq!(
+            evidence(&Replacement::new("kerr", "Kher"), "Please ask Kerr now", &[]),
+            Evidence::Repeat
+        );
+        // Other scripts and symbols cannot be compared by sound: suggested, not dropped.
+        assert_eq!(judge("सुमित", "सुमेध", &unsure), Evidence::Ask);
+        assert_eq!(judge("see plus plus", "C++", &unsure), Evidence::Ask);
+        // Facts and meaning changes are never learned.
+        assert_eq!(judge("tuesday", "Thursday", &unsure), Evidence::None);
+        assert_eq!(judge("ten", "eleven", &unsure), Evidence::None);
+        assert_eq!(judge("open", "close", &unsure), Evidence::None);
+        assert_eq!(judge("sumit", "Rahul", &unsure), Evidence::None);
     }
 
     #[test]
