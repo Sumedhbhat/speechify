@@ -29,8 +29,10 @@ function bind<T>(
     const message = await store.update((next) => binding.set(next, value));
     error.textContent = message;
     error.hidden = !message;
-    if (message) write(saved);
-    else saved = value;
+    // Show what the shell accepted, which can differ from what was typed
+    // (a clamped number), or the last accepted value after a rejection.
+    if (!message) saved = binding.get(await store.load());
+    write(saved);
   };
 }
 

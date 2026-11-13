@@ -34,7 +34,12 @@ export function createBar(root: HTMLElement, deps: BarDeps): { show(bar: Bar): v
   let generation = 0;
 
   const act = (action: BarAction) => void deps.api.barAction(action).catch(() => undefined);
-  const later = (ms: number, then: () => void) => (timer = setTimeout(then, ms));
+  // One pending timer at a time: a second Copy must not leave an older
+  // dismissal running that would close whatever the bar shows next.
+  const later = (ms: number, then: () => void) => {
+    clearTimeout(timer);
+    timer = setTimeout(then, ms);
+  };
   const idle = () => show({ state: "idle" });
 
   function wave(): HTMLElement {

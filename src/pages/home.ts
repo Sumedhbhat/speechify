@@ -122,9 +122,11 @@ export function createHomePage(deps: Deps): Page {
             textContent:
               insights.today_words > 0
                 ? `You have dictated ${plural(insights.today_words, "word")} today.`
-                : status.shortcuts
-                  ? "Hold your shortcut anywhere and start talking."
-                  : "Click the small bar at the bottom of the screen and start talking.",
+                : !status.speech_ready
+                  ? "Download a speech model below, then start talking."
+                  : status.shortcuts
+                    ? "Hold your shortcut anywhere and start talking."
+                    : "Click the small bar at the bottom of the screen and start talking.",
           }),
         ]),
         stats(insights),

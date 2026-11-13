@@ -74,7 +74,7 @@ describe("home header", () => {
     );
     await setup([]);
     expect(document.querySelector(".lede")!.textContent).toBe(
-      "Click the small bar at the bottom of the screen and start talking.",
+      "Download a speech model below, then start talking.",
     );
     expect(document.querySelector(".stats")!.textContent).toContain("1day");
     expect(document.querySelector(".checklist h2")!.textContent).toBe("Getting started");
@@ -104,6 +104,15 @@ describe("home header", () => {
     expect(checklist).toContain("Speechify cannot read the keyboard on this system");
     expect(checklist).toContain("speechify --toggle");
     expect(checklist).not.toContain("Accessibility");
+  });
+
+  it("points a new user without shortcuts to the bar", async () => {
+    ctx.api.getInsights.mockResolvedValue(insights({ today_words: 0 }));
+    ctx.api.getStatus.mockResolvedValue(status({ wayland: true, shortcuts: false }));
+    await setup([]);
+    expect(document.querySelector(".lede")!.textContent).toBe(
+      "Click the small bar at the bottom of the screen and start talking.",
+    );
   });
 
   it("tells a new user with working shortcuts to hold them", async () => {
@@ -309,6 +318,110 @@ describe("history", () => {
     await settle();
     expect(ctx.api.history).toHaveBeenLastCalledWith("milk", 50, 0);
     expect(document.querySelector(".empty")!.textContent).toContain("“milk”");
+  });
+
+  it("keeps a half-typed correction when the row redraws", async () => {
+    await setup();
+    action(entries()[0]!, "edit").click();
+    const area = document.querySelector<HTMLTextAreaElement>(".entry-edit")!;
+    type(area, "First, half fixed");
+    action(entries()[0]!, "details").click();
+    expect(document.querySelector<HTMLTextAreaElement>(".entry-edit")!.value).toBe(
+      "First, half fixed",
+    );
+    // Starting another edit closes the first and starts from the second's text.
+    action(entries()[1]!, "edit").click();
+    expect(document.querySelectorAll(".entry-edit")).toHaveLength(1);
+    expect(entries()[0]!.querySelector(".entry-text")!.textContent).toBe("First.");
+  });
+
+  it("lets a late save finish without closing the edit opened since", async () => {
+    await setup();
+    let finish: (learned: never[]) => void = () => {};
+    ctx.api.editDictation.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+    action(entries()[0]!, "edit").click();
+    type(document.querySelector<HTMLTextAreaElement>(".entry-edit")!, "First, fixed.");
+    byText<HTMLButtonElement>(document, "button", "Save").click();
+    byText<HTMLButtonElement>(document, "button", "Cancel").click();
+    action(entries()[1]!, "edit").click();
+    finish([]);
+    await settle();
+    // The second edit stays open; the first row shows the saved text.
+    expect(entries()[1]!.querySelector(".entry-edit")).not.toBeNull();
+    expect(entries()[0]!.querySelector(".entry-text")!.textContent).toBe("First, fixed.");
+  });
+
+  it("leaves a reopened editor alone when an earlier save finishes", async () => {
+    await setup();
+    let finish: (learned: never[]) => void = () => {};
+    ctx.api.editDictation.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+    action(entries()[0]!, "edit").click();
+    byText<HTMLButtonElement>(document, "button", "Save").click();
+    byText<HTMLButtonElement>(document, "button", "Cancel").click();
+    action(entries()[0]!, "edit").click();
+    type(document.querySelector<HTMLTextAreaElement>(".entry-edit")!, "Typing again");
+    finish([]);
+    await settle();
+    expect(document.querySelector<HTMLTextAreaElement>(".entry-edit")!.value).toBe("Typing again");
+  });
+
+  it("ends an edit when a search no longer lists its dictation", async () => {
+    vi.useFakeTimers();
+    await setup();
+    action(entries()[0]!, "edit").click();
+    ctx.api.history.mockResolvedValueOnce([dictation({ id: 9, text: "Something else." })]);
+    type(byLabel<HTMLInputElement>(document, "Search history"), "else");
+    vi.advanceTimersByTime(250);
+    await settle();
+    expect(document.querySelector(".entry-edit")).toBeNull();
+    // With no edit open, a change in history refreshes straight away.
+    ctx.api.history.mockResolvedValueOnce([dictation({ id: 10, text: "Fresh." })]);
+    ctx.emit("historyChanged");
+    await settle();
+    expect(entries()[0]!.querySelector(".entry-text")!.textContent).toBe("Fresh.");
+  });
+
+  it("says when a search or the next page fails, keeping what is shown", async () => {
+    vi.useFakeTimers();
+    await setup(Array.from({ length: 50 }, (_, i) => dictation({ id: 100 + i })));
+    ctx.api.history.mockRejectedValueOnce("The database is locked.");
+    document.querySelector<HTMLButtonElement>(".more")!.click();
+    await settle();
+    expect(toasts()).toContain("The database is locked.");
+    expect(entries()).toHaveLength(50);
+    ctx.api.history.mockRejectedValueOnce("Still locked.");
+    type(byLabel<HTMLInputElement>(document, "Search history"), "milk");
+    vi.advanceTimersByTime(250);
+    await settle();
+    expect(toasts()).toContain("Still locked.");
+    expect(entries()).toHaveLength(50);
+  });
+
+  it("flags once per click, setting the value that was asked for", async () => {
+    await setup();
+    let finish: () => void = () => {};
+    ctx.api.flagDictation.mockReturnValueOnce(new Promise<void>((resolve) => (finish = resolve)));
+    action(entries()[0]!, "flag").click();
+    action(entries()[0]!, "flag").click();
+    finish();
+    await settle();
+    expect(ctx.api.flagDictation).toHaveBeenCalledOnce();
+    expect(action(entries()[0]!, "flag").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("does not redraw a flagged row that a refresh has removed", async () => {
+    await setup();
+    let finish: () => void = () => {};
+    ctx.api.flagDictation.mockReturnValueOnce(new Promise<void>((resolve) => (finish = resolve)));
+    action(entries()[0]!, "flag").click();
+    ctx.api.history.mockResolvedValueOnce([dictation({ id: 9, text: "Only this." })]);
+    ctx.emit("historyChanged");
+    await settle();
+    finish();
+    await settle();
+    expect(entries().map((e) => e.querySelector(".entry-text")!.textContent)).toEqual([
+      "Only this.",
+    ]);
   });
 
   it("ignores results of an older search", async () => {

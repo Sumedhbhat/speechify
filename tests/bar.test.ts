@@ -153,6 +153,18 @@ describe("bar", () => {
     expect(root.querySelector(".card")).toBeNull();
   });
 
+  it("keeps a new dictation on screen after two quick copies", async () => {
+    setup();
+    emit("bar", { state: "card", text: "Hello there", message: "" });
+    root.querySelector<HTMLButtonElement>(".card-copy")!.click();
+    root.querySelector<HTMLButtonElement>(".card-copy")!.click();
+    await settle();
+    emit("bar", { state: "listening", command: false, locked: false });
+    vi.advanceTimersByTime(60_000);
+    expect(api.barAction).not.toHaveBeenCalledWith("dismiss");
+    expect(pill().className).toContain("listening");
+  });
+
   it("closes the card with the X and shows copy errors", async () => {
     setup();
     emit("bar", { state: "card", text: "Hi", message: "" });

@@ -46,6 +46,28 @@ describe("settings store", () => {
     expect((await store.load()).hotkeys.cancel).toBe("Escape");
   });
 
+  it("reports a save as done even if a page fails to follow along", async () => {
+    const api = fakeApi();
+    const onError = vi.fn();
+    const store = createSettingsStore(api, vi.fn(), onError);
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    store.subscribe(() => {
+      throw new Error("A page broke.");
+    });
+    expect(await store.update((s) => (s.sounds = false))).toBe("");
+    expect(onError).not.toHaveBeenCalled();
+    expect((await store.load()).sounds).toBe(false);
+    expect(quiet).toHaveBeenCalled();
+    quiet.mockRestore();
+  });
+
+  it("settles after the saves already started", async () => {
+    const api = fakeApi();
+    const store = createSettingsStore(api, vi.fn(), vi.fn());
+    void store.update((s) => (s.rewrite.model = "qwen3:4b"));
+    expect((await store.settled()).rewrite.model).toBe("qwen3:4b");
+  });
+
   it("runs quick successive changes in order", async () => {
     const api = fakeApi();
     const store = createSettingsStore(api, vi.fn(), vi.fn());

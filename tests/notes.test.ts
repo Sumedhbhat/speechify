@@ -63,8 +63,38 @@ describe("notes page", () => {
     type(body(), "x");
     vi.advanceTimersByTime(600);
     await settle();
-    expect(document.querySelector(".note-state")!.textContent).toBe("Not saved");
+    expect(document.querySelector(".note-state")!.textContent).toBe(
+      "Not saved yet: kept here and tried again",
+    );
     expect(toasts()).toContain("Disk is full.");
+  });
+
+  it("keeps the open note's status when another note's retry fails", async () => {
+    await setup();
+    ctx.api.saveNote.mockRejectedValueOnce("Disk is full.");
+    type(body(), "milk, eggs, bread");
+    vi.advanceTimersByTime(600);
+    await settle();
+    links()[1]!.click();
+    ctx.api.saveNote.mockRejectedValueOnce("Still full.");
+    await page.show();
+    await settle();
+    expect(toasts()).toContain("Still full.");
+    expect(document.querySelector(".note-state")!.textContent).not.toContain("Not saved");
+  });
+
+  it("keeps an edit that failed to save and saves it on the next visit", async () => {
+    await setup();
+    ctx.api.saveNote.mockRejectedValueOnce("Disk is full.");
+    type(body(), "milk, eggs, bread");
+    vi.advanceTimersByTime(600);
+    await settle();
+    // Coming back reloads the stored notes, which still have the old text.
+    await page.show();
+    await settle();
+    expect(body().value).toBe("milk, eggs, bread");
+    expect(ctx.api.saveNote).toHaveBeenLastCalledWith(1, "Groceries", "milk, eggs, bread");
+    expect(document.querySelector(".note-state")!.textContent).toBe("Saved");
   });
 
   it("creates and deletes notes", async () => {

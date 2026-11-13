@@ -13,7 +13,7 @@ async function setup(data = insights()) {
 }
 
 describe("insights page", () => {
-  it("shows totals, activity, shares, histograms, speed and accuracy", async () => {
+  it("shows totals, activity, shares, histograms, speed and teacher agreement", async () => {
     await setup();
     const stats = document.querySelector(".stats.wide")!.textContent;
     expect(stats).toContain((12_345).toLocaleString());
@@ -30,10 +30,13 @@ describe("insights page", () => {
     expect(document.body.textContent).toContain("42%");
     expect(document.querySelector(".figure")!.textContent).toBe("93%");
     expect(document.body.textContent).toContain("from 12 reviewed dictations");
+    expect(document.body.textContent).toContain("not a true accuracy score");
+    expect(document.body.textContent).not.toContain("of words right");
   });
 
-  it("explains a missing accuracy score and links to Learning", async () => {
-    const ctx = await setup(insights({ accuracy: null }));
+  it("explains that nothing is reviewed yet and links to Learning", async () => {
+    const ctx = await setup(insights({ teacher_agreement: null }));
+    expect(document.body.textContent).toContain("Nothing reviewed yet");
     byText<HTMLButtonElement>(document, "button", "Open Learning").click();
     expect(ctx.navigate).toHaveBeenCalledWith("learning");
   });
