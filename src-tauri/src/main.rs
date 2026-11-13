@@ -1,97 +1,133 @@
-#![cfg_attr(
-    all(not(debug_assertions), target_os = "windows"),
-    windows_subsystem = "windows"
-)]
-mod audio;
-#[cfg(test)]
-#[path = "../tests/unit/behavior.rs"]
-mod behavior_tests;
-mod child_owner;
-mod config;
-#[cfg(feature = "desktop")]
+//! Speechify's desktop shell: windows, tray and threads around the core.
+#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+
+mod commands;
 mod desktop;
-#[cfg(target_os = "linux")]
-mod evdev;
-mod ffi;
-mod installer;
-mod keys;
-mod learning;
-#[cfg(all(feature = "desktop", target_os = "macos"))]
-mod mac_clipboard;
 mod models;
-mod native;
-#[cfg(feature = "desktop")]
-mod platform;
-#[cfg(feature = "desktop")]
-mod replacement;
-mod service;
-mod store;
+mod shell;
 mod worker;
-#[cfg(all(feature = "desktop", target_os = "linux"))]
-mod xclipboard;
+
+use speechify_core::session::Event;
+use std::sync::Arc;
+use tauri::{Manager, RunEvent, WindowEvent};
+
+/// The release build stamps its full version (including nightly numbers).
+pub const VERSION: &str = match option_env!("SPEECHIFY_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 fn main() {
-    if let Err(e) = run() {
-        eprintln!("{e}");
-        std::process::exit(1);
+    if std::env::args().any(|arg| arg == "--version") {
+        println!("speechify {VERSION}");
+        return;
     }
-}
-fn run() -> config::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    #[cfg(all(feature = "desktop", target_os = "linux"))]
-    if args.get(1).is_some_and(|s| s == "--clipboard-worker") {
-        return xclipboard::worker();
+    // A short-lived child run by the first start to list compute devices.
+    // Registering GPU backends runs driver code that can crash; doing it here
+    // keeps a broken driver from taking down the app itself.
+    if let Some(at) = args.iter().position(|arg| arg == "--probe-devices") {
+        let dir = std::path::PathBuf::from(args.get(at + 1).cloned().unwrap_or_default());
+        let devices = speechify_core::native::devices(&dir).unwrap_or_default();
+        println!("{}", serde_json::to_string(&devices).unwrap_or_else(|_| "[]".into()));
+        return;
     }
-    if args.get(1).is_some_and(|s| s == "--native-worker") {
-        if args.len() != 6 {
-            return Err("native-worker requires native-dir model device threads".into());
-        }
-        return worker::serve(
-            std::path::Path::new(&args[2]),
-            std::path::Path::new(&args[3]),
-            &args[4],
-            args[5].parse().map_err(|_| "Invalid thread count")?,
-        );
-    }
-    if args.get(1).is_some_and(|s| s == "fixture") {
-        if args.len() < 4 {
-            return Err("fixture MODEL_ID AUDIO.wav [REPEATS] [DEVICE]".into());
-        }
-        let root = config::root()?;
-        let mut cfg = config::load(&root)?;
-        cfg["model"] = serde_json::json!(args[2]);
-        cfg["device"] = serde_json::json!(args.get(5).map(|x| x.as_str()).unwrap_or("cpu"));
-        let native = worker::native_dir(None);
-        let service = service::Service::new(root, native)?;
-        *service.config.lock().unwrap() = cfg;
-        for i in 0..args
-            .get(4)
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(1)
-        {
-            let result = service.infer_path(std::path::Path::new(&args[3]), false)?;
-            println!("{}", serde_json::json!({"iteration":i,"result":result}));
-        }
-        return Ok(());
-    }
-    if args.get(1).is_some_and(|s| s == "install-model") {
-        let id = args.get(2).ok_or("install-model MODEL_ID")?;
-        return models::install(
-            &config::root()?,
-            id,
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            |p| eprintln!("{p}"),
-        );
-    }
-    if args.get(1).is_some_and(|s| s == "--version") {
-        println!("speechify {}", config::VERSION);
-        return Ok(());
-    }
-    if args.get(1).is_some_and(|s| s == "diagnostics") {
-        println!("{}", service::diagnostics());
-        return Ok(());
-    }
-    #[cfg(feature = "desktop")]
-    return desktop::run();
-    #[cfg(not(feature = "desktop"))]
-    Err("This build contains only fixture tools; build default features for desktop".into())
+    let toggle = args.iter().any(|arg| arg == "--toggle");
+    let cancel = args.iter().any(|arg| arg == "--cancel");
+    let background = args.iter().any(|arg| arg == "--background") || toggle || cancel;
+    tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            // A second launch talks to the running app: `speechify --toggle`
+            // starts or stops dictation (for system shortcuts on Wayland).
+            let Some(shared) = app.try_state::<Arc<worker::Shared>>() else { return };
+            if args.iter().any(|arg| arg == "--toggle") {
+                shared.send(worker::Msg::Input(Event::BarClick));
+            } else if args.iter().any(|arg| arg == "--cancel") {
+                shared.send(worker::Msg::Input(Event::BarCancel));
+            } else if !args.iter().any(|arg| arg == "--background") {
+                shell::show_main(app, "home");
+            }
+        }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--background"]),
+        ))
+        .invoke_handler(tauri::generate_handler![
+            commands::get_settings,
+            commands::save_settings,
+            commands::get_status,
+            commands::history,
+            commands::edit_dictation,
+            commands::delete_dictations,
+            commands::flag_dictation,
+            commands::dictation_audio,
+            commands::copy_text,
+            commands::get_insights,
+            commands::dictionary,
+            commands::add_word,
+            commands::remove_word,
+            commands::suggestions,
+            commands::resolve_suggestion,
+            commands::snippets,
+            commands::save_snippet,
+            commands::delete_snippet,
+            commands::notes,
+            commands::save_note,
+            commands::delete_note,
+            commands::rules,
+            commands::save_rules,
+            commands::models,
+            commands::download_model,
+            commands::cancel_download,
+            commands::delete_model,
+            commands::pull_rewrite_model,
+            commands::teacher_status,
+            commands::run_teacher,
+            commands::export_training,
+            commands::try_format,
+            commands::bar_action,
+            commands::open_main,
+        ])
+        .setup(move |app| {
+            let shared = worker::start(app.handle().clone())?;
+            app.manage(shared.clone());
+            shell::build_tray(app.handle())?;
+            shell::place_bar(app.handle(), &speechify_core::app::Bar::Idle);
+            if toggle {
+                shared.send(worker::Msg::StartupToggle);
+            }
+            // Started at login, the app stays in the tray; started by hand, it opens.
+            if !background {
+                shell::show_main(app.handle(), "home");
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Closing the main window keeps dictation running in the tray.
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("Speechify could not start")
+        .run(|app, event| {
+            // The Dock icon stays visible on a Mac; clicking it brings the
+            // window back after it was closed to the tray.
+            #[cfg(target_os = "macos")]
+            if let RunEvent::Reopen { .. } = event {
+                shell::show_main(app, "home");
+                return;
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = app;
+            if let RunEvent::ExitRequested { api, code, .. } = event {
+                // Only an explicit Quit (which passes a code) ends the app.
+                if code.is_none() {
+                    api.prevent_exit();
+                }
+            }
+        });
 }
