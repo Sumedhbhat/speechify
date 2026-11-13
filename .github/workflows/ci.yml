@@ -1,6 +1,6 @@
 name: CI
 
-# Behavioral tests on every platform, then a gate that requires full coverage.
+# Tests on every platform, then a gate that requires full coverage.
 # Pull requests run this directly; pushes to main and release branches run it
 # from release.yml, so a release is published only after it passes.
 
@@ -17,20 +17,34 @@ concurrency:
   # Superseded pull request runs stop; release runs always finish.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # The speech engine tests run against the real runtime and a 46 MB model.
+  SPEECHIFY_REQUIRE_NATIVE: '1'
+  TEST_MODEL_URL: https://huggingface.co/handy-computer/whisper-tiny.en-gguf/resolve/9dd46e00ef0577e354e658c07b3ac5580e9cd211/whisper-tiny.en-Q8_0.gguf
+  TEST_MODEL_SHA256: e8c9b73c06344307d8b346e07fbe93dd88d894627854bcff31523f1ce44394fa
+  TEST_TOKEN_MODEL_URL: https://huggingface.co/handy-computer/parakeet-tdt_ctc-110m-gguf/resolve/1c3f0d5378fdd358905cc410a93ed9e64f52d170/parakeet-tdt_ctc-110m-Q4_K_M.gguf
+  TEST_TOKEN_MODEL_SHA256: 486414fd90185a8c8a4ced7c123cfb133ff4f7958426c6b8bd9049946b56b448
+
 jobs:
-  coverage:
+  test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, windows-2025]
+        include:
+          - os: ubuntu-24.04
+            python: python3
+          - os: macos-15
+            python: python3
+          - os: windows-2025
+            python: python
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
@@ -38,59 +52,67 @@ jobs:
           node-version: '24.21.0'
           cache: npm
           cache-dependency-path: package-lock.json
-      - name: Install Linux desktop prerequisites
+      - name: Install Linux build prerequisites
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libx11-dev libxtst-dev xvfb xauth xclip xdotool dbus libglib2.0-bin
-      - name: Install coverage tools
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libx11-dev libxtst-dev libxi-dev
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .build/models
+          key: test-models-${{ env.TEST_MODEL_SHA256 }}-${{ env.TEST_TOKEN_MODEL_SHA256 }}
+      - name: Fetch the speech runtime and the test model
+        run: bash scripts/fetch-test-fixtures.sh "${{ matrix.python }}"
+      - name: Frontend
         run: |
-          rustup component add llvm-tools-preview
-          cargo install cargo-llvm-cov --version 0.9.1 --locked
-          cargo install rustfilt --version 0.2.0 --locked
           npm ci
-          python -m pip install --only-binary=:all: -r requirements-dev.txt
-      - name: Check source formatting
-        run: npm run format:check
-      - name: Prepare isolated Wayland keyboard directory
+          npm run build
+          npm test
+      - name: Formatting and lints
         if: runner.os == 'Linux'
         run: |
-          test ! -e /dev/input/by-id
-          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 700 /dev/input/by-id
-      - name: Exercise application behavior and collect native coverage
-        env:
-          PYTHON: python
-          SPEECHIFY_TEST_DISPOSABLE_DESKTOP: '1'
-          SPEECHIFY_TEST_VIRTUAL_KEYBOARD: '1'
-        run: bash scripts/test-coverage.sh --collect-only
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always()
-        with:
-          name: coverage-${{ matrix.os }}
-          path: coverage/
-          if-no-files-found: error
-          retention-days: 14
+          npm run format:check
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Rust tests
+        run: |
+          source .build/test-env.sh
+          cargo test --workspace --locked
+      - name: Build the app
+        run: cargo build -p speechify --locked
 
   coverage-gate:
     name: Tauri full coverage gate
-    needs: coverage
+    needs: test
     if: always()
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - name: Require passing behavioral suites on every platform
+      - name: Require passing tests on every platform
         env:
-          COVERAGE_RESULT: ${{ needs.coverage.result }}
-        run: test "$COVERAGE_RESULT" = success
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+          TEST_RESULT: ${{ needs.test.result }}
+        run: test "$TEST_RESULT" = success
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
-          pattern: coverage-*
-          path: coverage-results
-      - name: Require full coverage across supported platforms
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .build/models
+          key: test-models-${{ env.TEST_MODEL_SHA256 }}-${{ env.TEST_TOKEN_MODEL_SHA256 }}
+      - name: Install coverage tools
         run: |
-          cargo install rustfilt --version 0.2.0 --locked
-          python3 scripts/check-coverage.py \
-            --frontend coverage-results/coverage-ubuntu-24.04/coverage-final.json \
-            --backend coverage-results/coverage-*/rust.info
+          cargo install cargo-llvm-cov --version 0.9.1 --locked
+          npm ci
+      - name: Require full coverage of the core and the interface
+        run: bash scripts/coverage.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 14

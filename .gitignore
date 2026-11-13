@@ -7,3 +7,4 @@ src-tauri/resources/native/
 src-tauri/gen/
 *.profraw
 lcov.info
+__pycache__/

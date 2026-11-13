@@ -1,134 +1,63 @@
-# Behavioral tests
+# Testing
 
-For a local refactor check, install the formatting tools with
-`python -m pip install -r requirements-dev.txt` and run `npm run check`.
-Use `npm run format` to apply Prettier, Ruff and rustfmt. The native coverage
-matrix also checks formatting before collecting coverage.
+## Commands
 
-The TypeScript tests use rendered controls and the Tauri command boundary. They
-assert visible text, saved form values, navigation, and requests received by the
-Rust service. Run them with `npm run test:coverage`. Every application TypeScript
-file is included, with 100% thresholds for statements, lines, functions and
-branches.
+```
+bash scripts/fetch-test-fixtures.sh   # once: speech runtime + a 46 MB test model, writes .build/test-env.sh
+source .build/test-env.sh
+cargo test --workspace --locked       # Rust tests
+npm test                              # interface tests (Vitest, jsdom)
+bash scripts/coverage.sh              # the coverage gate
+```
 
-The Rust tests exercise the command service, persisted configuration, SQLite
-history, corrections, model installation, worker processes, and training
-adoption. Native-engine and trainer fixtures are separate compiled programs.
-They let tests verify the real ABI and process protocols with small deterministic
-inputs. Model downloads use a local HTTP server and real SHA-256 verification.
-Actual speech recognition can also be checked with the application's `fixture`
-command and an installed native model.
-The coverage runner caches the catalog's pinned Moonshine GGUF (about 77 MB)
-under `.build/fixtures` for the real model-reuse and disk-failure scenarios.
-It verifies the catalog SHA-256 before using this artifact.
+On Windows run the script under Git Bash and pass `python`: `bash scripts/fetch-test-fixtures.sh python`.
 
-Every pull request runs the native coverage matrix in `ci.yml`. Its
-`Test (ubuntu-24.04)`, `Test (windows-2025)` and `Tauri full coverage gate` checks are required
-by the repository's `main: require CI` ruleset. It runs even when a matrix job
-fails, and fails if any platform's behavioral suite fails or is cancelled or
-skipped. Only successful suites proceed to the combined 100% coverage check.
+`fetch-test-fixtures.sh` runs `fetch-native.py`, then downloads Whisper tiny.en (Q8_0, pinned by revision and SHA-256, cached in `.build/models`) and writes `.build/test-env.sh`. That file sets `SPEECHIFY_NATIVE_DIR` and `SPEECHIFY_TEST_MODEL`.
 
-The scenario suites run in CI as follows:
+The speech-engine tests in `core/src/native.rs` run against the real runtime and that model, using `core/tests/fixtures/jfk.wav`. Without the two variables they skip, unless `SPEECHIFY_REQUIRE_NATIVE=1` is set, in which case they fail. CI and `coverage.sh` set it, so a missing runtime cannot pass quietly.
 
-| Behavior | Suites | CI execution |
+Useful narrower runs:
+
+```
+cargo test -p speechify-core format        # the formatter
+cargo test -p speechify-core session
+npx vitest run tests/format.test.ts
+npx vitest                                 # watch mode
+```
+
+## What is tested, and how
+
+- **`core/`**: unit tests sit beside the code. The formatter passes are tables of input and output pairs. `session.rs` drives the state machine with explicit timestamps, so hold, tap, double-tap and the 20-minute limit are tested without sleeping. `app.rs` runs whole dictations through a fake `Platform` and fake engines. The HTTP client, the model download and the Ollama calls run against a small local test server (`core/src/testing.rs`). The SQLite store runs in memory.
+- **`src/`**: Vitest with jsdom. `tests/fakes.ts` provides a fake `api` and fake events, so each page and the bar are tested as DOM without Tauri.
+- **`os/` and `src-tauri/`**: compiled and linted, not run in tests. They drive real devices and windows. Their logic is kept small on purpose. Only pure helpers (such as the key-name mapping in `os/src/keys.rs`) have tests.
+
+## The coverage gate
+
+`bash scripts/coverage.sh` requires:
+
+| Part | Measured by | Requirement |
 | --- | --- | --- |
-| Rendered controls, navigation, forms, history, models and learning | `tests/interface.test.ts` | All three native coverage jobs via `npm run test:coverage` |
-| Settings, persisted history, corrections, audio retention, cleanup and cancellation | `src-tauri/tests/unit/{behavior,service}.rs` and source unit tests | All three native coverage jobs |
-| Native ABI, model loading, downloads, verification, optional installation and recovery | `src-tauri/tests/unit/{native,models,installer}.rs` | All three native coverage jobs |
-| Training, teacher selection, adoption, rejection, rollback and scheduling | `src-tauri/tests/unit/learning.rs` | All three native coverage jobs; controlled delayed-IO races on Linux |
-| Microphone samples, recording, hotkeys, manual actions and disconnect recovery | `src-tauri/tests/unit/{capture,desktop,evdev}.rs` | Portable assertions on all platforms; synthetic ALSA, X11 and Wayland recordings on Linux |
-| Clipboard preservation, newer copies, focus and correction safeguards | `src-tauri/tests/unit/{platform,clipboard,windows,macos,xclipboard}.rs` | Native Windows/macOS desktops and isolated Linux X11 session |
-| External CLI, worker protocol, cancellation, startup and shutdown | `tests/cli.test.py` | All three native coverage jobs; Unix watchdog and Linux clipboard/desktop cases run on their supported hosts |
-| Coverage rejection and collector correctness | `tests/coverage-{gate,runtime}.test.py` | All three native coverage jobs; Linux continuous profiling checked on Linux |
-| Optional Python environment installer interruption and recovery | `scripts/test-optional-installer.py` | All three native coverage jobs |
+| `core/` | `cargo llvm-cov` | Every line run by a test. The script parses the LCOV file and fails listing any line with zero hits |
+| `src/` (TypeScript) | Vitest with V8 coverage | 100% of lines, functions, branches and statements (`vitest.config.ts`). `main.ts`, `bar.ts`, `api.ts` and `env.d.ts` are excluded: they only wire real dependencies |
+| `os/`, `src-tauri/` | not measured | compiled and linted only |
 
-The Rust coverage command includes ignored tests, and CI enables the disposable
-desktop and virtual keyboard fixtures. OS-specific cases run on their native
-host.
+`core/src/testing.rs` is excluded from the Rust measurement. Reports are written to `coverage/`.
 
-Install `cargo-llvm-cov` 0.9.1, `rustfilt` 0.2.0, and the Rust
-`llvm-tools-preview` component, then run:
+You need `cargo-llvm-cov` 0.9.1 (`cargo install cargo-llvm-cov --version 0.9.1 --locked`) and the `llvm-tools-preview` component, which `rust-toolchain.toml` already lists.
 
-```sh
-npm ci
-bash scripts/test-coverage.sh
-```
+A habit the code follows: a line that can only run when a test is about to fail (a `panic!` in a test helper) is written on one line with `#[rustfmt::skip]` so it is not counted as unexecuted code. See `text()` in `core/src/pipeline.rs`.
 
-The script prepares the pinned native runtime, builds the frontend, runs the
-full desktop tests, and drives the built CLI through its stdin/stdout protocol.
-Linux needs Xvfb, xauth, xclip, xdotool, D-Bus and gdbus in addition to the desktop
-build prerequisites. Its desktop tests use private display and D-Bus sessions
-and a synthetic audio device. The coverage runner compiles an ALSA fixture
-with the existing C compiler and ALSA development headers. Controlled IO
-responses reproduce cancellation after a worker reply and after inference has
-finished, while the production worker and recorder protocols remain active. This driver supplies
-float, signed and unsigned samples, setup/start failures, and disconnects;
-it never opens microphone hardware. macOS/Windows clipboard tests are opt-in because
-they modify the system clipboard: the CI job runs them on disposable runners
-with `SPEECHIFY_TEST_DISPOSABLE_DESKTOP=1` and `--include-ignored`.
-The macOS adapter scenarios use an isolated child process with controlled
-Quartz permission, focus and key-state responses. Paste events are observed at
-the OS boundary, while clipboard snapshots use the real native pasteboard.
-Windows error scenarios replace individual imported OS functions in an isolated
-test child, then restore them before checking that clipboard and worker startup
-can recover. macOS uses native objects with controlled pasteboard responses.
-The Linux CI runner also creates a private, empty `/dev/input/by-id` directory;
-a FIFO in that directory exercises the real Wayland keyboard adapter and
-recording cancellation on disconnect. Local runs omit that scenario unless
-`SPEECHIFY_TEST_VIRTUAL_KEYBOARD=1` is explicitly set with the same isolated
-fixture available. The full gate still requires those paths to be covered.
-It writes reports under `coverage/` and runs the coverage gate. Use
-`--collect-only` to collect an individual platform's report before combining it
-with the other platforms.
+## CI
 
-The CI gate combines native Linux, macOS and Windows LCOV reports. It requires
-100% Rust line and function coverage across all files in `src-tauri/src`, plus
-the frontend thresholds. Platform-specific files stay in the inventory even
-when the current OS cannot compile them. Linker symbols are demangled before
-combining execution counts from different binaries and target triples.
-Generic instantiations count as one source function; distinct closure bodies
-remain separate. Source and dependency fingerprints prevent combining reports
-from different versions of the application.
-LLVM source spans keep distinct closures separate, including closures on the
-same line. They also match the same body when conditional compilation changes
-its closure ordinal on another OS. Source locations keep same-named platform
-implementations separate, so running
-the X11 poller cannot satisfy the Windows or macOS poller's function coverage.
-LLVM can attribute Tauri SDK serialization closures to the closing bracket of
-`#[tauri::command]`. The gate omits that non-executable annotation; the authored
-command handler and its error handling remain in the coverage inventory.
-Linux uses continuous LLVM profiling so pre-exec child setup and cancelled
-helpers retain their execution counts. A standalone collector test verifies
-this behavior before the application run. Add `--details` to the gate command
-to list the uncovered lines and functions.
+`.github/workflows/ci.yml` runs on pull requests and is reused by the release workflow on pushes.
 
-```sh
-python3 scripts/check-coverage.py \
-  --frontend coverage/coverage-final.json \
-  --backend linux/rust.info macos/rust.info windows/rust.info
-```
+- **Test (ubuntu-24.04, macos-15, windows-2025)**: fetch the runtime and the test model, then `npm ci`, `npm run build`, `npm test`, and `cargo test --workspace --locked`, and build the app with `cargo build -p speechify --locked`. On Linux only, it first runs `npm run format:check`, `cargo fmt --all --check` and `cargo clippy --workspace --all-targets --locked -- -D warnings`.
+- **Tauri full coverage gate**: runs only after every Test job passed, then runs `scripts/coverage.sh` and uploads `coverage/` for 14 days.
 
-Tests and their fixtures live outside application source directories. Build
-scripts and generated type declarations are outside this Rust/TypeScript
-coverage gate. The optional Python model and training resources remain runtime
-dependencies; their installer tests run with
-`python3 scripts/test-optional-installer.py`.
+A new pull request run cancels the one it supersedes. Release runs always finish.
 
-The test dependency lock uses releases available by 2026-10-11. Undici 8.12.3 is
-the security exception: versions below 8.12.2 have the advisories reported by
-`npm audit`, including GHSA-xjj6-f33q-929c and GHSA-2m5v-pch6-74hx. The exception
-uses the dependency's supported version range and introduces no override.
+## Things to know
 
-## Checking on a real device
-
-CI has no microphone, tray or real focus changes. Before a stable release,
-check these by hand on each system:
-
-1. Check the data folder (see the README). Install and select one model and disconnect the network after installation.
-2. Grant the platform permissions. Select the microphone; hold Right Option on Mac or Right Ctrl on Windows/X11 for at least 250 ms. Verify Unicode/multiline output in a plain text editor.
-3. Tap the key briefly, hold it with Ctrl+C/other keys, and rebind it. No cancelled clip should reach history or paste. Unplug the selected microphone and inspect recovery/error guidance.
-4. Close/reopen Settings 20 times and dictate 20 clips. Verify recording and inference persist independently of the settings window. Check the tray's Settings/History/Models/Quit actions and second-instance behavior.
-5. Change focus while transcription runs: the transcript should be saved without pasting into the new target. Copy both different and identical text during clipboard restoration; verify newer copies survive. Test HTML/RTF and unsupported-format refusal. Check indicator visibility without focus activation.
-6. Correct, revert, exclude/include, play, search and export history; repeat a word correction twice and inspect its rule. With audio retention off, correct the latest clip before another dictation/restart and verify its WAV is then saved. Save-and-replace supports only a standard Windows Edit control with unchanged text/caret; other targets save the correction and report refusal.
-7. Cancel a download, retry, select a different installed model, restart, and quit during inference. Confirm no worker remains. Check CPU fallback with an unavailable GPU choice.
-8. If testing learning, opt in to a teacher/CPU as needed, verify mains/idle scheduling and dictation preemption; train only after enough labels. Review both gate reports and test rollback.
+- Passing here is not the same as working on a person's desktop. The automated tests have passed on Linux, and the Windows and macOS test jobs run in CI, but nobody has used the app by hand on Windows or macOS yet. See the status section of the [README](../README.md).
+- On a machine with a live Wayland session, do not launch the app to test it. It takes keys and pastes into whatever is focused. Use the tests.
+- To check the formatter by hand without the app, the Style page has a "try it" box that runs `pipeline::compose` on text you type (command `try_format`).

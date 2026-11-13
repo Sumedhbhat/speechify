@@ -1,0 +1,314 @@
+[
+  {
+    "id": "existing-01",
+    "source": "existing",
+    "raw": "um my plan for today is one, buy milk. two, call mom. three, pay the bills",
+    "expected": "My plan for today is:\n1. Buy milk\n2. Call mom\n3. Pay the bills"
+  },
+  {
+    "id": "existing-02",
+    "source": "existing",
+    "raw": "the color budget is two lakh fifty thousand rupees, actually three lakh rupees",
+    "expected": "The colour budget is ₹3 lakh."
+  },
+  {
+    "id": "existing-03",
+    "source": "existing",
+    "raw": "Um, I think, uh, we should go.",
+    "expected": "I think, we should go."
+  },
+  {
+    "id": "existing-04",
+    "source": "existing",
+    "raw": "So uhm that works. Hmm, maybe.",
+    "expected": "So that works. Maybe."
+  },
+  {
+    "id": "existing-05",
+    "source": "existing",
+    "raw": "Erm. Okay",
+    "expected": "Okay"
+  },
+  {
+    "id": "existing-06",
+    "source": "existing",
+    "raw": "The umbrella and the summer hum.",
+    "expected": "The umbrella and the summer hum."
+  },
+  {
+    "id": "existing-07",
+    "source": "existing",
+    "raw": "He had had enough, very very much.",
+    "expected": "He had had enough, very very much."
+  },
+  {
+    "id": "existing-08",
+    "source": "existing",
+    "raw": "I I think the the plan is is fine",
+    "expected": "I think the plan is fine."
+  },
+  {
+    "id": "existing-09",
+    "source": "existing",
+    "raw": "Let's do coffee at 2 actually 3",
+    "expected": "Let's do coffee at 3."
+  },
+  {
+    "id": "existing-10",
+    "source": "existing",
+    "raw": "Let's do coffee at 2 pm, actually 3.",
+    "expected": "Let's do coffee at 3 pm."
+  },
+  {
+    "id": "existing-11",
+    "source": "existing",
+    "raw": "Meet on Monday. No wait, Tuesday.",
+    "expected": "Meet on Tuesday."
+  },
+  {
+    "id": "existing-12",
+    "source": "existing",
+    "raw": "I'll go to the store, no wait, the mall.",
+    "expected": "I'll go to the mall."
+  },
+  {
+    "id": "existing-13",
+    "source": "existing",
+    "raw": "We think, I mean, we know it works.",
+    "expected": "We know it works."
+  },
+  {
+    "id": "existing-14",
+    "source": "existing",
+    "raw": "Send it today. Scratch that. Send it tomorrow.",
+    "expected": "Send it tomorrow."
+  },
+  {
+    "id": "existing-15",
+    "source": "existing",
+    "raw": "I actually enjoyed the film.",
+    "expected": "I actually enjoyed the film."
+  },
+  {
+    "id": "existing-16",
+    "source": "existing",
+    "raw": "Sorry for the delay.",
+    "expected": "Sorry for the delay."
+  },
+  {
+    "id": "existing-17",
+    "source": "existing",
+    "raw": "One, buy milk. Two, call mom. Three, pay bills.",
+    "expected": "1. Buy milk\n2. Call mom\n3. Pay bills"
+  },
+  {
+    "id": "existing-18",
+    "source": "existing",
+    "raw": "Agenda: bullet point budget, next bullet hiring, bullet roadmap.",
+    "expected": "Agenda:\n- Budget\n- Hiring\n- Roadmap"
+  },
+  {
+    "id": "existing-19",
+    "source": "existing",
+    "raw": "I have one dog and two cats",
+    "expected": "I have one dog and two cats."
+  },
+  {
+    "id": "existing-20",
+    "source": "existing",
+    "raw": "The first time I saw two of them",
+    "expected": "The first time I saw two of them."
+  },
+  {
+    "id": "existing-21",
+    "source": "existing",
+    "raw": "One two three testing",
+    "expected": "One two three testing."
+  },
+  {
+    "id": "existing-22",
+    "source": "existing",
+    "raw": "hello comma how are you question mark",
+    "expected": "Hello, how are you?"
+  },
+  {
+    "id": "existing-23",
+    "source": "existing",
+    "raw": "Remove the comma after hello",
+    "expected": "Remove the comma after hello."
+  },
+  {
+    "id": "existing-24",
+    "source": "existing",
+    "raw": "Add a question mark there",
+    "expected": "Add a question mark there."
+  },
+  {
+    "id": "existing-25",
+    "source": "existing",
+    "raw": "two lakh fifty thousand",
+    "expected": "2,50,000"
+  },
+  {
+    "id": "existing-26",
+    "source": "existing",
+    "raw": "three crore twenty lakh",
+    "expected": "3,20,00,000"
+  },
+  {
+    "id": "existing-27",
+    "source": "existing",
+    "raw": "one of the two options",
+    "expected": "One of the two options."
+  },
+  {
+    "id": "existing-28",
+    "source": "existing",
+    "raw": "the twenty first century",
+    "expected": "The twenty first century."
+  },
+  {
+    "id": "existing-29",
+    "source": "existing",
+    "raw": "call nine eight four five zero one",
+    "expected": "Call 984501"
+  },
+  {
+    "id": "existing-30",
+    "source": "existing",
+    "raw": "five hundred rupees",
+    "expected": "₹500"
+  },
+  {
+    "id": "existing-31",
+    "source": "existing",
+    "raw": "My favorite color is gray.",
+    "expected": "My favourite colour is grey."
+  },
+  {
+    "id": "existing-32",
+    "source": "existing",
+    "raw": "version three point one four",
+    "expected": "Version 3.14"
+  },
+  {
+    "id": "new-01",
+    "source": "new",
+    "raw": "First, check the invoice. Second, pay the supplier.",
+    "expected": "1. Check the invoice\n2. Pay the supplier"
+  },
+  {
+    "id": "new-02",
+    "source": "new",
+    "raw": "Shopping list: bullet rice bullet tea bullet dal",
+    "expected": "Shopping list:\n- Rice\n- Tea\n- Dal"
+  },
+  {
+    "id": "new-03",
+    "source": "new",
+    "raw": "I have one meeting and two calls today.",
+    "expected": "I have one meeting and two calls today."
+  },
+  {
+    "id": "new-04",
+    "source": "new",
+    "raw": "The second train arrives after the first.",
+    "expected": "The second train arrives after the first."
+  },
+  {
+    "id": "new-05",
+    "source": "new",
+    "raw": "Send it in May, actually June.",
+    "expected": "Send it in June."
+  },
+  {
+    "id": "new-06",
+    "source": "new",
+    "raw": "Send it in April, actually May.",
+    "expected": "Send it in May."
+  },
+  {
+    "id": "new-07",
+    "source": "new",
+    "raw": "Meet on Thursday, no wait, Friday.",
+    "expected": "Meet on Friday."
+  },
+  {
+    "id": "new-08",
+    "source": "new",
+    "raw": "The price is two lakh, actually three lakh rupees.",
+    "expected": "The price is ₹3 lakh."
+  },
+  {
+    "id": "new-09",
+    "source": "new",
+    "raw": "The total is one crore twenty five lakh rupees.",
+    "expected": "The total is ₹1,25,00,000."
+  },
+  {
+    "id": "new-10",
+    "source": "new",
+    "raw": "The discount is twelve point five percent.",
+    "expected": "The discount is 12.5%."
+  },
+  {
+    "id": "new-11",
+    "source": "new",
+    "raw": "Please pay one thousand and fifty rupees.",
+    "expected": "Please pay ₹1050."
+  },
+  {
+    "id": "new-12",
+    "source": "new",
+    "raw": "The code is zero zero seven five.",
+    "expected": "The code is 0075."
+  },
+  {
+    "id": "new-13",
+    "source": "new",
+    "raw": "Um, please, uh, send the file.",
+    "expected": "Please, send the file."
+  },
+  {
+    "id": "new-14",
+    "source": "new",
+    "raw": "I I will send the the updated report.",
+    "expected": "I will send the updated report."
+  },
+  {
+    "id": "new-15",
+    "source": "new",
+    "raw": "She had had a very very long day.",
+    "expected": "She had had a very very long day."
+  },
+  {
+    "id": "new-16",
+    "source": "new",
+    "raw": "The summer programme begins tomorrow.",
+    "expected": "The summer programme begins tomorrow."
+  },
+  {
+    "id": "new-17",
+    "source": "new",
+    "raw": "Please do not change the bank account number.",
+    "expected": "Please do not change the bank account number."
+  },
+  {
+    "id": "new-18",
+    "source": "new",
+    "raw": "We should discuss the new line of credit.",
+    "expected": "We should discuss the new line of credit."
+  },
+  {
+    "id": "new-19",
+    "source": "new",
+    "raw": "The doctor will examine the colon tomorrow.",
+    "expected": "The doctor will examine the colon tomorrow."
+  },
+  {
+    "id": "new-20",
+    "source": "new",
+    "raw": "The bullet train has two stops.",
+    "expected": "The bullet train has two stops."
+  }
+]

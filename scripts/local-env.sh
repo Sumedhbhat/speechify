@@ -1,15 +1,12 @@
-# Source only when using the optional extracted Linux toolchain.
-TAURI_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TAURI_SYSROOT="$TAURI_ROOT/.build/sysroot"
-export PATH="$TAURI_SYSROOT/usr/bin:$PATH"
-export PKG_CONFIG_SYSROOT_DIR="$TAURI_SYSROOT"
-export PKG_CONFIG_PATH="$TAURI_SYSROOT/usr/lib/x86_64-linux-gnu/pkgconfig:$TAURI_SYSROOT/usr/share/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
-export LIBRARY_PATH="$TAURI_SYSROOT/usr/lib/x86_64-linux-gnu:$TAURI_SYSROOT/usr/lib/gcc/x86_64-linux-gnu/15"
-export C_INCLUDE_PATH="$TAURI_SYSROOT/usr/include:$TAURI_SYSROOT/usr/include/x86_64-linux-gnu"
-export CPLUS_INCLUDE_PATH="$TAURI_SYSROOT/usr/include/c++/15:$TAURI_SYSROOT/usr/include/x86_64-linux-gnu/c++/15:$C_INCLUDE_PATH"
-export LD_LIBRARY_PATH="$TAURI_SYSROOT/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export CARGO_BUILD_JOBS=2
-export CC="$TAURI_SYSROOT/usr/bin/gcc"
-export CXX="$TAURI_SYSROOT/usr/bin/g++"
-export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="$CC"
-export COMPILER_PATH="$TAURI_SYSROOT/usr/libexec/gcc/x86_64-linux-gnu/15:/usr/libexec/gcc/x86_64-linux-gnu/15:$TAURI_SYSROOT/usr/bin"
+# Source this after scripts/bootstrap-linux.py to build against the unpacked
+# libraries:  source scripts/local-env.sh [sysroot-dir]
+SPEECHIFY_SYSROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.build/sysroot}"
+_lib="$SPEECHIFY_SYSROOT/usr/lib/x86_64-linux-gnu"
+export PKG_CONFIG_SYSROOT_DIR="$SPEECHIFY_SYSROOT"
+export PKG_CONFIG_PATH="$_lib/pkgconfig:$SPEECHIFY_SYSROOT/usr/share/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+export LIBRARY_PATH="$_lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+export LD_LIBRARY_PATH="$_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export C_INCLUDE_PATH="$SPEECHIFY_SYSROOT/usr/include:$SPEECHIFY_SYSROOT/usr/include/x86_64-linux-gnu"
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-L native=$_lib -C link-arg=-Wl,-rpath-link,$_lib"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-3}"
+unset _lib
