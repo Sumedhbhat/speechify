@@ -23,6 +23,15 @@ fn main() {
         return;
     }
     let args: Vec<String> = std::env::args().collect();
+    // A short-lived child run by the first start to list compute devices.
+    // Registering GPU backends runs driver code that can crash; doing it here
+    // keeps a broken driver from taking down the app itself.
+    if let Some(at) = args.iter().position(|arg| arg == "--probe-devices") {
+        let dir = std::path::PathBuf::from(args.get(at + 1).cloned().unwrap_or_default());
+        let devices = speechify_core::native::devices(&dir).unwrap_or_default();
+        println!("{}", serde_json::to_string(&devices).unwrap_or_else(|_| "[]".into()));
+        return;
+    }
     let toggle = args.iter().any(|arg| arg == "--toggle");
     let cancel = args.iter().any(|arg| arg == "--cancel");
     let background = args.iter().any(|arg| arg == "--background") || toggle || cancel;

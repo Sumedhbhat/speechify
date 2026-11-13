@@ -46,15 +46,17 @@ struct Learner<'a> {
     settings: &'a Settings,
     clock: Clock,
     student: &'a str,
+    /// The text the corrections were made to.
+    written: &'a str,
     /// The recogniser's confidence in each word of `student`.
     heard: &'a [crate::asr::Heard],
 }
 
 impl Learner<'_> {
-    /// Counts corrections by the evidence for each. A correction that changes
-    /// the meaning is dropped. One that sounds like what was heard is learned
-    /// at once if the recogniser was unsure of those words, and otherwise only
-    /// once it has come up `learn_after` times.
+    /// Counts corrections by the evidence for each (see `learn::evidence`).
+    /// Changes of meaning or fact are dropped. Names and terms are learned at
+    /// once if the recogniser was unsure of them, otherwise once they have come
+    /// up `learn_after` times. Everything else only waits as a suggestion.
     fn take(&self, found: Vec<Replacement>, source: &str, report: &mut Report) -> Result<()> {
         for correction in found {
             if correction.from.chars().count() > MAX_TERM || correction.to.chars().count() > MAX_TERM {
@@ -62,18 +64,19 @@ impl Learner<'_> {
             }
             // Zero means it is already in the dictionary, or the user deleted it.
             let enough = self.settings.teacher.learn_after;
-            let weight = match evidence(&correction, self.heard) {
+            let (weight, automatic) = match evidence(&correction, self.written, self.heard) {
                 Evidence::None => continue,
-                Evidence::Strong => enough,
-                Evidence::Weak
+                Evidence::Strong => (enough, true),
+                Evidence::Repeat
                     if source == "teacher" && corroborated(&correction, self.student, &self.store.vocabulary()) =>
                 {
-                    enough
+                    (enough, true)
                 }
-                Evidence::Weak => 1,
+                Evidence::Repeat => (1, true),
+                Evidence::Ask => (1, false),
             };
             let count = self.store.suggest(&correction.from, &correction.to, weight)?;
-            if count >= self.settings.teacher.learn_after && self.settings.auto_learn {
+            if automatic && count >= enough && self.settings.auto_learn {
                 self.store
                     .accept(&correction.from, &correction.to, source, self.clock)?;
                 report.learned.push(correction);
@@ -103,6 +106,7 @@ pub fn learn_from_edit(
             settings,
             clock,
             student: &before.raw,
+            written: &before.text,
             heard: &before.heard,
         };
         learner.take(corrections(&before.text, text), "edit", &mut report)?;
@@ -192,6 +196,7 @@ pub fn review(
                 settings,
                 clock,
                 student: &dictation.raw,
+                written: &dictation.raw,
                 heard: &dictation.heard,
             };
             learner.take(corrections(&dictation.raw, &heard), "teacher", &mut report)?;
@@ -610,22 +615,59 @@ mod tests {
     }
 
     #[test]
-    fn a_hand_fix_of_words_the_recogniser_was_unsure_of_is_learned_at_once() {
+    fn a_hand_fix_of_a_name_the_recogniser_was_unsure_of_is_learned_at_once() {
         let store = Store::memory();
         let settings = Settings::default();
-        let raw = "deploy with cube control tonight please";
         let id = heard_with(
             &store,
-            raw,
-            "Deploy with cube control tonight please.",
-            &[("cube", 0.41), ("control", 0.55)],
+            "ask sumit bat about it",
+            "Ask sumit bat about it.",
+            &[("sumit", 0.41), ("bat", 0.55)],
         );
-        let learned = learn_from_edit(&store, &settings, id, "Deploy with kubectl tonight please.", NOW).unwrap();
-        assert_eq!(learned, vec![Replacement::new("cube control", "kubectl")]);
+        let learned = learn_from_edit(&store, &settings, id, "Ask Sumedh Bhat about it.", NOW).unwrap();
+        assert_eq!(learned, vec![Replacement::new("sumit bat", "Sumedh Bhat")]);
         assert_eq!(store.dictionary().unwrap()[0].source, "edit");
+        assert_eq!(store.examples(Category::Work, 1)[0].1, "Ask Sumedh Bhat about it.");
+    }
+
+    #[test]
+    fn ordinary_words_are_only_suggested_however_unsure_the_recogniser_was() {
+        let store = Store::memory();
+        let settings = Settings::default();
+        for (raw, text, edit) in [
+            (
+                "deploy with cube control tonight",
+                "Deploy with cube control tonight.",
+                "Deploy with kubectl tonight.",
+            ),
+            (
+                "deploy with cube control tonight",
+                "Deploy with cube control tonight.",
+                "Deploy with kubectl tonight.",
+            ),
+            (
+                "please increase the volume now",
+                "Please increase the volume now.",
+                "Please decrease the volume now.",
+            ),
+        ] {
+            let id = heard_with(&store, raw, text, &[("cube", 0.3), ("control", 0.3), ("increase", 0.2)]);
+            assert!(learn_from_edit(&store, &settings, id, edit, NOW).unwrap().is_empty());
+        }
+        // Waiting for the user in the Dictionary page, even after coming up twice.
+        assert!(store.dictionary().unwrap().is_empty());
+        let waiting: Vec<(String, String, u32)> = store
+            .suggestions()
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.heard, s.term, s.count))
+            .collect();
         assert_eq!(
-            store.examples(Category::Work, 1)[0].1,
-            "Deploy with kubectl tonight please."
+            waiting,
+            [
+                ("cube control".into(), "kubectl".into(), 2),
+                ("increase".into(), "decrease".into(), 1)
+            ]
         );
     }
 
