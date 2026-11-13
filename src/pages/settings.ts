@@ -1,160 +1,162 @@
-import { button, escapeHtml } from '../ui';
-import type { Config, Snapshot } from '../types';
+// Settings: shortcuts, microphone, behaviour, privacy, appearance.
 
-// Form controls are the untyped boundary. Interpret each value using the
-// persisted setting's type, so checkboxes and numeric fields retain theirs.
-export function readSettings(form: HTMLFormElement, config: Config): Config {
-  const changes: Record<string, string | number | boolean> = {};
-  for (const control of form.elements) {
-    if (
-      !(control instanceof HTMLInputElement || control instanceof HTMLSelectElement) ||
-      !control.name
-    )
-      continue;
-    const key = control.name as keyof Config;
-    changes[key] =
-      control instanceof HTMLInputElement && control.type === 'checkbox'
-        ? control.checked
-        : typeof config[key] === 'number'
-          ? Number(control.value)
-          : control.value;
-  }
-  return { ...config, ...changes };
-}
+import type { Settings } from "../api";
+import { select, text, toggle, type Binding } from "../controls";
+import type { Deps, Page } from "../deps";
+import { h, pageHeader, section } from "../ui";
 
-const labels: Record<keyof Config, string> = {
-  model: 'Model',
-  ptt_key: 'Hold-to-talk key or combination',
-  correct_hotkey: 'Correction shortcut',
-  history_hotkey: 'History shortcut',
-  models_hotkey: 'Models shortcut',
-  input_device: 'Input device',
-  keep_mic_open: 'Keep microphone open with 300 ms pre-roll',
-  min_hold_ms: 'Minimum hold (ms)',
-  device: 'Inference device',
-  compute_type: 'Whisper compute type',
-  language: 'Language code (empty for auto)',
-  beam_size: 'Whisper beam size',
-  onnx_threads: 'CPU inference threads',
-  autocorrect_after: 'Corrections before automatic replacement',
-  keep_all_audio: 'Retain dictation audio',
-  llm_url: 'Optional OpenAI-compatible cleanup URL',
-  llm_model: 'Cleanup model',
-  learn_auto: 'Enable idle learning',
-  teacher: 'Teacher model ID, auto, or off',
-  idle_minutes: 'Idle minutes before learning',
-  teacher_on_cpu: 'Allow teacher inference on CPU',
-  teacher_min_confidence: 'Minimum teacher confidence',
-  retrain_after_labels: 'New labels before training',
-  retrain_after_days: 'Days between training',
-  max_regression_wer: 'Maximum LibriSpeech regression (WER points)',
-  keep_versions: 'Trained versions to retain',
-  theme: 'Theme',
-};
-const choices: Partial<Record<keyof Config, string[]>> = {
-  device: ['auto', 'cuda', 'vulkan', 'metal', 'cpu'],
-  compute_type: ['auto', 'float16', 'float32', 'int8', 'int8_float16'],
-  theme: ['system', 'dark', 'light'],
-};
+type Hotkey = keyof Settings["hotkeys"];
 
-function field(config: Config, key: keyof Config): string {
-  const value = config[key];
-  const options = choices[key];
-  if (options) {
-    return /* HTML */ `<label class="">
-      ${escapeHtml(labels[key])}
-      <select name="${key}">
-        ${options.map((option) => /* HTML */ `<option ${option === value ? 'selected' : ''}>${option}</option>`).join('')}
-      </select>
-    </label>`;
-  }
-  if (typeof value === 'boolean') {
-    return /* HTML */ `<label class="check">
-      <input name="${key}" type="checkbox" ${value ? 'checked' : ''} />
-      ${escapeHtml(labels[key])}
-    </label>`;
-  }
-  return /* HTML */ `<label class="">
-    ${escapeHtml(labels[key])}
-    <input
-      name="${key}"
-      ${key === 'input_device' ? 'list="inputs"' : ''}
-      type="${typeof value === 'number' ? 'number' : 'text'}"
-      ${typeof value === 'number' ? 'step="any"' : ''}
-      value="${escapeHtml(value)}"
-    />
-  </label>`;
-}
+const HOTKEYS: [Hotkey, string, string][] = [
+  ["push_to_talk", "Push to talk", "Hold to dictate, let go to type."],
+  ["hands_free", "Hands-free", "Press once to start, again to stop."],
+  ["command", "Command", "Speak an instruction for the selected text."],
+  ["paste_last", "Paste last", "Type the last dictation again."],
+  ["copy_last", "Copy last", "Copy the last dictation."],
+  ["cancel", "Cancel", "Stop listening and throw it away."],
+];
 
-export function renderSettings(snapshot: Snapshot): string {
-  const groups: [string, (keyof Config)[]][] = [
-    ['General', ['theme', 'learn_auto']],
-    ['Microphone', ['input_device', 'keep_mic_open']],
-    ['Shortcuts', ['ptt_key', 'min_hold_ms', 'correct_hotkey', 'history_hotkey', 'models_hotkey']],
-    ['Inference', ['device', 'compute_type', 'language', 'beam_size', 'onnx_threads']],
-    [
-      'Learning',
-      [
-        'autocorrect_after',
-        'teacher',
-        'teacher_on_cpu',
-        'teacher_min_confidence',
-        'idle_minutes',
-        'retrain_after_labels',
-        'retrain_after_days',
-        'max_regression_wer',
-        'keep_versions',
-      ],
-    ],
-    ['Privacy / Storage', ['keep_all_audio', 'llm_url', 'llm_model']],
-  ];
-  return /* HTML */ `<p class="notice visible">${escapeHtml(snapshot.diagnostics.guidance)}</p>
-    <form id="settings">
-      <datalist id="inputs"></datalist>${groups
-        .map(
-          ([title, keys]) =>
-            /* HTML */ `<fieldset>
-              <legend>${title}</legend>
-              <div class="settings-grid">
-                ${keys.map((key) => field(snapshot.config, key)).join('')}
-              </div>
-            </fieldset>`,
-        )
-        .join('')}
-      <div class="actions sticky">
-        <button class="primary" type="submit">Apply settings</button
-        >${button('refresh-inputs', 'Refresh microphones', 'type="button"')}
-      </div>
-    </form>
-    <section>
-      <h2>Startup at login</h2>
-      <p>Starts Speechify when you sign in.</p>
-      <div class="actions">
-        ${button('autostart-on', 'Enable')} ${button('autostart-off', 'Disable')}
-      </div>
-    </section>
-    <section>
-      <h2>Data and diagnostics</h2>
-      <p>Speechify ${escapeHtml(snapshot.version)}</p>
-      <p class="path">${escapeHtml(snapshot.data_dir)}</p>
-      <p>
-        Timings: <code>logs/timings.jsonl</code>. Rotates at 2 MB; transcripts are excluded from
-        generic logs.
-      </p>
-      <p>
-        Clipboard snapshots preserve supported text and rich formats. Unsupported or oversized
-        formats refuse automatic paste. Newer copies are protected by ownership or generation
-        checks. macOS has no atomic compare-and-restore API.
-      </p>
-      <div class="actions">
-        ${button('export-config', 'Export TOML')} ${button('import-config', 'Import TOML')}
-        ${button('import-data', 'Copy existing Speechify data')}
-      </div>
-      <textarea
-        id="config-transfer"
-        rows="6"
-        aria-label="TOML import or export"
-        placeholder="Export settings here, or paste TOML to import"
-      ></textarea>
-    </section>`;
+const LANGUAGES: [string, string][] = [
+  ["auto", "Detect automatically"],
+  ["en", "English"],
+  ["hi", "Hindi"],
+  ["bn", "Bengali"],
+  ["ta", "Tamil"],
+  ["te", "Telugu"],
+  ["mr", "Marathi"],
+  ["gu", "Gujarati"],
+  ["kn", "Kannada"],
+  ["ml", "Malayalam"],
+  ["es", "Spanish"],
+  ["fr", "French"],
+  ["de", "German"],
+  ["pt", "Portuguese"],
+  ["ja", "Japanese"],
+  ["zh", "Chinese"],
+];
+
+export function createSettingsPage({ api, settings: store }: Deps): Page {
+  const body = h("div");
+  const el = h("div", { className: "page settings" }, [
+    pageHeader("Settings", "Changes are saved as you make them."),
+    body,
+  ]);
+
+  return {
+    el,
+    async show() {
+      const [settings, status] = await Promise.all([store.load(), api.getStatus()]);
+      const on = (binding: Binding<boolean>) => toggle(store, settings, binding);
+      body.replaceChildren(
+        section(
+          "Shortcuts",
+          status.shortcuts
+            ? "Write keys joined by +, like Ctrl+Meta+Space or Alt+Shift+D."
+            : status.wayland
+              ? "Global shortcuts are not available on Wayland. Bind “speechify --toggle” to a system shortcut instead."
+              : status.platform === "macos"
+                ? "Speechify cannot see your keyboard yet. Allow it under System Settings › Privacy & Security › Accessibility, then restart it."
+                : "Speechify cannot read the keyboard on this system. Bind “speechify --toggle” to a system shortcut instead.",
+          HOTKEYS.map(([key, label, hint]) =>
+            text(store, settings, {
+              label,
+              hint,
+              placeholder: "Ctrl+Meta+Space",
+              get: (s) => s.hotkeys[key],
+              set: (s, v) => (s.hotkeys[key] = v),
+            }),
+          ),
+        ),
+        section("Dictation", "", [
+          select(store, settings, {
+            label: "Microphone",
+            options: [
+              ["", "System default"],
+              ...status.microphones.map((name): [string, string] => [name, name]),
+            ],
+            get: (s) => s.microphone,
+            set: (s, v) => (s.microphone = v),
+          }),
+          select(store, settings, {
+            label: "Language",
+            hint: "Choosing your language is faster and more accurate than detecting it.",
+            options: LANGUAGES,
+            get: (s) => s.speech.language,
+            set: (s, v) => (s.speech.language = v),
+          }),
+          on({
+            label: "Say “press enter” to send",
+            hint: "Ending with “press enter” presses Enter after typing.",
+            get: (s) => s.press_enter,
+            set: (s, v) => (s.press_enter = v),
+          }),
+          on({
+            label: "Learn from my corrections",
+            hint: "Words you fix in History, and mistakes the nightly review finds, are added to your dictionary.",
+            get: (s) => s.auto_learn,
+            set: (s, v) => (s.auto_learn = v),
+          }),
+        ]),
+        section("While dictating", "", [
+          on({ label: "Play sounds", get: (s) => s.sounds, set: (s, v) => (s.sounds = v) }),
+          on({
+            label: "Mute other audio",
+            hint: "Mutes the speakers while you speak and restores the sound afterwards.",
+            get: (s) => s.mute_while_dictating,
+            set: (s, v) => (s.mute_while_dictating = v),
+          }),
+          on({
+            label: "Always show the bar",
+            hint: "Otherwise it appears only while you dictate.",
+            get: (s) => s.show_bar_always,
+            set: (s, v) => (s.show_bar_always = v),
+          }),
+          on({
+            label: "Open at login",
+            get: (s) => s.launch_at_login,
+            set: (s, v) => (s.launch_at_login = v),
+          }),
+        ]),
+        section(
+          "Privacy",
+          "Everything stays on this computer unless you choose a remote server in Models.",
+          [
+            select(store, settings, {
+              label: "History",
+              hint: "“Don’t keep history” also turns off learning and the nightly review.",
+              options: [
+                ["keep", "Keep"],
+                ["day", "Delete after a day"],
+                ["never", "Don't keep history"],
+              ],
+              get: (s) => s.retention,
+              set: (s, v) => (s.retention = v as Settings["retention"]),
+            }),
+            on({
+              label: "Keep recordings",
+              hint: "Lets you play dictations back and lets the nightly teacher re-listen.",
+              get: (s) => s.keep_audio,
+              set: (s, v) => (s.keep_audio = v),
+            }),
+          ],
+        ),
+        section("Appearance", "", [
+          select(store, settings, {
+            label: "Theme",
+            options: [
+              ["system", "Match the system"],
+              ["light", "Light"],
+              ["dark", "Dark"],
+            ],
+            get: (s) => s.theme,
+            set: (s, v) => (s.theme = v),
+          }),
+        ]),
+        h("p", {
+          className: "about hint",
+          textContent: `Speechify ${status.version} · ${status.platform}`,
+        }),
+      );
+    },
+  };
 }
