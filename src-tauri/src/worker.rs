@@ -138,6 +138,40 @@ fn runtime_dir(app: &AppHandle) -> PathBuf {
         .join("native")
 }
 
+/// Lists compute devices in a child process (`speechify --probe-devices`),
+/// so a GPU driver that crashes while registering cannot crash the app. A
+/// probe that fails or hangs reports no devices, which picks the CPU models.
+fn probe_devices(runtime_dir: &std::path::Path) -> Vec<speechify_core::catalog::Device> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let Ok(exe) = std::env::current_exe() else { return vec![] };
+    let spawned = Command::new(exe)
+        .arg("--probe-devices")
+        .arg(runtime_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn();
+    let Ok(mut child) = spawned else { return vec![] };
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return vec![];
+            }
+        }
+    }
+    let mut out = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_string(&mut out);
+    }
+    serde_json::from_str(out.trim()).unwrap_or_default()
+}
+
 pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> {
     let data_dir = app.path().app_data_dir()?;
     std::fs::create_dir_all(&data_dir)?;
@@ -209,10 +243,9 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
                     return;
                 }
             };
-            // First start: pick the models this machine runs fast. Listing
-            // devices registers the GPU backends, so it comes before any model.
+            // First start: pick the models this machine runs fast.
             if store.get("settings").is_none() {
-                let devices = speechify_core::native::devices(&state.runtime_dir).unwrap_or_default();
+                let devices = probe_devices(&state.runtime_dir);
                 if let Ok(Some(plan)) = speechify_core::catalog::first_run(&store, &devices) {
                     let _ = store.set("first_run_plan", &plan.reason);
                 }
