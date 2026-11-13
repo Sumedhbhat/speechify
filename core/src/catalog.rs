@@ -2,7 +2,7 @@
 
 use crate::http::Http;
 use crate::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -111,7 +111,7 @@ pub fn find(id: &str) -> Result<Model> {
 }
 
 /// What kind of compute device a model could run on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceClass {
     Cpu,
@@ -135,7 +135,7 @@ impl DeviceClass {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Device {
     pub name: String,
     /// The backend: "cpu", "vulkan", "cuda", "metal" and so on.
@@ -316,6 +316,12 @@ mod tests {
         for chosen in [laptop, plan(&[])] {
             assert!(find(chosen.speech_model).is_ok() && find(chosen.teacher_model).is_ok());
         }
+        // Devices travel as JSON from the probe process.
+        let json = serde_json::to_string(&[device(DeviceClass::Gpu, 8188, "RTX")]).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Vec<Device>>(&json).unwrap()[0].class,
+            DeviceClass::Gpu
+        );
         let codes: Vec<DeviceClass> = (0..5).map(DeviceClass::from_code).collect();
         assert_eq!(
             codes,
