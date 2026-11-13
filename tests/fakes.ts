@@ -102,7 +102,8 @@ export function insights(over: Partial<Insights> = {}): Insights {
     median_ms: 820,
     p95_ms: 1900,
     rewritten_share: 0.42,
-    accuracy: 0.93,
+    accuracy: null,
+    teacher_agreement: 0.93,
     reviewed: 12,
     ...over,
   };

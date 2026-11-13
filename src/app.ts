@@ -2,7 +2,7 @@
 
 import type { Deps, Page } from "./deps";
 import { createSettingsStore } from "./settings";
-import { errorText, flashSaved, h, icon, toast, type IconName } from "./ui";
+import { emptyState, errorText, flashSaved, h, icon, toast, type IconName } from "./ui";
 import { createHomePage } from "./pages/home";
 import { createInsightsPage } from "./pages/insights";
 import { createDictionaryPage } from "./pages/dictionary";
@@ -86,7 +86,21 @@ export function createApp(root: HTMLElement, base: Pick<Deps, "api" | "events">)
     }
     content.replaceChildren(page.el);
     content.scrollTop = 0;
-    page.show().catch((error: unknown) => toast(errorText(error), "error"));
+    const shown = page;
+    shown.show().catch((error: unknown) => {
+      // Leave a way back in place of a half-drawn page, unless the user has moved on.
+      if (content.firstChild !== shown.el) return;
+      content.replaceChildren(
+        emptyState("This page did not load", errorText(error), [
+          h("button", {
+            type: "button",
+            className: "btn",
+            textContent: "Try again",
+            onclick: () => navigate(entry.id),
+          }),
+        ]),
+      );
+    });
   }
 
   async function refreshStatus(): Promise<void> {

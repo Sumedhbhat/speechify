@@ -27,11 +27,11 @@ function totals(data: Insights): HTMLElement {
   ]);
 }
 
-function accuracy(data: Insights, navigate: (page: string) => void): HTMLElement {
-  if (data.accuracy === null) {
+function agreement(data: Insights, navigate: (page: string) => void): HTMLElement {
+  if (data.teacher_agreement === null) {
     return emptyState(
-      "No accuracy score yet",
-      "Turn on the nightly teacher and it will re-check your dictations with a bigger model, then show how often the everyday model got them right.",
+      "Nothing reviewed yet",
+      "Turn on the nightly teacher and it will re-check your dictations with a bigger model, then show how often the everyday model heard the same words.",
       [
         h("button", {
           type: "button",
@@ -43,10 +43,10 @@ function accuracy(data: Insights, navigate: (page: string) => void): HTMLElement
     );
   }
   return h("p", { className: "big-figure" }, [
-    h("span", { className: "figure", textContent: percent(data.accuracy) }),
+    h("span", { className: "figure", textContent: percent(data.teacher_agreement) }),
     h("span", {
       className: "hint",
-      textContent: `of words right, from ${plural(data.reviewed, "reviewed dictation")}`,
+      textContent: `of words the same as the nightly teacher heard, from ${plural(data.reviewed, "reviewed dictation")}. The teacher can be wrong too, so this is not a true accuracy score.`,
     }),
   ]);
 }
@@ -104,7 +104,9 @@ function render(data: Insights, navigate: (page: string) => void): HTMLElement[]
           ]),
         ]),
       ]),
-      section("Accuracy", "Measured by the nightly teacher.", [accuracy(data, navigate)]),
+      section("Agreement with the teacher", "Measured by the nightly review.", [
+        agreement(data, navigate),
+      ]),
     ]),
   ];
 }

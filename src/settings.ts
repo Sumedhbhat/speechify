@@ -15,6 +15,8 @@ export interface SettingsStore {
   update(change: (settings: Settings) => void): Promise<string>;
   /** Called after every accepted save. */
   subscribe(listener: (settings: Settings) => void): void;
+  /** The settings once every save started so far has finished. */
+  settled(): Promise<Settings>;
 }
 
 export function createSettingsStore(
@@ -36,19 +38,28 @@ export function createSettingsStore(
   };
 
   const save = async (change: (settings: Settings) => void) => {
+    let next: Settings;
     try {
-      const next = JSON.parse(JSON.stringify(await load())) as Settings;
+      next = JSON.parse(JSON.stringify(await load())) as Settings;
       change(next);
       await api.saveSettings(next);
       loaded = Promise.resolve(next);
-      listeners.forEach((listener) => listener(next));
-      onSaved();
-      return "";
     } catch (error) {
       const message = errorText(error);
       onError(message);
       return message;
     }
+    // The setting is saved; a page that fails to follow along must not make
+    // the control look as if the save was rejected.
+    for (const listener of listeners) {
+      try {
+        listener(next);
+      } catch (error) {
+        console.error(error);
+      }
+    }
+    onSaved();
+    return "";
   };
 
   return {
@@ -61,6 +72,9 @@ export function createSettingsStore(
     },
     subscribe(listener) {
       listeners.push(listener);
+    },
+    settled() {
+      return queue.then(load);
     },
   };
 }

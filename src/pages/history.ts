@@ -20,6 +20,12 @@ export function createHistory({ api, events }: Deps) {
   let query = "";
   let request = 0;
   let editing: number | null = null;
+  // The correction being typed survives redraws (details, paging, deletes).
+  let draft = "";
+  // Each edit gets a number, so a save that finishes after its edit was
+  // cancelled or replaced does not close the edit that is open now.
+  let session = 0;
+  const flagging = new Set<number>();
   let stale = false;
   let audio: HTMLAudioElement | null = null;
   const expanded = new Set<number>();
@@ -31,7 +37,7 @@ export function createHistory({ api, events }: Deps) {
     className: "btn more",
     textContent: "Load more",
     hidden: true,
-    onclick: () => void load(false),
+    onclick: () => void loadOrSay(false),
   });
   const searchInput = h("input", {
     type: "search",
@@ -42,11 +48,11 @@ export function createHistory({ api, events }: Deps) {
   });
   const search = debounce((value: string) => {
     query = value;
-    void load(true);
+    void loadOrSay(true);
   }, 250);
   const clear = confirmButton("Clear history", "Click again to delete everything", () =>
     api.deleteDictations(null).then(
-      () => load(true),
+      () => loadOrSay(true),
       (error: unknown) => toast(errorText(error), "error"),
     ),
   );
@@ -67,7 +73,17 @@ export function createHistory({ api, events }: Deps) {
     if (token !== request) return;
     items = reset ? page : [...items, ...page];
     more.hidden = page.length < PAGE;
+    // An edit whose dictation is no longer listed (a new search) ends.
+    if (editing !== null && !items.some((item) => item.id === editing)) {
+      editing = null;
+      session += 1;
+    }
     render();
+  }
+
+  /** Loads, keeping the current results and saying so if that fails. */
+  function loadOrSay(reset: boolean): Promise<void> {
+    return load(reset).catch((error: unknown) => toast(errorText(error), "error"));
   }
 
   function render(): void {
@@ -175,19 +191,22 @@ export function createHistory({ api, events }: Deps) {
   function editor(item: Dictation): HTMLElement {
     const area = h("textarea", {
       className: "entry-edit",
-      value: item.text,
+      value: draft,
       rows: 3,
       "aria-label": "Corrected text",
+      oninput: () => (draft = area.value),
     });
     const save = async () => {
       const text = area.value.trim();
+      const mine = session;
       try {
         const learned = await api.editDictation(item.id, text);
         if (learned.length)
           toast(`Learned: ${learned.map((r) => `${r.from} → ${r.to}`).join(", ")}`);
         else toast("Correction saved");
         Object.assign(item, { text, edited: text });
-        stopEdit(item);
+        if (mine === session) stopEdit(item);
+        else if (rows.has(item.id) && editing !== item.id) redraw(item);
       } catch (error) {
         toast(errorText(error), "error");
       }
@@ -215,12 +234,17 @@ export function createHistory({ api, events }: Deps) {
   }
 
   function startEdit(item: Dictation): void {
+    const previous = items.find((other) => other.id === editing);
     editing = item.id;
+    draft = item.text;
+    session += 1;
+    if (previous && previous !== item) redraw(previous);
     redraw(item);
   }
 
   function stopEdit(item: Dictation): void {
     editing = null;
+    session += 1;
     if (stale) {
       stale = false;
       void load(true);
@@ -259,12 +283,18 @@ export function createHistory({ api, events }: Deps) {
   }
 
   async function flag(item: Dictation): Promise<void> {
+    // One change at a time per dictation, and the result is what was asked for.
+    if (flagging.has(item.id)) return;
+    flagging.add(item.id);
+    const wanted = !item.flagged;
     try {
-      await api.flagDictation(item.id, !item.flagged);
-      item.flagged = !item.flagged;
-      redraw(item);
+      await api.flagDictation(item.id, wanted);
+      item.flagged = wanted;
+      if (rows.has(item.id)) redraw(item);
     } catch (error) {
       toast(errorText(error), "error");
+    } finally {
+      flagging.delete(item.id);
     }
   }
 

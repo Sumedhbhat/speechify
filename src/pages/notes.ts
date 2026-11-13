@@ -11,6 +11,9 @@ export function createNotesPage({ api }: Deps): Page {
   let notes: Note[] = [];
   let current: Note | null = null;
   let saving: Promise<unknown> = Promise.resolve();
+  // Edits the shell refused to save, kept until a later save succeeds so a
+  // refresh never replaces them with the older stored copy.
+  const unsaved = new Map<number, Note>();
 
   const list = h("ul", { className: "note-list", "aria-label": "Notes" });
   const title = h("input", {
@@ -35,19 +38,25 @@ export function createNotesPage({ api }: Deps): Page {
   ]);
   const pane = h("div", { className: "note-pane" });
 
-  const save = debounce((note: Note) => {
-    note.title = title.value;
-    note.body = body.value;
+  function persist(note: Note): void {
     saving = saving.then(async () => {
       try {
         await api.saveNote(note.id, note.title, note.body);
-        state.textContent = "Saved";
+        unsaved.delete(note.id);
+        if (note === current) state.textContent = "Saved";
         renderList();
       } catch (error) {
-        state.textContent = "Not saved";
+        unsaved.set(note.id, note);
+        if (note === current) state.textContent = "Not saved yet: kept here and tried again";
         toast(errorText(error), "error");
       }
     });
+  }
+
+  const save = debounce((note: Note) => {
+    note.title = title.value;
+    note.body = body.value;
+    persist(note);
   }, SAVE_MS);
 
   function changed(): void {
@@ -154,8 +163,10 @@ export function createNotesPage({ api }: Deps): Page {
     async show() {
       save.flush();
       await saving;
-      notes = await api.notes();
+      notes = (await api.notes()).map((note) => unsaved.get(note.id) ?? note);
       select(notes.find((note) => note.id === current?.id) ?? notes[0] ?? null);
+      // Try the refused edits again now that the user is back.
+      [...unsaved.values()].forEach(persist);
     },
   };
 }

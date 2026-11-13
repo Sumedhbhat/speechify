@@ -220,7 +220,8 @@ export function createModelsPage(deps: Deps): Page {
             disabled: !status.rewrite_reachable,
             onclick: () =>
               void guard(async () => {
-                const current = await store.load();
+                // A model name typed just before clicking may still be saving.
+                const current = await store.settled();
                 pull = { id: current.rewrite.model, done: 0, total: 0, finished: false, error: "" };
                 renderPull();
                 await api.pullRewriteModel(current.rewrite.model);

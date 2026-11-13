@@ -1463,6 +1463,13 @@ details.advanced > .hint {
   box-shadow: none;
 }
 
+.note-editor .note-title:focus-visible,
+.note-editor .note-body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+
 .note-editor .note-title {
   font: 600 28px/1.2 var(--serif);
   margin-bottom: 14px;

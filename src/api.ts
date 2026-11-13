@@ -154,7 +154,8 @@ export interface Insights {
   median_ms: number;
   p95_ms: number;
   rewritten_share: number;
-  accuracy: number | null; // 0..1, from the nightly teacher
+  accuracy: number | null; // reserved for validated accuracy; always null for now
+  teacher_agreement: number | null; // 0..1: how often the everyday model agreed with the nightly teacher
   reviewed: number;
 }
 

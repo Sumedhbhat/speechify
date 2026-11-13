@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { applyTheme, createApp } from "../src/app";
-import { fakeApi, fakeEvents, model, settings, settle, status, toasts } from "./fakes";
+import { byText, fakeApi, fakeEvents, model, toasts, settings, settle, status } from "./fakes";
 
 function setup(api = fakeApi()) {
   const { events, emit } = fakeEvents();
@@ -48,10 +48,28 @@ describe("app shell", () => {
 
   it("reports a page that fails to load", async () => {
     const api = fakeApi();
-    api.getInsights.mockRejectedValue("The database is locked.");
+    api.getInsights.mockRejectedValueOnce("The database is locked.");
     setup(api);
     await settle();
-    expect(toasts()).toContain("The database is locked.");
+    // A lasting message with a way to retry, rather than a passing toast.
+    expect(document.querySelector(".empty-title")!.textContent).toBe("This page did not load");
+    expect(document.body.textContent).toContain("The database is locked.");
+    byText<HTMLButtonElement>(document, "button", "Try again").click();
+    await settle();
+    expect(document.body.textContent).not.toContain("This page did not load");
+    expect(document.querySelector(".page.home .checklist")).not.toBeNull();
+  });
+
+  it("does not cover a page the user has moved on to with an old failure", async () => {
+    const api = fakeApi();
+    let fail: (reason: unknown) => void = () => {};
+    api.getInsights.mockReturnValueOnce(new Promise((_, reject) => (fail = reject)));
+    setup(api);
+    document.querySelector<HTMLButtonElement>('[data-page="notes"]')!.click();
+    fail("The database is locked.");
+    await settle();
+    expect(document.querySelector(".page.notes")).not.toBeNull();
+    expect(document.body.textContent).not.toContain("This page did not load");
   });
 
   it("describes every speech state in the status line", async () => {
