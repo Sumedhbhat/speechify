@@ -1,11 +1,9 @@
+target/
 node_modules/
 dist/
-.build/
-src-tauri/target/
-src-tauri/resources/native/
-artifacts/
 coverage/
+.build/
+src-tauri/resources/native/
+src-tauri/gen/
 *.profraw
-*.profdata
-__pycache__/
-.ruff_cache/
+lcov.info
