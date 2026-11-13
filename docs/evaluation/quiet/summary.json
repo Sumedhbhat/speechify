@@ -1,7 +1,71 @@
 {
+  "wer_excluded": [
+    "whisper-attenuated/ears_p002_02_part1_L50",
+    "whisper-attenuated/ears_p002_02_part1_L55",
+    "whisper-attenuated/ears_p003_02_part2_L50",
+    "whisper-attenuated/ears_p003_02_part2_L55",
+    "whisper-attenuated/ears_p011_02_part1_L50",
+    "whisper-attenuated/ears_p011_02_part1_L55",
+    "whisper-attenuated/ears_p033_01_part1_L50",
+    "whisper-attenuated/ears_p033_01_part1_L55",
+    "whisper-attenuated/ears_p058_01_part2_L50",
+    "whisper-attenuated/ears_p058_01_part2_L55",
+    "whisper-attenuated/ears_p064_01_part1_L50",
+    "whisper-attenuated/ears_p064_01_part1_L55",
+    "whisper-attenuated/ears_p067_02_part1_L50",
+    "whisper-attenuated/ears_p067_02_part1_L55",
+    "whisper-attenuated/ears_p072_01_part2_L50",
+    "whisper-attenuated/ears_p072_01_part2_L55",
+    "whisper-attenuated/ears_p081_02_part1_L50",
+    "whisper-attenuated/ears_p081_02_part1_L55",
+    "whisper-attenuated/ears_p081_02_part2_L50",
+    "whisper-attenuated/ears_p081_02_part2_L55",
+    "whisper/ears_p002_02_part1",
+    "whisper/ears_p002_02_part2",
+    "whisper/ears_p003_02_part1",
+    "whisper/ears_p003_02_part2",
+    "whisper/ears_p007_02_part1",
+    "whisper/ears_p007_02_part2",
+    "whisper/ears_p011_02_part1",
+    "whisper/ears_p011_02_part2",
+    "whisper/ears_p016_01_part1",
+    "whisper/ears_p016_01_part2",
+    "whisper/ears_p023_01_part1",
+    "whisper/ears_p023_01_part2",
+    "whisper/ears_p023_02_part1",
+    "whisper/ears_p023_02_part2",
+    "whisper/ears_p027_01_part1",
+    "whisper/ears_p027_01_part2",
+    "whisper/ears_p031_01_part1",
+    "whisper/ears_p031_01_part2",
+    "whisper/ears_p033_01_part1",
+    "whisper/ears_p033_01_part2",
+    "whisper/ears_p058_01_part1",
+    "whisper/ears_p058_01_part2",
+    "whisper/ears_p061_02_part1",
+    "whisper/ears_p061_02_part2",
+    "whisper/ears_p062_01_part1",
+    "whisper/ears_p062_01_part2",
+    "whisper/ears_p064_01_part1",
+    "whisper/ears_p064_01_part2",
+    "whisper/ears_p067_02_part1",
+    "whisper/ears_p067_02_part2",
+    "whisper/ears_p072_01_part1",
+    "whisper/ears_p072_01_part2",
+    "whisper/ears_p081_02_part1",
+    "whisper/ears_p081_02_part2",
+    "whisper/ears_p084_02_part1",
+    "whisper/ears_p084_02_part2",
+    "whisper/ears_p087_01_part1",
+    "whisper/ears_p087_01_part2",
+    "whisper/ears_p101_01_part1",
+    "whisper/ears_p101_01_part2",
+    "whisper/ears_p104_02_part1",
+    "whisper/ears_p104_02_part2"
+  ],
   "clips": 965,
-  "dev_clips": 441,
-  "report_clips": 524,
+  "dev_clips": 434,
+  "report_clips": 531,
   "threshold": "0.35",
   "sweep_dev": {
     "0.15": {
@@ -9,28 +73,28 @@
       "noise_kept": 37.5609756097561
     },
     "0.25": {
-      "speech_kept": 99.54954954954955,
+      "speech_kept": 99.53488372093024,
       "noise_kept": 12.682926829268293
     },
     "0.35": {
-      "speech_kept": 99.54954954954955,
+      "speech_kept": 99.53488372093024,
       "noise_kept": 9.75609756097561
     },
     "0.5": {
-      "speech_kept": 96.84684684684684,
+      "speech_kept": 96.27906976744185,
       "noise_kept": 6.341463414634147
     },
     "0.65": {
-      "speech_kept": 95.49549549549549,
+      "speech_kept": 95.34883720930233,
       "noise_kept": 3.4146341463414633
     }
   },
   "speech": {
-    "clips": 232,
-    "old_kept": 98.70689655172414,
+    "clips": 239,
+    "old_kept": 98.74476987447699,
     "new_kept": 100.0,
-    "old_wer": 21.381751889946933,
-    "new_wer": 20.342094344409528
+    "old_wer": 16.56172341429475,
+    "new_wer": 15.323424071474296
   },
   "nonspeech": {
     "clips": 290,
@@ -85,25 +149,25 @@
       "new_wer": 17.919219669219668
     },
     "whisper": {
-      "clips": 45,
-      "old_kept": 93.33333333333333,
+      "clips": 48,
+      "old_kept": 93.75,
       "new_kept": 100.0,
-      "old_wer": 38.458698998103465,
-      "new_wer": 32.73786691470812
+      "old_wer": 24.508434605183833,
+      "new_wer": 13.459574797249612
     },
     "whisper -50": {
-      "clips": 11,
+      "clips": 13,
       "old_kept": 100.0,
       "new_kept": 100.0,
-      "old_wer": 25.39061825092867,
-      "new_wer": 23.7377256889452
+      "old_wer": 7.495361781076067,
+      "new_wer": 4.8979591836734695
     },
     "whisper -55": {
-      "clips": 11,
+      "clips": 13,
       "old_kept": 100.0,
       "new_kept": 100.0,
-      "old_wer": 28.09168658392605,
-      "new_wer": 28.313416073948222
+      "old_wer": 11.391465677179962,
+      "new_wer": 11.391465677179962
     }
   },
   "by_kind": {
@@ -199,5 +263,5 @@
     }
   },
   "detector_ms_median": 16.549661,
-  "asr_ms_median": 1428.9700994999998
+  "asr_ms_median": 1435.4199469999999
 }

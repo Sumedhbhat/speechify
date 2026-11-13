@@ -64,8 +64,13 @@ fn ms(since: Instant) -> f64 {
     since.elapsed().as_secs_f64() * 1000.0
 }
 
-/// Stable development/report split, independent of clip order.
-fn split(id: &str) -> &'static str {
+/// Stable development/report split, independent of clip order, by original
+/// recording: parts cut from one take ("..._part1", "..._part2") stay together.
+fn split(family: &str) -> &'static str {
+    let id = family
+        .rsplit_once("_part")
+        .filter(|(_, n)| n.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(family, |(stem, _)| stem);
     let hash = id.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
         (h ^ b as u64).wrapping_mul(0x100_0000_01b3)
     });

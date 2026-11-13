@@ -1,15 +1,20 @@
 """Summarise and chart a `speechify-bench quiet` run.
 
-    uv run --with matplotlib python -I bench/quiet_report.py RESULTS.jsonl OUT_DIR
+    uv run --with matplotlib python -I bench/quiet_report.py RESULTS.jsonl OUT_DIR MANIFEST.json
 
-Reads only the JSON lines the bench wrote. The detector threshold is judged
-on the "dev" half of the clips; every headline number and chart uses the
-other ("report") half, so the threshold was not tuned on what is reported.
+Reads the JSON lines the bench wrote and the clip manifest. Recordings are
+split into a "dev" half, on which thresholds are judged, and a "report" half
+that every headline number and chart uses. The split is by original
+recording: every piece, level and noise variant of one recording lands on
+the same side. Clips whose reference transcript does not match their audio
+(halves of an EARS take carry the whole take's text) count for detection but
+are left out of word error rate.
 Writes summary.json, summary.md and four PNG charts to OUT_DIR.
 """
 
 import json
 import pathlib
+import re
 import statistics
 import sys
 
@@ -62,10 +67,30 @@ def tick(key):
     return key
 
 
+def origin(family):
+    """The original recording a clip came from: EARS takes were cut into parts."""
+    return re.sub(r"_part\d+$", "", family)
+
+
+def split(key):
+    """Same 64-bit FNV-1a rule as bench/src/quiet.rs."""
+    value = 0xCBF29CE484222325
+    for byte in key.encode():
+        value = ((value ^ byte) * 0x100000001B3) % (1 << 64)
+    return "dev" if value % 2 == 0 else "report"
+
+
 def main():
-    results, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+    results, out, manifest = (pathlib.Path(arg) for arg in sys.argv[1:4])
     out.mkdir(parents=True, exist_ok=True)
     rows = [json.loads(line) for line in results.read_text().splitlines() if line.strip()]
+    clips = {clip["id"]: clip for clip in json.loads(manifest.read_text())}
+    for row in rows:
+        clip = clips[row["id"]]
+        row["split"] = split(origin(clip.get("family") or clip["id"]))
+        if clip.get("source", "").startswith("EARS"):
+            for key in ("old", "new"):
+                row[key].pop("wer", None)
     dev = [r for r in rows if r["split"] == "dev"]
     report = [r for r in rows if r["split"] == "report"]
     speech = [r for r in report if r["label"] == "speech"]
@@ -115,6 +140,7 @@ def main():
         for k, v in sorted(kinds.items())
     }
     summary = {
+        "wer_excluded": sorted({r["id"] for r in rows if r["label"] == "speech" and "wer" not in r["new"]}),
         "clips": len(rows),
         "dev_clips": len(dev),
         "report_clips": len(report),

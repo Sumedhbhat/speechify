@@ -761,20 +761,31 @@ audio is used for evaluation only and is not in this repository.
 runs the old loudness trim and the app's own `asr::isolate` on every clip, and
 Parakeet TDT 0.6B v3 on CPU on what each keeps. Word error rate counts a dropped
 recording as every word missed. Recordings are split into a development half and
-a report half by source recording (all levels of one recording on the same
-side). Thresholds were chosen on the development half; every number and chart
-below is from the report half. `bench/quiet_report.py` makes the tables and
-charts.
+a report half by original recording: every piece, level and noise variant of one
+recording is on the same side. Thresholds were chosen on the development half;
+every number and chart below is from the report half.
+`bench/quiet_report.py RESULTS OUT MANIFEST` makes the tables and charts.
 
-### Results (report half: 232 speech, 290 non-speech recordings)
+The EARS whispers are halves of longer takes, but the corpus mirror gives only
+the whole take's transcript. Those 62 clips count towards "kept" but are left
+out of word error rate, which would otherwise charge words that are not in the
+audio as recognition errors.
+
+*Correction, 13 November:* the first version of this section split EARS
+halves of one take onto opposite sides and scored them against whole-take
+transcripts (both found in review). The tables below are recomputed from the
+same per-clip results with the split and scoring fixed. The thresholds still
+come out the same on the corrected development half.
+
+### Results (report half: 239 speech, 290 non-speech recordings)
 
 | | Loudness trim (before) | Detector + gain (after) |
 |---|---:|---:|
 | Speech kept | 98.7% | **100%** |
-| Word error rate, all speech | 21.4% | **20.3%** |
-| Real whispers kept | 93.3% | **100%** |
-| Word error rate, real whispers | 38.5% | **32.7%** |
-| Word error rate, whispers at -50 / -55 dBFS | 25.4% / 28.1% | 23.7% / 28.3% |
+| Word error rate, all scored speech | 16.6% | **15.3%** |
+| Real whispers kept | 93.8% | **100%** |
+| Word error rate, real whispers | 24.5% | **13.5%** |
+| Word error rate, whispers at -50 / -55 dBFS | 7.5% / 11.4% | **4.9%** / 11.4% |
 | Non-speech wrongly passed to the recogniser | 71.0% | **41.7%** |
 | Detector time per recording (median, CPU) | — | 17 ms |
 
@@ -788,10 +799,10 @@ charts.
 
 | Report half | Speech kept | Real whispers kept | WER real whispers | WER whispers -55 dBFS | Non-speech kept |
 |---|---:|---:|---:|---:|---:|
-| Loudness trim (before) | 98.7% | 93.3% | 38.5% | 28.1% | 71.0% |
-| 1. Detector cut only | 97.4% | 95.6% | 46.0% | 57.1% | 15.5% |
-| 2. Cut widened to the loudness span | 97.4% | 95.6% | 37.2% | 44.7% | 15.5% |
-| 3. Plus a second look at 0.15 (shipped) | 100% | 100% | 32.7% | 28.3% | 41.7% |
+| Loudness trim (before) | 98.7% | 93.8% | 24.5% | 11.4% | 71.0% |
+| 1. Detector cut only | 97.5% | 95.8% | 32.3% | 47.5% | 15.5% |
+| 2. Cut widened to the loudness span | 97.5% | 95.8% | 21.8% | 37.1% | 15.5% |
+| 3. Plus a second look at 0.15 (shipped) | 100% | 100% | 13.5% | 11.4% | 41.7% |
 
 The first attempt rejected far more noise but made whispers worse: the detector
 is least sure at the soft start and end of a whisper and cut words there
@@ -811,3 +822,5 @@ second look trades some noise rejection for never losing them.
   development half. It is not a consistent cost, but it is not a gain either.
 - These are CPU numbers with Parakeet. Whisper turbo on a graphics card, and a
   real office laptop microphone, were not measured.
+- Whisper accuracy at -50 and -55 dBFS rests on 13 Expresso clips per level
+  (the EARS ones are excluded from scoring); treat it as indicative.
