@@ -320,6 +320,23 @@ describe("history", () => {
     expect(document.querySelector(".empty")!.textContent).toContain("“milk”");
   });
 
+  it("shows, copies and edits the correction after a reload", async () => {
+    await setup([dictation({ id: 5, text: "See you at for.", edited: "See you at four." })]);
+    const entry = entries()[0]!;
+    expect(entry.querySelector(".entry-text")!.textContent).toBe("See you at four.");
+    action(entry, "copy").click();
+    await settle();
+    expect(ctx.api.copyText).toHaveBeenCalledWith("See you at four.");
+    action(entries()[0]!, "details").click();
+    const detail = entries()[0]!.querySelector(".detail")!.textContent;
+    expect(detail).toContain("TypedSee you at for.");
+    expect(detail).toContain("CorrectedSee you at four.");
+    action(entries()[0]!, "edit").click();
+    expect(document.querySelector<HTMLTextAreaElement>(".entry-edit")!.value).toBe(
+      "See you at four.",
+    );
+  });
+
   it("keeps a half-typed correction when the row redraws", async () => {
     await setup();
     action(entries()[0]!, "edit").click();

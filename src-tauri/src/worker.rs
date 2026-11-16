@@ -255,6 +255,7 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
             let mut controller = Controller::new(desktop, models, store);
             let settings = controller.store.settings();
             controller.engines.preload(&settings);
+            controller.apply_retention();
             let mut checked = Instant::now();
             let mut ticked = Instant::now();
             // Shortcuts received while a blocking operation runs cannot describe
@@ -266,6 +267,8 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
                     break;
                 }
                 if reload && controller.is_idle() {
+                    // A new history setting takes effect at once.
+                    controller.apply_retention();
                     controller.engines.preload(&controller.store.settings());
                     reload = false;
                     accept_after = Instant::now();
@@ -325,6 +328,8 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
                             None
                         } else if checked.elapsed() > Duration::from_secs(60) {
                             checked = Instant::now();
+                            // Dictations kept "for a day" expire even when nobody dictates.
+                            controller.apply_retention();
                             Some(false)
                         } else {
                             None

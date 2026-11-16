@@ -87,6 +87,25 @@ pub trait Engines {
     fn warm(&mut self, settings: &Settings);
 }
 
+/// Whether two snapshots of the focused window belong to the same app. The
+/// process is compared when both are known, otherwise the app name. A window
+/// title can change while the user types, so it does not count.
+fn same_app(now: &Target, then: &Target) -> bool {
+    if !now.process.is_empty() && !then.process.is_empty() {
+        now.process.eq_ignore_ascii_case(&then.process)
+    } else {
+        now.app.eq_ignore_ascii_case(&then.app)
+    }
+}
+
+fn app_name(target: &Target) -> &str {
+    if target.app.is_empty() {
+        "that app"
+    } else {
+        &target.app
+    }
+}
+
 pub struct Controller<P: Platform, E: Engines> {
     pub platform: P,
     pub engines: E,
@@ -305,6 +324,15 @@ impl<P: Platform, E: Engines> Controller<P, E> {
         let os = Os::current();
         let shown = text.trim_end().to_string();
         if !text.is_empty() {
+            // The user may have moved to another app while this was being
+            // recognised; typing there could replace whatever is selected.
+            if !same_app(&self.platform.target(), target) {
+                self.platform.show(Bar::Card {
+                    text: shown,
+                    message: format!("You switched away from {}, so this was not typed", app_name(target)),
+                });
+                return false;
+            }
             if self.platform.focus() == Focus::NotEditable {
                 self.platform.show(Bar::Card {
                     text: shown,
@@ -365,17 +393,32 @@ impl<P: Platform, E: Engines> Controller<P, E> {
             return self.notice("Nothing to paste yet", false, false);
         };
         let target = self.platform.target();
-        if self.deliver(&last.text, &target, false) {
+        if self.deliver(last.edited.as_deref().unwrap_or(&last.text), &target, false) {
             let _ = self.store.set_outcome(last.id, store::Outcome::Pasted);
         }
     }
 
     fn copy_last(&mut self) {
-        let copied = self.store.last().map(|last| self.platform.copy(&last.text));
+        // A correction made in History is what the user wants to reuse.
+        let copied = self
+            .store
+            .last()
+            .map(|last| self.platform.copy(last.edited.as_deref().unwrap_or(&last.text)));
         match copied {
             Some(Ok(())) => self.notice("Copied your last dictation", false, false),
             Some(Err(error)) => self.notice(&error, true, false),
             None => self.notice("Nothing to copy yet", false, false),
+        }
+    }
+
+    /// Applies the history setting now: deletes dictations past their time and
+    /// their recordings. Dictating applies it too, but a change of setting or
+    /// the passing of a day must not wait for the next dictation.
+    pub fn apply_retention(&mut self) {
+        let settings = self.store.settings();
+        let clock = self.platform.clock();
+        for stale in self.store.prune(settings.retention, clock).unwrap_or_default() {
+            self.platform.delete_audio(&stale);
         }
     }
 
@@ -444,6 +487,8 @@ mod tests {
         save_fails: bool,
         selected: Option<String>,
         selection_reads: u32,
+        /// The app focused from now on, if the user switched.
+        switched_to: Option<(&'static str, &'static str)>,
     }
 
     impl Platform for Fake {
@@ -456,9 +501,10 @@ mod tests {
             self.audio.clone()
         }
         fn target(&mut self) -> Target {
+            let (app, process) = self.switched_to.unwrap_or(("Slack", "slack.exe"));
             Target {
-                app: "Slack".into(),
-                process: "slack.exe".into(),
+                app: app.into(),
+                process: process.into(),
                 title: "general".into(),
             }
         }
@@ -648,6 +694,78 @@ mod tests {
                 message: "The clipboard is busy".into()
             }
         );
+    }
+
+    #[test]
+    fn text_is_not_typed_into_an_app_the_user_switched_to() {
+        let mut app = app(&["meeting moved to four", "second note here"]);
+        app.handle(Event::Down(Bind::PushToTalk));
+        app.platform.now += 2000;
+        app.platform.switched_to = Some(("WhatsApp", "whatsapp.exe"));
+        app.handle(Event::Up(Bind::PushToTalk));
+        assert!(!app.platform.log.iter().any(|entry| entry.starts_with("paste")));
+        assert_eq!(
+            app.platform.bars.last().unwrap(),
+            &Bar::Card {
+                text: "Meeting moved to four.".into(),
+                message: "You switched away from Slack, so this was not typed".into()
+            }
+        );
+        assert_eq!(app.store.last().unwrap().outcome, store::Outcome::Copied);
+        // Paste-last types into whatever is focused now: that is the point of it.
+        app.handle(Event::Down(Bind::PasteLast));
+        app.handle(Event::Released);
+        assert!(app
+            .platform
+            .log
+            .last()
+            .unwrap()
+            .starts_with("paste:Meeting moved to four."));
+    }
+
+    #[test]
+    fn apps_are_matched_by_process_or_by_name() {
+        let target = |app: &str, process: &str| Target {
+            app: app.into(),
+            process: process.into(),
+            title: "x".into(),
+        };
+        assert!(same_app(&target("Slack", "Slack.EXE"), &target("Slack", "slack.exe")));
+        assert!(!same_app(&target("Slack", "slack.exe"), &target("Slack", "teams.exe")));
+        assert!(same_app(&target("Notes", ""), &target("notes", "notes.app")));
+        assert!(!same_app(&target("Notes", ""), &target("Mail", "")));
+        assert_eq!(app_name(&target("", "")), "that app");
+    }
+
+    #[test]
+    fn paste_and_copy_last_use_the_corrected_text() {
+        let mut app = app(&["see you at for"]);
+        dictate(&mut app);
+        let last = app.store.last().unwrap();
+        app.store.set_edited(last.id, "See you at four.").unwrap();
+        app.handle(Event::Down(Bind::PasteLast));
+        app.handle(Event::Released);
+        assert!(app.platform.log.last().unwrap().starts_with("paste:See you at four."));
+        app.handle(Event::Down(Bind::CopyLast));
+        assert_eq!(app.platform.log.last().unwrap(), "copy:See you at four.");
+    }
+
+    #[test]
+    fn retention_applies_without_waiting_for_a_dictation() {
+        let mut app = app(&[]);
+        let old = store::Dictation {
+            audio: "old.wav".into(),
+            created_at: 1_700_000_000,
+            text: "old".into(),
+            ..store::Dictation::default()
+        };
+        app.store.add_dictation(&old).unwrap();
+        app.apply_retention();
+        assert_eq!(app.store.all().unwrap().len(), 1);
+        set(&mut app, |s| s.retention = Retention::Day);
+        app.apply_retention();
+        assert!(app.store.all().unwrap().is_empty());
+        assert!(app.platform.log.contains(&"delete:old.wav".to_string()));
     }
 
     #[test]

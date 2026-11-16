@@ -15,6 +15,11 @@ import { confirmButton, debounce, emptyState, errorText, h, iconButton, toast } 
 
 const PAGE = 50;
 
+/** What the user wants from a dictation: their correction, if they made one. */
+function shown(item: Dictation): string {
+  return item.edited ?? item.text;
+}
+
 export function createHistory({ api, events }: Deps) {
   let items: Dictation[] = [];
   let query = "";
@@ -158,7 +163,7 @@ export function createHistory({ api, events }: Deps) {
       ]),
       editing === item.id
         ? editor(item)
-        : h("p", { className: "entry-text", textContent: item.text }),
+        : h("p", { className: "entry-text", textContent: shown(item) }),
       actions,
       open && detail(item),
     ]);
@@ -173,6 +178,7 @@ export function createHistory({ api, events }: Deps) {
     return h("dl", { className: "detail" }, [
       ...pair("Heard", item.raw),
       ...pair("Typed", item.text),
+      ...(item.edited === null ? [] : pair("Corrected", item.edited)),
       ...(item.teacher_text === null ? [] : pair("Teacher's version", item.teacher_text)),
       ...pair(
         "Timing",
@@ -204,7 +210,8 @@ export function createHistory({ api, events }: Deps) {
         if (learned.length)
           toast(`Learned: ${learned.map((r) => `${r.from} → ${r.to}`).join(", ")}`);
         else toast("Correction saved");
-        Object.assign(item, { text, edited: text });
+        // The shell keeps what was typed and stores the correction beside it.
+        item.edited = text;
         if (mine === session) stopEdit(item);
         else if (rows.has(item.id) && editing !== item.id) redraw(item);
       } catch (error) {
@@ -236,7 +243,7 @@ export function createHistory({ api, events }: Deps) {
   function startEdit(item: Dictation): void {
     const previous = items.find((other) => other.id === editing);
     editing = item.id;
-    draft = item.text;
+    draft = shown(item);
     session += 1;
     if (previous && previous !== item) redraw(previous);
     redraw(item);
@@ -260,7 +267,7 @@ export function createHistory({ api, events }: Deps) {
 
   async function copy(item: Dictation): Promise<void> {
     try {
-      await api.copyText(item.text);
+      await api.copyText(shown(item));
       toast("Copied");
     } catch (error) {
       toast(errorText(error), "error");
