@@ -70,16 +70,15 @@ def fetch_detector(dest: pathlib.Path) -> bool:
     return True
 
 
-LIBRARY = {"Windows": "transcribe.dll", "Darwin": "libtranscribe.dylib"}.get(platform.system(), "libtranscribe.so")
-
-
 def installed(marker: pathlib.Path, digest: str) -> bool:
-    """The pinned runtime is unpacked here: the marker matches and the library exists."""
+    """The pinned runtime is unpacked here: the marker matches, and every file
+    it lists is present (the library and its companions, such as ggml.dll)."""
     try:
-        recorded = json.loads(marker.read_text()).get("sha256")
-    except (OSError, ValueError, AttributeError):
+        recorded = json.loads(marker.read_text())
+        files = recorded["files"]
+    except (OSError, ValueError, AttributeError, KeyError, TypeError):
         return False
-    return recorded == digest and (marker.parent / LIBRARY).is_file()
+    return recorded.get("sha256") == digest and bool(files) and all((marker.parent / f).is_file() for f in files)
 
 
 def main() -> int:
@@ -101,6 +100,7 @@ def main() -> int:
         print("Checksum mismatch: refusing to unpack the download", file=sys.stderr)
         return 1
     dest.mkdir(parents=True, exist_ok=True)
+    files = []
     with zipfile.ZipFile(io.BytesIO(data)) as wheel:
         for name in wheel.namelist():
             if name.endswith("/"):
@@ -117,7 +117,8 @@ def main() -> int:
                 return 1
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(wheel.read(name))
-    marker.write_text(json.dumps({"version": VERSION, "url": url, "sha256": digest}, indent=2) + "\n")
+            files.append(target.relative_to(dest).as_posix())
+    marker.write_text(json.dumps({"version": VERSION, "url": url, "sha256": digest, "files": files}, indent=2) + "\n")
     print(f"Unpacked to {dest}")
     return 0 if fetch_detector(dest) else 1
 

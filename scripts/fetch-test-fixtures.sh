@@ -20,13 +20,23 @@ token_model="$root/.build/models/parakeet-tdt_ctc-110m-Q4_K_M.gguf"
 mkdir -p "$root/.build" "$(dirname "$model")"
 check() { "$python" -c "import hashlib,sys; sys.exit(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest() != sys.argv[2])" "$1" "$2"; }
 fetch() {
-  if ! { [ -f "$1" ] && check "$1" "$3"; }; then
-    # Download beside the target and move it in only once it checks out, so a
-    # bad download never sits in the cache.
-    curl --fail --location --silent --show-error --retry 3 -o "$1.part" "$2"
-    check "$1.part" "$3" || { rm -f "$1.part"; echo "The checksum of $1 does not match" >&2; exit 1; }
-    mv "$1.part" "$1"
+  if [ -f "$1" ] && check "$1" "$3"; then
+    return 0
   fi
+  # Nothing invalid stays in the cache: drop a bad copy first, download beside
+  # the target, and move it in only once it checks out.
+  rm -f "$1" "$1.part"
+  if ! curl --fail --location --silent --show-error --retry 3 -o "$1.part" "$2"; then
+    rm -f "$1.part"
+    echo "Could not download $2" >&2
+    exit 1
+  fi
+  if ! check "$1.part" "$3"; then
+    rm -f "$1.part"
+    echo "The checksum of $1 does not match" >&2
+    exit 1
+  fi
+  mv "$1.part" "$1"
 }
 fetch "$model" "$url" "$sha"
 fetch "$token_model" "$token_url" "$token_sha"

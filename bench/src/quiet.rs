@@ -90,8 +90,13 @@ pub fn run(manifest: &Path, output: &Path, model: &str, asr: bool) -> Result<()>
     let results = output.join("results.jsonl");
     // A run stopped mid-write leaves a partial last line; drop it so the clip
     // runs again and the next row starts on a fresh line.
-    let existing = fs::read_to_string(&results).unwrap_or_default();
-    let complete = existing.rfind('\n').map_or(0, |at| at + 1);
+    // Work on bytes: the cut can fall inside a multi-byte character.
+    let existing = match fs::read(&results) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(format!("{}: {error}", results.display())),
+    };
+    let complete = existing.iter().rposition(|byte| *byte == b'\n').map_or(0, |at| at + 1);
     if complete < existing.len() {
         let file = fs::OpenOptions::new()
             .write(true)
@@ -99,7 +104,7 @@ pub fn run(manifest: &Path, output: &Path, model: &str, asr: bool) -> Result<()>
             .map_err(|e| e.to_string())?;
         file.set_len(complete as u64).map_err(|e| e.to_string())?;
     }
-    let done: HashSet<String> = existing[..complete]
+    let done: HashSet<String> = String::from_utf8_lossy(&existing[..complete])
         .lines()
         .filter_map(|line| {
             serde_json::from_str::<Value>(line).ok()?["id"]
