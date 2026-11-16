@@ -70,6 +70,18 @@ def fetch_detector(dest: pathlib.Path) -> bool:
     return True
 
 
+LIBRARY = {"Windows": "transcribe.dll", "Darwin": "libtranscribe.dylib"}.get(platform.system(), "libtranscribe.so")
+
+
+def installed(marker: pathlib.Path, digest: str) -> bool:
+    """The pinned runtime is unpacked here: the marker matches and the library exists."""
+    try:
+        recorded = json.loads(marker.read_text()).get("sha256")
+    except (OSError, ValueError, AttributeError):
+        return False
+    return recorded == digest and (marker.parent / LIBRARY).is_file()
+
+
 def main() -> int:
     root = pathlib.Path(__file__).resolve().parents[1]
     dest = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else root / "src-tauri" / "resources" / "native"
@@ -79,7 +91,7 @@ def main() -> int:
         return 1
     path, digest = WHEELS[key]
     marker = dest / "provenance.json"
-    if marker.exists() and json.loads(marker.read_text()).get("sha256") == digest:
+    if installed(marker, digest):
         print(f"Speech runtime {VERSION} already in {dest}")
         return 0 if fetch_detector(dest) else 1
     url = f"{BASE}/{path}"
@@ -99,6 +111,10 @@ def main() -> int:
                 target = dest / "licenses" / name.split("/licenses/", 1)[1]
             else:
                 continue
+            # Never write outside the destination, whatever the archive says.
+            if not target.resolve().is_relative_to(dest.resolve()):
+                print(f"Refusing to unpack {name}: it points outside {dest}", file=sys.stderr)
+                return 1
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(wheel.read(name))
     marker.write_text(json.dumps({"version": VERSION, "url": url, "sha256": digest}, indent=2) + "\n")

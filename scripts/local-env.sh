@@ -6,7 +6,14 @@ export PKG_CONFIG_SYSROOT_DIR="$SPEECHIFY_SYSROOT"
 export PKG_CONFIG_PATH="$_lib/pkgconfig:$SPEECHIFY_SYSROOT/usr/share/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
 export LIBRARY_PATH="$_lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
 export LD_LIBRARY_PATH="$_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export C_INCLUDE_PATH="$SPEECHIFY_SYSROOT/usr/include:$SPEECHIFY_SYSROOT/usr/include/x86_64-linux-gnu"
-export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-L native=$_lib -C link-arg=-Wl,-rpath-link,$_lib"
+_include="$SPEECHIFY_SYSROOT/usr/include:$SPEECHIFY_SYSROOT/usr/include/x86_64-linux-gnu"
+export C_INCLUDE_PATH="$_include${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
+export CPLUS_INCLUDE_PATH="$_include${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
+# Add the link flags once, however many times this file is sourced.
+_flags="-L native=$_lib -C link-arg=-Wl,-rpath-link,$_lib"
+case " ${RUSTFLAGS:-} " in
+  *" $_flags "*) ;;
+  *) export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$_flags" ;;
+esac
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-3}"
-unset _lib
+unset _lib _include _flags

@@ -98,7 +98,7 @@ The logic lives in `core/`, which never touches a device. `os/` talks to the mic
 
 ## Privacy
 
-Everything stays on the machine: one SQLite database plus WAV recordings in the app data folder. There is no telemetry and there are no accounts. The app only uses the network to download speech models from Hugging Face, to ask Ollama to pull a model, and to reach servers you set up yourself (a language-model server or an optional remote speech server). In Settings you can keep history forever, for a day, or not at all, and choose whether recordings are kept.
+Everything stays on the machine unless you point Speechify at a server on another computer: one SQLite database plus WAV recordings in the app data folder. There is no telemetry and there are no accounts. The app only uses the network to download speech models from Hugging Face, to ask Ollama to pull a model, and to reach servers you set up yourself. Ollama on this machine keeps everything local. A remote speech server receives the recording of each dictation. A remote language-model server receives the words you dictated, the name and window title of the app you are typing into, and your dictionary terms and worked examples. In Settings you can keep history forever, for a day, or not at all, and choose whether recordings are kept.
 
 ## Building and testing
 

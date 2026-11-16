@@ -35,11 +35,13 @@ If a release for that tag exists already, the publish step prints a notice and e
 ```
 git switch main
 git switch -c release/0.2                 # branch from main at the commit to ship
-# set version = "0.2.0" in the root Cargo.toml, commit, push
+# set version = "0.2.0" in the root Cargo.toml, then refresh the lock file:
+cargo update --workspace                  # CI builds with --locked, so Cargo.lock must match
+git commit -am "Release 0.2.0"
 git push -u origin release/0.2
 ```
 
-That builds and publishes `v0.2.0`. Concurrent runs on `release/*` are never cancelled, so no patch release is skipped.
+That builds and publishes `v0.2.0`. A run already going on a `release/*` branch is never cancelled. GitHub keeps only one pending run per branch, though: if you push twice while a release is building, the first of the two waiting runs is dropped. Push one patch release at a time and let it finish before pushing the next.
 
 ## Patch releases
 
@@ -47,7 +49,7 @@ Fixes ship from the release branch they belong to.
 
 1. Land the fix on `main` first (or cherry-pick it from there).
 2. Cherry-pick it onto `release/0.2`.
-3. Bump the patch version in `Cargo.toml` (0.2.0 to 0.2.1) in the same push, so the workflow has a new tag to create.
+3. Bump the patch version in `Cargo.toml` (0.2.0 to 0.2.1), run `cargo update --workspace`, and commit `Cargo.lock` with it in the same push, so the workflow has a new tag to create and the `--locked` build passes.
 
 
 ## Dependencies

@@ -3,7 +3,7 @@
 ## Commands
 
 ```
-bash scripts/fetch-test-fixtures.sh   # once: speech runtime + a 46 MB test model, writes .build/test-env.sh
+bash scripts/fetch-test-fixtures.sh   # speech runtime + two test models (46 MB and 90 MB), writes .build/test-env.sh
 source .build/test-env.sh
 cargo test --workspace --locked       # Rust tests
 npm test                              # interface tests (Vitest, jsdom)
@@ -12,9 +12,9 @@ bash scripts/coverage.sh              # the coverage gate
 
 On Windows run the script under Git Bash and pass `python`: `bash scripts/fetch-test-fixtures.sh python`.
 
-`fetch-test-fixtures.sh` runs `fetch-native.py`, then downloads Whisper tiny.en (Q8_0, pinned by revision and SHA-256, cached in `.build/models`) and writes `.build/test-env.sh`. That file sets `SPEECHIFY_NATIVE_DIR` and `SPEECHIFY_TEST_MODEL`.
+`fetch-test-fixtures.sh` runs `fetch-native.py`, then downloads two models pinned by revision and SHA-256 and cached in `.build/models`: Whisper tiny.en (Q8_0, 46 MB) and Parakeet TDT/CTC 110M (Q4_K_M, 90 MB, the only small model that reports per-word confidence). It writes `.build/test-env.sh`, which sets `SPEECHIFY_NATIVE_DIR`, `SPEECHIFY_TEST_MODEL` and `SPEECHIFY_TEST_TOKEN_MODEL`. Rerunning it is cheap: files that match their checksums are not downloaded again.
 
-The speech-engine tests in `core/src/native.rs` run against the real runtime and that model, using `core/tests/fixtures/jfk.wav`. Without the two variables they skip, unless `SPEECHIFY_REQUIRE_NATIVE=1` is set, in which case they fail. CI and `coverage.sh` set it, so a missing runtime cannot pass quietly.
+The speech-engine tests in `core/src/native.rs` run against the real runtime and those models, using `core/tests/fixtures/jfk.wav`. Without the variables they skip, unless `SPEECHIFY_REQUIRE_NATIVE=1` is set, in which case they fail. CI and `coverage.sh` set it, so a missing runtime cannot pass quietly.
 
 Useful narrower runs:
 

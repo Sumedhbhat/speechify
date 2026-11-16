@@ -67,6 +67,11 @@ def tick(key):
     return key
 
 
+def median(values):
+    """The median, or None when nothing was measured (a run without recognition)."""
+    return statistics.median(values) if values else None
+
+
 def origin(family):
     """The original recording a clip came from: EARS takes were cut into parts."""
     return re.sub(r"_part\d+$", "", family)
@@ -161,8 +166,8 @@ def main():
         "background_speech": {"clips": len(background), "new_kept": share(background, lambda r: r["new"]["kept"])},
         "by_level": by_level,
         "by_kind": by_kind,
-        "detector_ms_median": statistics.median(r["new"]["ms"] for r in rows) if rows else None,
-        "asr_ms_median": statistics.median(r["new"]["asr_ms"] for r in speech if r["new"].get("asr_ms")) if speech else None,
+        "detector_ms_median": median([r["new"]["ms"] for r in rows]),
+        "asr_ms_median": median([r["new"]["asr_ms"] for r in speech if r["new"].get("asr_ms") is not None]),
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 
@@ -277,7 +282,8 @@ def main():
 
 def examples(rows, path):
     """Each recording's loudness over time, with what each method kept."""
-    fig, axes = plt.subplots(len(rows), 1, figsize=(9, 1.95 * len(rows)), dpi=150)
+    fig, grid = plt.subplots(len(rows), 1, figsize=(9, 1.95 * len(rows)), dpi=150, squeeze=False)
+    axes = [row[0] for row in grid]
     fig.suptitle("What each method kept, on real recordings", x=0.035, ha="left", fontsize=12, fontweight="bold", color=INK)
     for ax, row in zip(axes, rows):
         env = row["envelope_db"]

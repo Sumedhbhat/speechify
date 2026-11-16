@@ -17,12 +17,15 @@ token_model="$root/.build/models/parakeet-tdt_ctc-110m-Q4_K_M.gguf"
 
 "$python" "$root/scripts/fetch-native.py"
 
-mkdir -p "$(dirname "$model")"
+mkdir -p "$root/.build" "$(dirname "$model")"
 check() { "$python" -c "import hashlib,sys; sys.exit(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest() != sys.argv[2])" "$1" "$2"; }
 fetch() {
   if ! { [ -f "$1" ] && check "$1" "$3"; }; then
-    curl --fail --location --silent --show-error --retry 3 -o "$1" "$2"
-    check "$1" "$3" || { echo "The checksum of $1 does not match" >&2; exit 1; }
+    # Download beside the target and move it in only once it checks out, so a
+    # bad download never sits in the cache.
+    curl --fail --location --silent --show-error --retry 3 -o "$1.part" "$2"
+    check "$1.part" "$3" || { rm -f "$1.part"; echo "The checksum of $1 does not match" >&2; exit 1; }
+    mv "$1.part" "$1"
   fi
 }
 fetch "$model" "$url" "$sha"

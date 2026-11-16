@@ -12,7 +12,9 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-[ -f .build/test-env.sh ] || bash scripts/fetch-test-fixtures.sh
+# Always run it: it is cheap when the cache is valid, and it rewrites
+# test-env.sh if the checkout moved or a model file went missing.
+bash scripts/fetch-test-fixtures.sh
 source .build/test-env.sh
 export SPEECHIFY_REQUIRE_NATIVE=1
 

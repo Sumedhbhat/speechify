@@ -11,6 +11,7 @@ compiler and pkg-config at it. Nothing is installed system-wide.
 
 import concurrent.futures
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -31,10 +32,16 @@ def main() -> int:
     root = pathlib.Path(__file__).resolve().parents[1]
     sysroot = pathlib.Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else root / ".build" / "sysroot"
     debs = sysroot.parent / "debs"
+    # Start clean, so packages from an earlier run (possibly older versions)
+    # are never extracted over this run's.
+    shutil.rmtree(debs, ignore_errors=True)
     debs.mkdir(parents=True, exist_ok=True)
     sysroot.mkdir(parents=True, exist_ok=True)
     plan = subprocess.check_output(["apt-get", "-s", "install", "--no-install-recommends", *PACKAGES], text=True)
-    names = [line.split()[1] for line in plan.splitlines() if line.startswith("Inst ")]
+    # apt lists only what it would install; packages already on this machine
+    # are missing from the plan but still needed in the sysroot.
+    planned = [line.split()[1] for line in plan.splitlines() if line.startswith("Inst ")]
+    names = sorted(set(planned) | set(PACKAGES))
 
     def fetch(name: str) -> None:
         subprocess.run(["apt-get", "download", name], cwd=debs, check=True, stdout=subprocess.DEVNULL)

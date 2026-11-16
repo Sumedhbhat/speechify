@@ -822,5 +822,6 @@ second look trades some noise rejection for never losing them.
   development half. It is not a consistent cost, but it is not a gain either.
 - These are CPU numbers with Parakeet. Whisper turbo on a graphics card, and a
   real office laptop microphone, were not measured.
-- Whisper accuracy at -50 and -55 dBFS rests on 13 Expresso clips per level
-  (the EARS ones are excluded from scoring); treat it as indicative.
+- Whisper accuracy at -50 and -55 dBFS rests on 7 scored Expresso clips per
+  level; the other 6 of the 13 report-half clips at each level are EARS clips,
+  counted for detection but not scored. Treat it as indicative.
