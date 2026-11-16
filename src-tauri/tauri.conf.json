@@ -3,63 +3,57 @@
   "productName": "Speechify",
   "identifier": "org.sumedhbhat.speechify",
   "build": {
-    "beforeBuildCommand": "npm run build",
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "main",
         "title": "Speechify",
-        "width": 1060,
-        "height": 740,
-        "minWidth": 520,
-        "minHeight": 420
+        "url": "index.html",
+        "width": 1040,
+        "height": 720,
+        "minWidth": 820,
+        "minHeight": 560,
+        "visible": false,
+        "center": true
+      },
+      {
+        "label": "bar",
+        "title": "Speechify bar",
+        "url": "bar.html",
+        "width": 220,
+        "height": 48,
+        "visible": false,
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "focusable": false,
+        "visibleOnAllWorkspaces": true,
+        "acceptFirstMouse": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data:; connect-src ipc: http://ipc.localhost"
     }
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "deb"
-    ],
-    "resources": [
-      "resources/native/**/*",
-      "resources/exception-worker.py",
-      "resources/install-exception.py",
-      "resources/training/**/*",
-      "resources/requirements/*",
-      "resources/exception-models.json"
-    ],
-    "shortDescription": "Hold a key, talk, and paste the text locally",
-    "category": "Utility",
-    "linux": {
-      "deb": {
-        "depends": [
-          "libwebkit2gtk-4.1-0",
-          "libgtk-3-0t64",
-          "libayatana-appindicator3-1",
-          "libasound2t64",
-          "xclip",
-          "xdotool"
-        ]
-      }
-    },
-    "macOS": {
-      "infoPlist": "Info.plist",
-      "entitlements": "Entitlements.plist"
-    },
-    "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
-    ]
+    "targets": ["nsis", "deb", "app", "dmg"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "resources": ["resources/native/**/*"],
+    "category": "Productivity",
+    "shortDescription": "Local voice dictation",
+    "longDescription": "Hold a shortcut, speak, and clean text is typed into any app. Runs open-source models on your own machine.",
+    "macOS": { "minimumSystemVersion": "12.0", "entitlements": "Entitlements.plist", "infoPlist": "Info.plist" },
+    "linux": { "deb": { "depends": ["libasound2t64"] } }
   }
 }
