@@ -1,273 +1,393 @@
-use crate::{config::Result, native::Native};
-use serde_json::{json, Value};
-use std::{
-    io::{BufRead, BufReader, Read, Write},
-    path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
-    sync::{
-        atomic::{AtomicU32, Ordering},
-        Arc, Mutex,
-    },
-    time::Instant,
-};
-pub fn serve(dir: &Path, model: &Path, device: &str, threads: i32) -> Result<()> {
-    #[cfg(unix)]
-    {
-        let parent = unsafe { libc::getppid() };
-        std::thread::spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            if unsafe { libc::getppid() } != parent {
-                std::process::exit(1);
+//! The threads behind the window: one polls the keyboard, one runs dictation.
+
+use crate::desktop::Desktop;
+use crate::models::{Models, SpeechStatus};
+use speechify_core::app::Controller;
+use speechify_core::hotkey::{Edge, Key, Tracker};
+use speechify_core::session::Event;
+use speechify_core::store::Store;
+use speechify_os::keys::Keyboard;
+use std::collections::{BTreeSet, HashMap};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter, Manager};
+
+pub enum Msg {
+    Input(Event),
+    /// Settings changed: models may need reloading.
+    Reload,
+    /// Run the nightly review now.
+    Teacher,
+    /// Explicit cold-start CLI action, applied after model preload.
+    StartupToggle,
+    Quit,
+}
+
+struct Queued {
+    message: Msg,
+    at: Instant,
+}
+
+/// State shared between the worker, the key thread and the UI commands.
+pub struct Shared {
+    tx: Mutex<Sender<Queued>>,
+    /// The UI's own database connection (the worker has another).
+    db: Mutex<Store>,
+    tracker: Mutex<Option<Tracker>>,
+    binding_revision: AtomicUsize,
+    pub speech: Arc<Mutex<SpeechStatus>>,
+    pub teacher_running: AtomicBool,
+    pub quitting: Arc<AtomicBool>,
+    /// Number of queued input messages, so a running review yields.
+    wanted: AtomicUsize,
+    /// Cancel flags for model downloads in progress.
+    pub downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    pub data_dir: PathBuf,
+    pub runtime_dir: PathBuf,
+    pub keyboard_available: bool,
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+impl Shared {
+    pub fn send(&self, msg: Msg) {
+        let input = matches!(msg, Msg::Input(_));
+        if input {
+            // Count queued input rather than resetting a flag at review start:
+            // a start already in the channel must also interrupt the review.
+            self.wanted.fetch_add(1, Ordering::SeqCst);
+        }
+        if lock(&self.tx)
+            .send(Queued {
+                message: msg,
+                at: Instant::now(),
+            })
+            .is_err()
+        {
+            if input {
+                self.wanted.fetch_sub(1, Ordering::SeqCst);
             }
-        });
+            let mut status = lock(&self.speech);
+            status.ready = false;
+            status.error = "The dictation worker stopped. Restart Speechify to continue.".into();
+        }
     }
-    let t = Instant::now();
-    let loaded = Native::open(dir, model, device, threads).or_else(|e| {
-        if device != "cpu" {
-            Native::open(dir, model, "cpu", threads)
-                .map_err(|f| format!("GPU load failed ({e}); CPU load failed ({f})"))
-        } else {
-            Err(e)
+
+    pub fn quit(&self, app: &AppHandle) {
+        self.quitting.store(true, Ordering::SeqCst);
+        // Let the owning thread close the microphone and restore system sound
+        // before exiting. If it has already stopped, its resources are gone.
+        if lock(&self.tx)
+            .send(Queued {
+                message: Msg::Quit,
+                at: Instant::now(),
+            })
+            .is_err()
+        {
+            app.exit(0);
         }
-    })?;
-    println!(
-        "{}",
-        json!({"ready":true,"device":loaded.device,"load_ms":t.elapsed().as_secs_f64()*1000.})
-    );
-    std::io::stdout().flush().map_err(crate::config::err)?;
-    let mut engine = Some(loaded);
-    for line in std::io::stdin().lock().lines() {
-        let line = line.map_err(crate::config::err)?;
-        if line.len() > 32768 {
-            return Err("Worker message too large".into());
+    }
+
+    pub fn db(&self) -> MutexGuard<'_, Store> {
+        lock(&self.db)
+    }
+
+    pub fn models_dir(&self) -> PathBuf {
+        self.data_dir.join("models")
+    }
+
+    pub fn audio_dir(&self) -> PathBuf {
+        self.data_dir.join("audio")
+    }
+
+    /// Rebuilds the shortcut tracker from settings. Called after a save.
+    pub fn rebind(&self) -> speechify_core::Result<()> {
+        let tracker = Tracker::new(&self.db().settings().hotkeys)?;
+        *lock(&self.tracker) = Some(tracker);
+        self.binding_revision.fetch_add(1, Ordering::Release);
+        Ok(())
+    }
+}
+
+/// Where the bundled speech runtime lives. `SPEECHIFY_NATIVE_DIR` overrides
+/// it when running from source.
+fn runtime_dir(app: &AppHandle) -> PathBuf {
+    // Only builds from source honour the override; an installed app always
+    // loads the runtime it shipped with.
+    if let Some(dir) = std::env::var_os("SPEECHIFY_NATIVE_DIR").filter(|_| cfg!(debug_assertions)) {
+        return PathBuf::from(dir);
+    }
+    let bundled = app
+        .path()
+        .resource_dir()
+        .map(|dir| dir.join("resources").join("native"))
+        .unwrap_or_default();
+    // A debug build run from source also finds the runtime in the source
+    // tree. A release build only ever uses its bundled copy; if that is
+    // missing, loading fails and names the bundled path.
+    if bundled.exists() || !cfg!(debug_assertions) {
+        return bundled;
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join("native")
+}
+
+/// Lists compute devices in a child process (`speechify --probe-devices`),
+/// so a GPU driver that crashes while registering cannot crash the app. A
+/// probe that fails or hangs reports no devices, which picks the CPU models.
+fn probe_devices(runtime_dir: &std::path::Path) -> Vec<speechify_core::catalog::Device> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let Ok(exe) = std::env::current_exe() else { return vec![] };
+    let spawned = Command::new(exe)
+        .arg("--probe-devices")
+        .arg(runtime_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn();
+    let Ok(mut child) = spawned else { return vec![] };
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return vec![];
+            }
         }
-        let request: Value = serde_json::from_str(&line).map_err(crate::config::err)?;
-        let start = Instant::now();
-        let result: Result<String> = (|| {
-            let audio =
-                crate::audio::load(Path::new(request["wav"].as_str().ok_or("Missing WAV")?))?;
-            let lang = request["language"].as_str().unwrap_or("en");
-            let prompt = request["prompt"].as_str().unwrap_or("");
-            let first = engine
+    }
+    let mut out = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_string(&mut out);
+    }
+    serde_json::from_str(out.trim()).unwrap_or_default()
+}
+
+pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> {
+    let data_dir = app.path().app_data_dir()?;
+    std::fs::create_dir_all(&data_dir)?;
+    let db_path = data_dir.join("speechify.db");
+    let (tx, rx) = channel();
+    // The key reader is tied to the thread that creates it, so this one only
+    // answers "can we read keys at all?".
+    let keyboard_available = Keyboard::new().available();
+    let shared = Arc::new(Shared {
+        tx: Mutex::new(tx),
+        db: Mutex::new(Store::open(&db_path)?),
+        tracker: Mutex::new(None),
+        binding_revision: AtomicUsize::new(0),
+        speech: Arc::new(Mutex::new(SpeechStatus::default())),
+        teacher_running: AtomicBool::new(false),
+        quitting: Arc::new(AtomicBool::new(false)),
+        wanted: AtomicUsize::new(0),
+        downloads: Mutex::new(HashMap::new()),
+        runtime_dir: runtime_dir(&app),
+        data_dir,
+        keyboard_available,
+    });
+    // Unusable shortcuts in a hand-edited database must not stop the app.
+    let _ = shared.rebind();
+
+    // Keyboard thread: turns key state into shortcut events.
+    let keys = shared.clone();
+    std::thread::spawn(move || {
+        let keyboard = Keyboard::new();
+        if !keyboard.available() {
+            return; // No 83 Hz wakeups when global shortcuts cannot work.
+        }
+        let mut previous = Vec::new();
+        let mut revision = 0;
+        loop {
+            std::thread::sleep(Duration::from_millis(12));
+            let names = keyboard.pressed();
+            let current_revision = keys.binding_revision.load(Ordering::Acquire);
+            if names == previous && current_revision == revision {
+                continue;
+            }
+            revision = current_revision;
+            previous.clone_from(&names);
+            let pressed: BTreeSet<Key> = names.iter().map(|name| Key::from_name(name)).collect();
+            let edges = lock(&keys.tracker)
                 .as_mut()
-                .ok_or("Engine unavailable")?
-                .run(&audio, lang, prompt);
-            if first.is_err() && engine.as_ref().is_some_and(|e| e.device != "cpu") {
-                engine.take();
-                engine = Some(Native::open(dir, model, "cpu", threads)?);
-                return engine.as_mut().unwrap().run(&audio, lang, prompt);
+                .map(|tracker| tracker.update(&pressed))
+                .unwrap_or_default();
+            for edge in edges {
+                keys.send(Msg::Input(match edge {
+                    Edge::Down(bind) => Event::Down(bind),
+                    Edge::Up(bind) => Event::Up(bind),
+                    Edge::Released => Event::Released,
+                }));
             }
-            first
-        })();
-        let response = match result {
-            Ok(text) => {
-                json!({"text":text,"device":engine.as_ref().map(|e|&e.device),"inference_ms":start.elapsed().as_secs_f64()*1000.})
+        }
+    });
+
+    // Worker thread: owns the microphone, the models and the controller.
+    let state = shared.clone();
+    std::thread::spawn(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let store = match Store::open(&db_path) {
+                Ok(store) => store,
+                Err(error) => {
+                    let mut status = lock(&state.speech);
+                    status.ready = false;
+                    status.error = error;
+                    return;
+                }
+            };
+            // First start: pick the models this machine runs fast.
+            if store.get("settings").is_none() {
+                let devices = probe_devices(&state.runtime_dir);
+                if let Ok(Some(plan)) = speechify_core::catalog::first_run(&store, &devices) {
+                    let _ = store.set("first_run_plan", &plan.reason);
+                }
             }
-            Err(error) => json!({"error":error}),
-        };
-        println!("{response}");
-        std::io::stdout().flush().map_err(crate::config::err)?;
-    }
-    Ok(())
-}
-pub fn terminate(pid: u32) {
-    if pid == 0 {
-        return;
-    }
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(-(pid as i32), libc::SIGKILL);
-    }
-    #[cfg(windows)]
-    {
-        let _ = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-}
-pub struct Worker {
-    child: Child,
-    _owner: crate::child_owner::Owner,
-    input: std::process::ChildStdin,
-    output: std::sync::mpsc::Receiver<Result<String>>,
-    pub key: String,
-    pub device: String,
-    pub load_ms: f64,
-    pub environment: Option<String>,
-    pid: Arc<AtomicU32>,
-}
-impl Worker {
-    pub fn start(
-        dir: &Path,
-        model: &Path,
-        device: &str,
-        threads: i32,
-        key: String,
-        pid: Arc<AtomicU32>,
-        python: Option<&Path>,
-        config: &Value,
-    ) -> Result<Self> {
-        let mut cmd = if let Some(py) = python {
-            let mut c = Command::new(py);
-            c.arg(dir.parent().unwrap_or(dir).join("exception-worker.py"))
-                .arg(model)
-                .arg(device)
-                .arg(json!({"compute_type":config["compute_type"],"language":config["language"],"beam_size":config["beam_size"]}).to_string());
-            c
-        } else {
-            let mut c = Command::new(std::env::current_exe().map_err(crate::config::err)?);
-            c.args(["--native-worker"])
-                .arg(dir)
-                .arg(model)
-                .arg(device)
-                .arg(threads.to_string());
-            c
-        };
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        let (mut child, owner) = crate::child_owner::spawn(&mut cmd)?;
-        pid.store(child.id(), Ordering::SeqCst);
-        let input = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let (send, output) = std::sync::mpsc::sync_channel(1);
-        std::thread::spawn(move || {
-            let mut reader = BufReader::new(stdout);
+            let desktop = Desktop::new(app.clone(), state.audio_dir(), state.quitting.clone());
+            let models = Models::new(state.runtime_dir.clone(), state.models_dir(), state.speech.clone());
+            let mut controller = Controller::new(desktop, models, store);
+            let settings = controller.store.settings();
+            controller.engines.preload(&settings);
+            let mut checked = Instant::now();
+            let mut ticked = Instant::now();
+            // Shortcuts received while a blocking operation runs cannot describe
+            // the present key state. Never replay them as a new recording.
+            let mut accept_after = Instant::now();
+            let mut reload = false;
             loop {
-                let mut line = String::new();
-                let result = (&mut reader).take(1024 * 1024).read_line(&mut line);
-                match result {
-                    Ok(0) => break,
-                    Ok(_) => {
-                        if send.send(Ok(line)).is_err() {
-                            break;
+                if state.quitting.load(Ordering::SeqCst) {
+                    break;
+                }
+                if reload && controller.is_idle() {
+                    controller.engines.preload(&controller.store.settings());
+                    reload = false;
+                    accept_after = Instant::now();
+                }
+                let review = match rx.recv_timeout(Duration::from_millis(100)) {
+                    Ok(Queued {
+                        message: Msg::Input(event),
+                        at,
+                    }) => {
+                        state.wanted.fetch_sub(1, Ordering::SeqCst);
+                        if at >= accept_after {
+                            let was_idle = controller.is_idle();
+                            let began = Instant::now();
+                            controller.handle(event);
+                            if controller.is_idle() && (!was_idle || began.elapsed() >= Duration::from_millis(100)) {
+                                accept_after = Instant::now();
+                            }
+                        } else if matches!(
+                            event,
+                            Event::BarClick
+                                | Event::Down(
+                                    speechify_core::hotkey::Bind::PushToTalk
+                                        | speechify_core::hotkey::Bind::HandsFree
+                                        | speechify_core::hotkey::Bind::Command
+                                )
+                        ) {
+                            crate::shell::show_bar(
+                                &app,
+                                &speechify_core::app::Bar::Notice {
+                                    message: "Speechify was busy. Try the shortcut again.".into(),
+                                    error: false,
+                                    undo: false,
+                                },
+                            );
+                        }
+                        None
+                    }
+                    Ok(Queued { message: Msg::Quit, .. }) => break,
+                    Ok(Queued {
+                        message: Msg::StartupToggle,
+                        ..
+                    }) => {
+                        controller.handle(Event::BarClick);
+                        None
+                    }
+                    Ok(Queued {
+                        message: Msg::Reload, ..
+                    }) => {
+                        reload = true;
+                        None
+                    }
+                    Ok(Queued {
+                        message: Msg::Teacher, ..
+                    }) => Some(true),
+                    Err(RecvTimeoutError::Timeout) => {
+                        if !controller.is_idle() {
+                            None
+                        } else if checked.elapsed() > Duration::from_secs(60) {
+                            checked = Instant::now();
+                            Some(false)
+                        } else {
+                            None
                         }
                     }
-                    Err(e) => {
-                        let _ = send.send(Err(e.to_string()));
-                        break;
+                    Err(RecvTimeoutError::Disconnected) => return,
+                };
+                if ticked.elapsed() >= Duration::from_millis(100) && !controller.is_idle() {
+                    controller.handle(Event::Tick);
+                    ticked = Instant::now();
+                    if controller.is_idle() {
+                        accept_after = Instant::now();
+                    }
+                }
+                if let Some(forced) = review {
+                    state.teacher_running.store(true, Ordering::Relaxed);
+                    let result = if state.wanted.load(Ordering::SeqCst) == 0 {
+                        controller.review_if_due(forced, &|| {
+                            state.wanted.load(Ordering::SeqCst) == 0 && !state.quitting.load(Ordering::SeqCst)
+                        })
+                    } else {
+                        None
+                    };
+                    controller.engines.release_teacher();
+                    if result.is_some() {
+                        accept_after = Instant::now();
+                    }
+                    state.teacher_running.store(false, Ordering::Relaxed);
+                    if let Some(result) = result {
+                        let payload = match result {
+                            Ok(report) => serde_json::json!({ "report": report, "error": "" }),
+                            Err(error) => serde_json::json!({ "report": null, "error": error }),
+                        };
+                        let _ = app.emit("teacher-finished", payload);
+                        let _ = app.emit("history-changed", ());
+                    } else if forced {
+                        let _ = app.emit(
+                            "teacher-finished",
+                            serde_json::json!({ "report": null, "error": "Finish dictating first, then try again." }),
+                        );
                     }
                 }
             }
-        });
-        let mut worker = Self {
-            child,
-            _owner: owner,
-            input,
-            output,
-            key,
-            device: String::new(),
-            load_ms: 0.,
-            environment: python.and_then(|p| {
-                p.parent()?
-                    .parent()?
-                    .file_name()?
-                    .to_str()
-                    .map(str::to_owned)
-            }),
-            pid,
-        };
-        let msg = worker.read(std::time::Duration::from_secs(900))?;
-        if msg["ready"] != true {
-            return Err(msg.to_string());
+        }));
+        state.teacher_running.store(false, Ordering::Relaxed);
+        if state.quitting.load(Ordering::SeqCst) {
+            app.exit(0);
+        } else if result.is_err() {
+            let message = "The dictation worker stopped. Restart Speechify to continue.";
+            {
+                let mut status = lock(&state.speech);
+                status.ready = false;
+                status.error = message.into();
+            }
+            crate::shell::show_bar(
+                &app,
+                &speechify_core::app::Bar::Notice {
+                    message: message.into(),
+                    error: true,
+                    undo: false,
+                },
+            );
         }
-        worker.device = msg["device"].as_str().unwrap_or("unknown").into();
-        worker.load_ms = msg["load_ms"].as_f64().unwrap_or(0.);
-        Ok(worker)
-    }
-    pub fn alive(&mut self) -> bool {
-        self.child.try_wait().is_ok_and(|status| status.is_none())
-    }
-    fn read(&mut self, timeout: std::time::Duration) -> Result<Value> {
-        let line = self.output.recv_timeout(timeout).map_err(|e| {
-            terminate(self.child.id());
-            format!("Worker stopped responding: {e}; retry to recover")
-        })??;
-        let v: Value =
-            serde_json::from_str(&line).map_err(|e| format!("Invalid worker response: {e}"))?;
-        if let Some(e) = v["error"].as_str() {
-            return Err(e.into());
-        }
-        Ok(v)
-    }
-    pub fn run(
-        &mut self,
-        wav: &Path,
-        language: &str,
-        prompt: &str,
-        timeout: std::time::Duration,
-    ) -> Result<Value> {
-        writeln!(
-            self.input,
-            "{}",
-            json!({"wav":wav,"language":language,"prompt":prompt})
-        )
-        .and_then(|_| self.input.flush())
-        .map_err(crate::config::err)?;
-        self.read(timeout)
-    }
-}
-impl Drop for Worker {
-    fn drop(&mut self) {
-        terminate(self.child.id());
-        let _ = self.child.wait();
-        self.pid
-            .compare_exchange(self.child.id(), 0, Ordering::SeqCst, Ordering::SeqCst)
-            .ok();
-    }
-}
-pub type WorkerSlot = Arc<Mutex<Option<Worker>>>;
-pub fn transcription_timeout(wav: &Path) -> Result<std::time::Duration> {
-    let reader = hound::WavReader::open(wav).map_err(crate::config::err)?;
-    let seconds = f64::from(reader.duration()) / f64::from(reader.spec().sample_rate.max(1));
-    // CPU models may run slower than real time; cancellation still kills the child immediately.
-    Ok(std::time::Duration::from_secs_f64(
-        180. + seconds.min(600.) * 6.,
-    ))
-}
-pub fn native_dir(resource: Option<PathBuf>) -> PathBuf {
-    if let Some(p) = std::env::var_os("SPEECHIFY_NATIVE_DIR") {
-        return p.into();
-    }
-    if let Some(p) = resource {
-        let native = p.join("resources/native");
-        if native.is_dir() {
-            return native;
-        }
-    }
-    let exe = std::env::current_exe().unwrap();
-    let parent = exe.parent().unwrap();
-    let mut candidates = vec![parent.join("resources/native")];
-    #[cfg(target_os = "linux")]
-    if let Some(prefix) = parent.parent() {
-        candidates.push(prefix.join("lib/Speechify/resources/native"));
-    }
-    #[cfg(target_os = "macos")]
-    if let Some(contents) = parent.parent() {
-        candidates.push(contents.join("Resources/resources/native"));
-    }
-    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/native"));
-    candidates
-        .into_iter()
-        .find(|p| p.is_dir())
-        .unwrap_or(parent.join("resources/native"))
-}
-#[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-    #[test]
-    fn cancellation_reaps_process_group() {
-        use std::os::unix::process::CommandExt;
-        let mut child = Command::new("sh")
-            .args(["-c", "sleep 60 & wait"])
-            .process_group(0)
-            .spawn()
-            .unwrap();
-        let start = Instant::now();
-        terminate(child.id());
-        assert!(!child.wait().unwrap().success());
-        assert!(start.elapsed().as_secs() < 2);
-    }
+    });
+    Ok(shared)
 }

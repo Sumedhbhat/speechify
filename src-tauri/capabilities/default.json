@@ -1,1 +1,7 @@
-{"identifier":"default","windows":["main","indicator"],"permissions":["core:default"]}
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the two windows may do: call the app's own commands and listen to its events.",
+  "windows": ["main", "bar"],
+  "permissions": ["core:default"]
+}

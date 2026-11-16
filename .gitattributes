@@ -1,2 +1,5 @@
-# Keep formatter input consistent on Linux, macOS and Windows.
 * text=auto eol=lf
+*.png binary
+*.ico binary
+*.icns binary
+*.wav binary

@@ -15,7 +15,7 @@ updates:
         update-types: [minor, patch]
 
   - package-ecosystem: cargo
-    directory: /src-tauri
+    directory: /        # one workspace: core, os and src-tauri
     schedule:
       interval: daily
     cooldown:
@@ -25,14 +25,6 @@ updates:
       minor-and-patch:
         applies-to: version-updates
         update-types: [minor, patch]
-
-  - package-ecosystem: pip   # requirements-dev.txt (formatter)
-    directory: /
-    schedule:
-      interval: daily
-    cooldown:
-      default-days: 14
-    labels: [dependencies]
 
   - package-ecosystem: github-actions
     directory: /
