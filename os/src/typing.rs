@@ -178,7 +178,32 @@ fn modifier() -> Key {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn on_main_thread() -> bool {
+    extern "C" {
+        fn pthread_main_np() -> std::ffi::c_int;
+    }
+    unsafe { pthread_main_np() != 0 }
+}
+
 fn chord(keys: &[Key], last: Key) -> Result<(), String> {
+    // Enigo resolves Unicode shortcut keys through TIS/TSM keyboard-layout
+    // APIs. macOS can assert if these run on the dictation worker. Only key
+    // injection moves to the main queue; clipboard waits remain on the worker.
+    #[cfg(target_os = "macos")]
+    if !on_main_thread() {
+        let mut result = Err("Could not dispatch keyboard input.".into());
+        dispatch2::DispatchQueue::main().exec_sync(|| result = chord_on_input_thread(keys, last));
+        return result;
+    }
+    chord_on_input_thread(keys, last)
+}
+
+fn chord_on_input_thread(keys: &[Key], last: Key) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if !on_main_thread() {
+        return Err("Keyboard input must run on the macOS main thread.".into());
+    }
     let failed = |e: enigo::InputError| format!("Could not send keys to the app: {e}");
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("Could not send keys to the app: {e}"))?;
     let mut pressed = Vec::new();
@@ -338,6 +363,15 @@ pub fn press_enter() {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn worker_cannot_enter_native_keyboard_layout_lookup() {
+        let result = std::thread::spawn(|| super::chord_on_input_thread(&[], enigo::Key::Unicode('v')))
+            .join()
+            .unwrap();
+        assert_eq!(result.unwrap_err(), "Keyboard input must run on the macOS main thread.");
+    }
+
     use super::*;
 
     #[test]

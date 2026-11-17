@@ -4447,6 +4447,7 @@ dependencies = [
  "arboard",
  "cpal",
  "device_query",
+ "dispatch2",
  "enigo",
  "uiautomation",
  "windows 0.62.2",

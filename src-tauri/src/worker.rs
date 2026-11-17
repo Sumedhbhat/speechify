@@ -47,7 +47,7 @@ pub struct Shared {
     pub downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub data_dir: PathBuf,
     pub runtime_dir: PathBuf,
-    pub keyboard_available: bool,
+    pub keyboard_available: AtomicBool,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -85,6 +85,7 @@ impl Shared {
     }
 
     pub fn quit(&self, app: &AppHandle) {
+        crate::diagnostics::event("app.quit", "worker_requested");
         self.quitting.store(true, Ordering::SeqCst);
         // Let the owning thread close the microphone and restore system sound
         // before exiting. If it has already stopped, its resources are gone.
@@ -199,7 +200,7 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
         downloads: Mutex::new(HashMap::new()),
         runtime_dir: runtime_dir(&app),
         data_dir,
-        keyboard_available,
+        keyboard_available: AtomicBool::new(keyboard_available),
     });
     // Unusable shortcuts in a hand-edited database must not stop the app.
     let _ = shared.rebind();
@@ -207,13 +208,34 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
     // Keyboard thread: turns key state into shortcut events.
     let keys = shared.clone();
     std::thread::spawn(move || {
-        let keyboard = Keyboard::new();
-        if !keyboard.available() {
-            return; // No 83 Hz wakeups when global shortcuts cannot work.
-        }
+        let mut keyboard = crate::diagnostics::scope("keyboard.reader.open", Keyboard::new);
+        keys.keyboard_available.store(keyboard.available(), Ordering::Relaxed);
+        let mut access_checked = Instant::now();
         let mut previous = Vec::new();
         let mut revision = 0;
         loop {
+            if keys.quitting.load(Ordering::Relaxed) {
+                return;
+            }
+            if access_checked.elapsed() >= Duration::from_secs(1) {
+                let available = keyboard.refresh_access();
+                let previous_access = keys.keyboard_available.swap(available, Ordering::Relaxed);
+                if previous_access != available {
+                    crate::diagnostics::event("keyboard.access", if available { "granted" } else { "denied" });
+                    previous.clear();
+                    let _ = keys.rebind();
+                    if !available {
+                        // Revoking keyboard access must not leave a held
+                        // recording running with no way to observe key-up.
+                        keys.send(Msg::Input(Event::BarCancel));
+                    }
+                }
+                access_checked = Instant::now();
+            }
+            if !keyboard.available() {
+                std::thread::sleep(Duration::from_secs(1));
+                continue;
+            }
             std::thread::sleep(Duration::from_millis(12));
             let names = keyboard.pressed();
             let current_revision = keys.binding_revision.load(Ordering::Acquire);
@@ -390,6 +412,7 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
         }));
         state.teacher_running.store(false, Ordering::Relaxed);
         if state.quitting.load(Ordering::SeqCst) {
+            crate::diagnostics::event("worker", "shutdown_complete");
             app.exit(0);
         } else if result.is_err() {
             crate::diagnostics::event("worker", "panicked");

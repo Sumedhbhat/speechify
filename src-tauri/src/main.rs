@@ -86,6 +86,7 @@ fn main() {
             commands::teacher_status,
             commands::run_teacher,
             commands::export_training,
+            commands::export_diagnostics,
             commands::try_format,
             commands::bar_action,
             commands::open_main,
@@ -102,6 +103,8 @@ fn main() {
             diagnostics::event("app.version", VERSION);
             let shared = worker::start(app.handle().clone())?;
             app.manage(shared.clone());
+            #[cfg(target_os = "macos")]
+            shell::build_app_menu(app.handle())?;
             shell::build_tray(app.handle())?;
             shell::place_bar(app.handle(), &speechify_core::app::Bar::Idle);
             if toggle {

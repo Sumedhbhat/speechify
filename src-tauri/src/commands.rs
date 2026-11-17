@@ -18,7 +18,7 @@ use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 
 type App<'a> = State<'a, Arc<Shared>>;
@@ -84,7 +84,7 @@ pub fn get_status(shared: App) -> Status {
             "linux"
         },
         wayland: speechify_os::is_wayland(),
-        shortcuts: shared.keyboard_available,
+        shortcuts: shared.keyboard_available.load(Ordering::Relaxed),
         speech_ready: speech.ready,
         speech_device: speech.device,
         speech_error: speech.error,
@@ -480,4 +480,28 @@ pub fn bar_action(app: AppHandle, shared: App, action: String) {
 #[tauri::command]
 pub fn open_main(app: AppHandle, page: String) {
     shell::show_main(&app, &page);
+}
+
+/// A bounded support bundle saved locally, only when the user asks.
+#[tauri::command]
+pub fn export_diagnostics(app: AppHandle) -> Result<String> {
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|_| "Could not find the diagnostics folder.")?;
+    let downloads = app
+        .path()
+        .download_dir()
+        .map_err(|_| "Could not find your Downloads folder.")?;
+    #[cfg(target_os = "macos")]
+    let crash_dir = app
+        .path()
+        .home_dir()
+        .ok()
+        .map(|home| home.join("Library/Logs/DiagnosticReports"));
+    #[cfg(not(target_os = "macos"))]
+    let crash_dir: Option<std::path::PathBuf> = None;
+    let path = crate::diagnostics::export(&log_dir, &downloads, crate::VERSION, crash_dir.as_deref())
+        .map_err(|_| "Could not save diagnostics. Check that your Downloads folder is writable.")?;
+    Ok(path.to_string_lossy().into_owned())
 }

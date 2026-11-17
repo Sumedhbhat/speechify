@@ -15,3 +15,6 @@ active-win-pos-rs = "=0.11.0"
 [target.'cfg(windows)'.dependencies]
 uiautomation = "=0.25.1"
 windows = { version = "=0.62.2", features = ["Win32_Media_Audio", "Win32_Media_Audio_Endpoints", "Win32_System_Com", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = "=0.3.1"

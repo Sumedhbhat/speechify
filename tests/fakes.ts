@@ -197,6 +197,7 @@ export function fakeApi(): FakeApi {
     })),
     teacherStatus: vi.fn(async () => teacher()),
     runTeacher: vi.fn(async () => undefined),
+    exportDiagnostics: vi.fn(async () => "/home/me/Downloads/speechify-diagnostics.json"),
     exportTraining: vi.fn(async () => "/home/me/speechify-training.jsonl"),
     tryFormat: vi.fn(async (input: string) => `formatted: ${input}`),
     barAction: vi.fn(async () => undefined),

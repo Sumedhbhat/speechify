@@ -37,6 +37,24 @@ const LANGUAGES: [string, string][] = [
 
 export function createSettingsPage({ api, settings: store }: Deps): Page {
   const body = h("div");
+  const diagnosticStatus = h("p", { className: "hint", "aria-live": "polite" });
+  const download = h("button", {
+    type: "button",
+    className: "btn",
+    textContent: "Download diagnostics",
+    onclick: async () => {
+      download.disabled = true;
+      diagnosticStatus.textContent = "Saving diagnostics…";
+      try {
+        const path = await api.exportDiagnostics();
+        diagnosticStatus.replaceChildren("Saved to ", h("code", { textContent: path }));
+      } catch (error) {
+        diagnosticStatus.textContent = String(error);
+      } finally {
+        download.disabled = false;
+      }
+    },
+  });
   const el = h("div", { className: "page settings" }, [
     pageHeader("Settings", "Changes are saved as you make them."),
     body,
@@ -55,7 +73,7 @@ export function createSettingsPage({ api, settings: store }: Deps): Page {
             : status.wayland
               ? "Global shortcuts are not available on Wayland. Bind “speechify --toggle” to a system shortcut instead."
               : status.platform === "macos"
-                ? "Speechify cannot see your keyboard yet. Allow it under System Settings › Privacy & Security › Accessibility, then restart it."
+                ? "Speechify cannot see your keyboard yet. Enable the current app under System Settings › Privacy & Security › Accessibility. Access is checked every second. If the switch is already on after an update, remove Speechify and add it again, then reopen this page."
                 : "Speechify cannot read the keyboard on this system. Bind “speechify --toggle” to a system shortcut instead.",
           HOTKEYS.map(([key, label, hint]) =>
             text(store, settings, {
@@ -139,6 +157,11 @@ export function createSettingsPage({ api, settings: store }: Deps): Page {
               set: (s, v) => (s.keep_audio = v),
             }),
           ],
+        ),
+        section(
+          "Diagnostics",
+          "Download a support file to inspect yourself or share with an AI assistant. Includes recent app stage logs, version information and sanitized macOS crash stacks. Excludes recordings, dictated text, clipboard contents and credentials. Saved to Downloads; nothing is uploaded.",
+          [download, diagnosticStatus],
         ),
         section("Appearance", "", [
           select(store, settings, {
