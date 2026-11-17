@@ -5,9 +5,14 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": []
+    "isolatedModules": true,
+    "types": ["vite/client"]
   },
-  "include": ["src"]
+  "include": ["src", "tests"]
 }

@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["core", "os", "src-tauri", "bench"]
+default-members = ["core", "os", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/Sumedhbhat/speechify"
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.release]
+debug = 0
+strip = true
+lto = "thin"
+codegen-units = 8
