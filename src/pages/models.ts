@@ -42,6 +42,35 @@ export function createModelsPage(deps: Deps): Page {
   const device = h("div");
   const language = h("div");
   const pullMeter = h("div", { className: "pull" });
+  const reachNote = h("p");
+  const modelList = h("datalist", { id: "rewrite-models" });
+  const refreshButton = h(
+    "button",
+    {
+      type: "button",
+      className: "btn",
+      title: "Check the server again and reload its models",
+      onclick: () => void refreshReach(),
+    },
+    [icon("refresh"), "Refresh"],
+  );
+  const reachRow = h("div", { className: "row" }, [reachNote, refreshButton]);
+  const pullButton = h(
+    "button",
+    {
+      type: "button",
+      className: "btn",
+      onclick: () =>
+        void guard(async () => {
+          // A model name typed just before clicking may still be saving.
+          const current = await store.settled();
+          pull = { id: current.rewrite.model, done: 0, total: 0, finished: false, error: "" };
+          renderPull();
+          await api.pullRewriteModel(current.rewrite.model);
+        }),
+    },
+    [icon("download"), "Download with Ollama"],
+  );
 
   async function guard(run: () => Promise<unknown>): Promise<void> {
     try {
@@ -173,8 +202,31 @@ export function createModelsPage(deps: Deps): Page {
     pullMeter.replaceChildren(meter(pull).el);
   }
 
+  /** Shows whether the server answered; the editable fields are left alone. */
+  function renderReach(status: Status): void {
+    const ok = status.rewrite_reachable;
+    reachNote.className = `status-note${ok ? " ok" : " error"}`;
+    reachNote.replaceChildren(
+      h("span", { className: "status-dot", "data-state": ok ? "ready" : "error" }),
+      ok ? "Connected" : "Can't reach the server. If you use Ollama, check that it is running.",
+    );
+    modelList.replaceChildren(...status.rewrite_models.map((name) => h("option", { value: name })));
+    pullButton.disabled = !ok;
+  }
+
+  /** Asks the server again, e.g. after starting Ollama with the page open. */
+  async function refreshReach(): Promise<void> {
+    refreshButton.disabled = true;
+    await guard(async () => {
+      // A server address typed just before clicking may still be saving.
+      await store.settled();
+      renderReach(await api.getStatus());
+    });
+    refreshButton.disabled = false;
+  }
+
   function renderLanguage(settings: Settings, status: Status): void {
-    const listId = "rewrite-models";
+    renderReach(status);
     language.replaceChildren(
       toggle(store, settings, {
         label: "Tidy text with a language model",
@@ -190,62 +242,16 @@ export function createModelsPage(deps: Deps): Page {
         get: (s) => s.rewrite.url,
         set: (s, v) => (s.rewrite.url = v),
       }),
-      h("div", { className: "row" }, [
-        h("p", { className: `status-note${status.rewrite_reachable ? " ok" : " error"}` }, [
-          h("span", {
-            className: "status-dot",
-            "data-state": status.rewrite_reachable ? "ready" : "error",
-          }),
-          status.rewrite_reachable
-            ? "Connected"
-            : "Can't reach the server. If you use Ollama, check that it is running.",
-        ]),
-        h(
-          "button",
-          {
-            type: "button",
-            className: "btn",
-            id: "rewrite-refresh",
-            title: "Check the server again and reload its models",
-            onclick: (event: MouseEvent) => {
-              (event.currentTarget as HTMLButtonElement).disabled = true;
-              void refreshLanguage();
-            },
-          },
-          [icon("refresh"), "Refresh"],
-        ),
-      ]),
+      reachRow,
       text(store, settings, {
         label: "Model",
         placeholder: "gemma3:4b",
-        list: listId,
+        list: modelList.id,
         get: (s) => s.rewrite.model,
         set: (s, v) => (s.rewrite.model = v),
       }),
-      h(
-        "datalist",
-        { id: listId },
-        status.rewrite_models.map((name) => h("option", { value: name })),
-      ),
-      h("div", { className: "row" }, [
-        h(
-          "button",
-          {
-            type: "button",
-            className: "btn",
-            disabled: !status.rewrite_reachable,
-            onclick: () =>
-              void guard(async () => {
-                // A model name typed just before clicking may still be saving.
-                const current = await store.settled();
-                pull = { id: current.rewrite.model, done: 0, total: 0, finished: false, error: "" };
-                renderPull();
-                await api.pullRewriteModel(current.rewrite.model);
-              }),
-          },
-          [icon("download"), "Download with Ollama"],
-        ),
-      ]),
+      modelList,
+      h("div", { className: "row" }, [pullButton]),
       pullMeter,
       number(store, settings, {
         label: "Give up after",
@@ -294,19 +300,6 @@ export function createModelsPage(deps: Deps): Page {
       ]),
     );
     renderPull();
-  }
-
-  /** Asks the server again, e.g. after starting Ollama with the page open. */
-  async function refreshLanguage(): Promise<void> {
-    await guard(async () => {
-      // A server address typed just before clicking may still be saving.
-      const settings = await store.settled();
-      renderLanguage(settings, await api.getStatus());
-    });
-    // Either the redrawn button or, after an error, the one that was clicked.
-    const button = language.querySelector<HTMLButtonElement>("#rewrite-refresh")!;
-    button.disabled = false;
-    button.focus();
   }
 
   void events.modelProgress((progress) => {

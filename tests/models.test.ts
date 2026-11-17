@@ -273,6 +273,23 @@ describe("models page", () => {
     ).toEqual(["qwen2.5:1.5b", "llama3.2:3b"]);
     expect(button(document, "Refresh").disabled).toBe(false);
 
+    // Fields keep text typed while the check is still running.
+    let answer!: (value: ReturnType<typeof status>) => void;
+    ctx.api.getStatus.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    const field = byLabel<HTMLInputElement>(document, "Model");
+    button(document, "Refresh").click();
+    await settle();
+    field.value = "mistral:7b";
+    answer(status({ rewrite_reachable: false, rewrite_models: [] }));
+    await settle();
+    expect(byLabel<HTMLInputElement>(document, "Model")).toBe(field);
+    expect(field.value).toBe("mistral:7b");
+    expect(document.querySelector(".status-note.error")!.textContent).toContain(
+      "Can't reach the server",
+    );
+    expect(document.querySelectorAll("#rewrite-models option")).toHaveLength(0);
+    expect(button(document, "Download with Ollama").disabled).toBe(true);
+
     ctx.api.getStatus.mockRejectedValueOnce("Speechify is not responding.");
     button(document, "Refresh").click();
     await settle();
