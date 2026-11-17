@@ -399,17 +399,18 @@ impl Store {
 
     /// Applies the retention setting; returns audio files to remove.
     pub fn prune(&self, retention: Retention, clock: Clock) -> Result<Vec<String>> {
+        self.delete_dictations(Some(&self.expired(retention, clock)?))
+    }
+
+    /// The dictations the retention setting says should be gone by now.
+    pub fn expired(&self, retention: Retention, clock: Clock) -> Result<Vec<i64>> {
         let cutoff = match retention {
             Retention::Keep => return Ok(vec![]),
             Retention::Day => clock.now - 86_400,
             Retention::Never => i64::MAX,
         };
-        let old: Vec<i64> = self
-            .select("WHERE created_at < ?1", params![cutoff])?
-            .iter()
-            .map(|d| d.id)
-            .collect();
-        self.delete_dictations(Some(&old))
+        let old = self.select("WHERE created_at < ?1", params![cutoff])?;
+        Ok(old.iter().map(|d| d.id).collect())
     }
 
     // ---- dictionary ----
@@ -938,6 +939,7 @@ mod tests {
             .unwrap();
         store.add_dictation(&dictation("no audio", "A", NOW.now - 30)).unwrap();
         assert!(store.prune(Retention::Keep, NOW).unwrap().is_empty());
+        assert_eq!(store.expired(Retention::Day, NOW).unwrap(), vec![old]);
         assert_eq!(store.prune(Retention::Day, NOW).unwrap(), vec!["old.wav"]);
         assert!(store.dictation(old).is_err());
         assert_eq!(store.delete_dictations(Some(&[old, 2])).unwrap(), vec!["new.wav"]);

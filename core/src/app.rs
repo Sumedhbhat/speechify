@@ -413,13 +413,21 @@ impl<P: Platform, E: Engines> Controller<P, E> {
 
     /// Applies the history setting now: deletes dictations past their time and
     /// their recordings. Dictating applies it too, but a change of setting or
-    /// the passing of a day must not wait for the next dictation.
-    pub fn apply_retention(&mut self) {
+    /// the passing of a day must not wait for the next dictation. Returns
+    /// whether anything was removed, so the shell can refresh History.
+    pub fn apply_retention(&mut self) -> bool {
         let settings = self.store.settings();
-        let clock = self.platform.clock();
-        for stale in self.store.prune(settings.retention, clock).unwrap_or_default() {
+        let expired = self
+            .store
+            .expired(settings.retention, self.platform.clock())
+            .unwrap_or_default();
+        if expired.is_empty() {
+            return false;
+        }
+        for stale in self.store.delete_dictations(Some(&expired)).unwrap_or_default() {
             self.platform.delete_audio(&stale);
         }
+        true
     }
 
     /// Runs the nightly review if it is due and the app is idle. Returns the
@@ -760,11 +768,13 @@ mod tests {
             ..store::Dictation::default()
         };
         app.store.add_dictation(&old).unwrap();
-        app.apply_retention();
+        assert!(!app.apply_retention());
         assert_eq!(app.store.all().unwrap().len(), 1);
         set(&mut app, |s| s.retention = Retention::Day);
-        app.apply_retention();
+        assert!(app.apply_retention());
         assert!(app.store.all().unwrap().is_empty());
+        // Nothing left to remove: nothing to report.
+        assert!(!app.apply_retention());
         assert!(app.platform.log.contains(&"delete:old.wav".to_string()));
     }
 
