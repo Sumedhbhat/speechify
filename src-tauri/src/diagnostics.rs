@@ -195,7 +195,8 @@ fn crash_summaries(dir: Option<&Path>) -> Vec<serde_json::Value> {
     paths
         .into_iter()
         .rev()
-        .take(3)
+        // Bound total I/O even when many recent reports are unusable.
+        .take(64)
         .filter_map(|path| {
             let mut bytes = Vec::new();
             File::open(path)
@@ -208,6 +209,7 @@ fn crash_summaries(dir: Option<&Path>) -> Vec<serde_json::Value> {
             }
             summarize_crash(&bytes)
         })
+        .take(3)
         .collect()
 }
 
@@ -251,6 +253,28 @@ pub fn export(log_dir: &Path, downloads: &Path, version: &str, crash_dir: Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crash_export_skips_rejected_newer_reports_and_keeps_three_readable_ones() {
+        let dir = std::env::temp_dir().join(format!("speechify-crash-selection-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for pid in 1..=4 {
+            let report = serde_json::json!({"pid": pid, "threads": []});
+            std::fs::write(dir.join(format!("speechify-0{pid}.ips")), format!("{{}}\n{report}")).unwrap();
+        }
+        std::fs::write(dir.join("speechify-90.ips"), "malformed").unwrap();
+        std::fs::write(dir.join("speechify-91.ips"), vec![b'x'; (2 * LIMIT + 1) as usize]).unwrap();
+        std::fs::create_dir(dir.join("speechify-92.ips")).unwrap();
+        let summaries = crash_summaries(Some(&dir));
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(
+            summaries
+                .iter()
+                .map(|summary| summary["pid"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![4, 3, 2]
+        );
+    }
 
     #[test]
     fn support_export_is_bounded_and_excludes_private_files_and_crash_fields() {
