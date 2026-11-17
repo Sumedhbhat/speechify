@@ -216,6 +216,7 @@ export function createModelsPage(deps: Deps): Page {
 
   /** Asks the server again, e.g. after starting Ollama with the page open. */
   async function refreshReach(): Promise<void> {
+    const focused = document.activeElement === refreshButton;
     refreshButton.disabled = true;
     await guard(async () => {
       // A server address typed just before clicking may still be saving.
@@ -223,6 +224,8 @@ export function createModelsPage(deps: Deps): Page {
       renderReach(await api.getStatus());
     });
     refreshButton.disabled = false;
+    // Disabling drops keyboard focus; give it back unless the user moved on.
+    if (focused && document.activeElement === document.body) refreshButton.focus();
   }
 
   function renderLanguage(settings: Settings, status: Status): void {

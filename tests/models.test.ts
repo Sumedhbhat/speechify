@@ -273,6 +273,20 @@ describe("models page", () => {
     ).toEqual(["qwen2.5:1.5b", "llama3.2:3b"]);
     expect(button(document, "Refresh").disabled).toBe(false);
 
+    // Keyboard focus comes back to Refresh, but not away from a field the user moved to.
+    refresh.focus();
+    refresh.click();
+    // A browser drops focus from a button when it is disabled; jsdom does not.
+    byLabel<HTMLInputElement>(document, "Server").focus();
+    byLabel<HTMLInputElement>(document, "Server").blur();
+    expect(document.activeElement).toBe(document.body);
+    await settle();
+    expect(document.activeElement).toBe(refresh);
+    refresh.click();
+    byLabel<HTMLInputElement>(document, "Server").focus();
+    await settle();
+    expect(document.activeElement).toBe(byLabel(document, "Server"));
+
     // Fields keep text typed while the check is still running.
     let answer!: (value: ReturnType<typeof status>) => void;
     ctx.api.getStatus.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
