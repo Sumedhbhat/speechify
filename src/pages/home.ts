@@ -63,7 +63,7 @@ function checklist(
         ])
       : status.platform === "macos"
         ? step(false, "Let Speechify see your shortcut", [
-            "Allow Speechify under System Settings › Privacy & Security › Accessibility, then restart it. Until then, click the small bar at the bottom of the screen to dictate.",
+            "Enable Speechify under System Settings › Privacy & Security › Accessibility. Access is checked every second. If already enabled after an update, remove and re-add the current app, then reopen this page. Until then, click the small bar at the bottom of the screen to dictate.",
           ])
         : step(false, "Start dictating from the bar", [
             "Speechify cannot read the keyboard on this system. Click the small bar at the bottom of the screen, or bind ",

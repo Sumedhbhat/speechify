@@ -14,6 +14,17 @@ pub struct Keyboard {
     _thread: PhantomData<Rc<()>>,
 }
 
+/// Check without prompting. A denied app should keep retrying quietly, not
+/// create a new system permission prompt every time it polls.
+#[cfg(target_os = "macos")]
+fn accessibility_trusted() -> bool {
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXIsProcessTrusted() -> bool;
+    }
+    unsafe { AXIsProcessTrusted() }
+}
+
 impl Default for Keyboard {
     fn default() -> Self {
         Self::new()
@@ -23,6 +34,13 @@ impl Default for Keyboard {
 impl Keyboard {
     pub fn new() -> Keyboard {
         // Not available in a Wayland session or without an X display.
+        #[cfg(target_os = "macos")]
+        if !accessibility_trusted() {
+            return Keyboard {
+                state: None,
+                _thread: PhantomData,
+            };
+        }
         let state = if crate::is_wayland() { None } else { DeviceState::checked_new() };
         Keyboard {
             state,
@@ -32,6 +50,19 @@ impl Keyboard {
 
     pub fn available(&self) -> bool {
         self.state.is_some()
+    }
+
+    /// Refresh macOS access after the user changes System Settings. Other
+    /// platforms retain their existing connection and availability behavior.
+    pub fn refresh_access(&mut self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            let trusted = accessibility_trusted();
+            if trusted != self.available() {
+                *self = Self::new();
+            }
+        }
+        self.available()
     }
 
     /// The keys currently held, by the names the shortcut settings use

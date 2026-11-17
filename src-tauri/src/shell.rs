@@ -142,3 +142,29 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     .build(app)?;
     Ok(())
 }
+
+/// Cocoa's predefined Quit calls terminate: directly, bypassing worker cleanup.
+/// Keep the default menus but route Cmd+Q through the same path as tray Quit.
+#[cfg(target_os = "macos")]
+pub fn build_app_menu(app: &AppHandle) -> tauri::Result<()> {
+    let menu = Menu::default(app)?;
+    if let Some(tauri::menu::MenuItemKind::Submenu(application)) = menu.items()?.first() {
+        let items = application.items()?;
+        application.remove_at(items.len() - 1)?;
+        application.append(&MenuItem::with_id(
+            app,
+            "app-quit",
+            "Quit Speechify",
+            true,
+            Some("Cmd+Q"),
+        )?)?;
+    }
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, event| {
+        if event.id().as_ref() == "app-quit" {
+            crate::diagnostics::event("app.quit", "menu");
+            app.state::<Arc<Shared>>().quit(app);
+        }
+    });
+    Ok(())
+}

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createSettingsPage } from "../src/pages/settings";
-import { byLabel, change, makeDeps, settle, status } from "./fakes";
+import { byLabel, byText, change, makeDeps, settle, status } from "./fakes";
 
 let ctx: ReturnType<typeof makeDeps>;
 
@@ -63,6 +63,32 @@ describe("settings page", () => {
       "Speechify cannot read the keyboard on this system",
     );
     expect(document.body.textContent).not.toContain("Accessibility");
+  });
+
+  it("downloads diagnostics locally and shows the saved path", async () => {
+    await setup();
+    const button = byText<HTMLButtonElement>(document, "button", "Download diagnostics");
+    button.click();
+    expect(button.disabled).toBe(true);
+    await settle();
+    expect(ctx.api.exportDiagnostics).toHaveBeenCalledOnce();
+    expect(document.body.textContent).toContain("/home/me/Downloads/speechify-diagnostics.json");
+    expect(document.body.textContent).toContain("nothing is uploaded");
+    expect(button.disabled).toBe(false);
+  });
+
+  it("lets the user retry after diagnostics cannot be saved", async () => {
+    ctx.api.exportDiagnostics.mockRejectedValueOnce("Downloads is not writable.");
+    await setup();
+    const button = byText<HTMLButtonElement>(document, "button", "Download diagnostics");
+    button.click();
+    await settle();
+    expect(document.body.textContent).toContain("Downloads is not writable.");
+    expect(button.disabled).toBe(false);
+    button.click();
+    await settle();
+    expect(ctx.api.exportDiagnostics).toHaveBeenCalledTimes(2);
+    expect(document.body.textContent).not.toContain("Downloads is not writable.");
   });
 
   it("saves the rest of the controls", async () => {

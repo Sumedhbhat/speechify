@@ -270,6 +270,7 @@ export const api = {
   runTeacher: () => invoke<void>("run_teacher"),
   /** Writes the training export and returns the file path. */
   exportTraining: () => invoke<string>("export_training"),
+  exportDiagnostics: () => invoke<string>("export_diagnostics"),
 
   /** Formats typed text as if it had been dictated into `app`. */
   tryFormat: (text: string, app: string) => invoke<string>("try_format", { text, app }),
