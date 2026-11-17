@@ -191,6 +191,10 @@ export function fakeApi(): FakeApi {
     cancelDownload: vi.fn(async () => undefined),
     deleteModel: vi.fn(async () => undefined),
     pullRewriteModel: vi.fn(async () => undefined),
+    rewriteStatus: vi.fn(async () => ({
+      reachable: true,
+      models: ["qwen2.5:1.5b", "llama3.2:3b"],
+    })),
     teacherStatus: vi.fn(async () => teacher()),
     runTeacher: vi.fn(async () => undefined),
     exportTraining: vi.fn(async () => "/home/me/speechify-training.jsonl"),

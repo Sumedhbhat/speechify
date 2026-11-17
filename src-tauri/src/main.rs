@@ -57,6 +57,7 @@ fn main() {
             commands::get_settings,
             commands::save_settings,
             commands::get_status,
+            commands::rewrite_status,
             commands::history,
             commands::edit_dictation,
             commands::delete_dictations,

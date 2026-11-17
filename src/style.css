@@ -608,6 +608,21 @@ label,
   color: var(--muted);
 }
 
+.reach {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.reach .status-note {
+  flex: 1;
+  min-width: 0;
+}
+
+.reach .btn {
+  flex-shrink: 0;
+}
+
 .status-note .status-dot {
   margin-top: 0;
 }

@@ -183,6 +183,11 @@ export interface Status {
   microphones: string[];
 }
 
+export interface RewriteStatus {
+  reachable: boolean; // the language-model server answers
+  models: string[]; // models that server has
+}
+
 export interface TeacherReport {
   reviewed: number;
   skipped: number;
@@ -264,6 +269,8 @@ export const api = {
   deleteModel: (id: string) => invoke<void>("delete_model", { id }),
   /** Asks Ollama to download a model; progress on "rewrite-progress". */
   pullRewriteModel: (model: string) => invoke<void>("pull_rewrite_model", { model }),
+  /** Asks only the language-model server; cheaper than getStatus. */
+  rewriteStatus: () => invoke<RewriteStatus>("rewrite_status"),
 
   teacherStatus: () => invoke<TeacherStatus>("teacher_status"),
   /** Starts a review now; "teacher-finished" fires when it ends. */

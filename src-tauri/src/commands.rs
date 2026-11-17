@@ -94,6 +94,25 @@ pub fn get_status(shared: App) -> Status {
     }
 }
 
+/// Whether the language-model server answers, and the models it has.
+#[derive(Serialize)]
+pub struct RewriteStatus {
+    reachable: bool,
+    models: Vec<String>,
+}
+
+/// Asks only the language-model server; the Models page calls this as a
+/// heartbeat, so it skips the rest of `get_status` (microphones and so on).
+#[tauri::command(async)]
+pub fn rewrite_status(shared: App) -> RewriteStatus {
+    let settings = shared.db().settings();
+    let models = chat(&settings, &settings.rewrite.model, 2).models();
+    RewriteStatus {
+        reachable: models.is_ok(),
+        models: models.unwrap_or_default(),
+    }
+}
+
 #[tauri::command]
 pub fn history(shared: App, search: String, limit: u32, offset: u32) -> Result<Vec<Dictation>> {
     shared.db().history(&search, limit.min(500), offset)
