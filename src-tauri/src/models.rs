@@ -1,5 +1,6 @@
 //! `Engines` for a real desktop: loads and keeps the speech and language models.
 
+use crate::diagnostics;
 use speechify_core::app::Engines;
 use speechify_core::asr::{Recognizer, Remote};
 use speechify_core::llm::{Chat, Rewriter};
@@ -9,6 +10,46 @@ use speechify_core::{catalog, Result};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// Delegates every recognizer operation without logging audio, hints or text.
+struct Diagnosed(Box<dyn Recognizer>);
+
+impl Recognizer for Diagnosed {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+    fn transcribe(&mut self, audio: &[f32], hint: &speechify_core::asr::Hint) -> Result<String> {
+        diagnostics::attempt("speech.transcribe", || self.0.transcribe(audio, hint))
+    }
+    fn detect(&mut self, audio: &[f32], threshold: f64) -> Option<Result<Vec<std::ops::Range<usize>>>> {
+        diagnostics::scope("speech.detect", || {
+            let result = self.0.detect(audio, threshold);
+            diagnostics::event(
+                "speech.detect",
+                match &result {
+                    Some(Ok(_)) => "ok",
+                    Some(Err(_)) => "error",
+                    None => "unavailable",
+                },
+            );
+            result
+        })
+    }
+    fn heard(&self) -> Vec<speechify_core::asr::Heard> {
+        self.0.heard()
+    }
+}
+
+struct DiagnosedChat(Chat);
+
+impl Rewriter for DiagnosedChat {
+    fn rewrite(&self, system: &str, user: &str) -> Result<String> {
+        diagnostics::attempt("rewrite", || self.0.rewrite(system, user))
+    }
+    fn model(&self) -> &str {
+        self.0.model()
+    }
+}
 
 /// What the UI shows about the speech engine.
 #[derive(Debug, Clone, Default)]
@@ -24,9 +65,9 @@ pub struct Models {
     pub status: Arc<Mutex<SpeechStatus>>,
     /// The loaded everyday recogniser and the settings it was loaded for.
     everyday: Option<(String, Box<dyn Recognizer>)>,
-    chat: Option<(String, Chat)>,
+    chat: Option<(String, DiagnosedChat)>,
     teacher: Option<Box<dyn Recognizer>>,
-    teacher_chat: Option<Chat>,
+    teacher_chat: Option<DiagnosedChat>,
     warmed: Option<Instant>,
 }
 
@@ -52,15 +93,19 @@ impl Models {
                 model.name
             ));
         }
-        let mut engine = Engine::open(&self.runtime_dir, &catalog::path(&self.models_dir, &model), device)?;
+        let mut engine = diagnostics::attempt("model.open", || {
+            Engine::open(&self.runtime_dir, &catalog::path(&self.models_dir, &model), device)
+        })?;
         // The voice detector ships with the runtime. Without it, speech is
         // found by loudness, which can miss very quiet speech.
         let detector = self.runtime_dir.join(DETECTOR_FILE);
-        if let Ok(found) = Detector::open(&self.runtime_dir, &detector, device) {
+        if let Ok(found) =
+            diagnostics::attempt("detector.open", || Detector::open(&self.runtime_dir, &detector, device))
+        {
             engine = engine.with_detector(found);
         }
         let device = engine.device().to_string();
-        Ok((Box::new(engine), device))
+        Ok((Box::new(Diagnosed(Box::new(engine))), device))
     }
 
     fn load_everyday(&mut self, settings: &Settings) -> Result<()> {
@@ -78,11 +123,11 @@ impl Models {
             self.open(&speech.model, &speech.device)
         } else {
             Ok((
-                Box::new(Remote::new(
+                Box::new(Diagnosed(Box::new(Remote::new(
                     &speech.remote_url,
                     &speech.remote_key,
                     &speech.remote_model,
-                )) as Box<dyn Recognizer>,
+                )))) as Box<dyn Recognizer>,
                 format!("server {}", speech.remote_url),
             ))
         };
@@ -110,7 +155,7 @@ impl Models {
 
     /// Loads the everyday model ahead of the first dictation.
     pub fn preload(&mut self, settings: &Settings) {
-        let _ = self.load_everyday(settings);
+        let _ = diagnostics::attempt("model.preload", || self.load_everyday(settings));
     }
 
     /// Frees the teacher's models once a review is over.
@@ -120,8 +165,8 @@ impl Models {
     }
 }
 
-fn chat(settings: &Settings, model: &str, timeout: Duration) -> Chat {
-    Chat::new(&settings.rewrite.url, &settings.rewrite.key, model, timeout)
+fn chat(settings: &Settings, model: &str, timeout: Duration) -> DiagnosedChat {
+    DiagnosedChat(Chat::new(&settings.rewrite.url, &settings.rewrite.key, model, timeout))
 }
 
 impl Engines for Models {
@@ -161,6 +206,7 @@ impl Engines for Models {
         let teacher_chat = chat(settings, &settings.teacher.rewrite_model, Duration::from_secs(180));
         let available = settings.rewrite.enabled
             && teacher_chat
+                .0
                 .models()
                 .is_ok_and(|models| models.contains(&settings.teacher.rewrite_model));
         self.teacher_chat = available.then_some(teacher_chat);
@@ -182,7 +228,7 @@ impl Engines for Models {
         self.warmed = Some(Instant::now());
         let warmer = chat(settings, &settings.rewrite.model, Duration::from_secs(60));
         std::thread::spawn(move || {
-            let _ = warmer.warm();
+            let _ = diagnostics::attempt("rewrite.warm", || warmer.0.warm());
         });
     }
 }

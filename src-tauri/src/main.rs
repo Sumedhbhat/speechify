@@ -3,6 +3,7 @@
 
 mod commands;
 mod desktop;
+mod diagnostics;
 mod models;
 mod shell;
 mod worker;
@@ -89,6 +90,15 @@ fn main() {
             commands::open_main,
         ])
         .setup(move |app| {
+            match app.path().app_log_dir() {
+                Ok(dir) => {
+                    if let Err(error) = diagnostics::init(&dir) {
+                        eprintln!("Could not start Speechify diagnostics: {error}");
+                    }
+                }
+                Err(error) => eprintln!("Could not find Speechify diagnostics folder: {error}"),
+            }
+            diagnostics::event("app.version", VERSION);
             let shared = worker::start(app.handle().clone())?;
             app.manage(shared.clone());
             shell::build_tray(app.handle())?;
@@ -124,6 +134,10 @@ fn main() {
             #[cfg(not(target_os = "macos"))]
             let _ = app;
             if let RunEvent::ExitRequested { api, code, .. } = event {
+                diagnostics::event(
+                    "app.exit_requested",
+                    if code.is_some() { "explicit" } else { "implicit" },
+                );
                 // Only an explicit Quit (which passes a code) ends the app.
                 if code.is_none() {
                     api.prevent_exit();

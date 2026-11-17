@@ -1,6 +1,6 @@
 //! `Platform` for a real desktop: the OS adapters behind the core's trait.
 
-use crate::shell;
+use crate::{diagnostics, shell};
 use speechify_core::app::{Bar, Focus, Platform};
 use speechify_core::audio::{self, Chime};
 use speechify_core::context::{PasteKeys, Target};
@@ -70,19 +70,21 @@ impl Platform for Desktop {
                 let _ = app.emit_to("bar", "level", audio::level(chunk));
             }
         });
-        self.recorder = Some(Recorder::start(microphone, on_chunk)?);
+        self.recorder = Some(diagnostics::attempt("capture.start", || {
+            Recorder::start(microphone, on_chunk)
+        })?);
         Ok(())
     }
 
     fn stop_capture(&mut self) -> Vec<f32> {
-        match self.recorder.take().map(Recorder::stop) {
+        match diagnostics::scope("capture.stop", || self.recorder.take().map(Recorder::stop)) {
             Some((samples, rate)) => audio::to_mono_16k(&samples, 1, rate),
             None => vec![],
         }
     }
 
     fn target(&mut self) -> Target {
-        focus::active_window()
+        diagnostics::scope("focus.target", focus::active_window)
             .map(|window| Target {
                 app: window.app,
                 process: window.process,
@@ -92,7 +94,7 @@ impl Platform for Desktop {
     }
 
     fn focus(&mut self) -> Focus {
-        match focus::editable() {
+        match diagnostics::scope("focus.editable", focus::editable) {
             focus::Editable::Yes => Focus::Editable,
             focus::Editable::No => Focus::NotEditable,
             focus::Editable::Unknown => Focus::Unknown,
@@ -100,7 +102,7 @@ impl Platform for Desktop {
     }
 
     fn selection(&mut self) -> String {
-        typing::selection()
+        diagnostics::scope("typing.selection", typing::selection)
     }
 
     fn paste(&mut self, text: &str, keys: PasteKeys, restore_ms: u64) -> Result<()> {
@@ -112,16 +114,16 @@ impl Platform for Desktop {
             PasteKeys::WithShift => typing::PasteKeys::WithShift,
             PasteKeys::ShiftInsert => typing::PasteKeys::ShiftInsert,
         };
-        typing::paste(text, keys, restore_ms)
+        diagnostics::attempt("typing.paste", || typing::paste(text, keys, restore_ms))
     }
 
     fn copy(&mut self, text: &str) -> Result<()> {
-        typing::copy(text)
+        diagnostics::attempt("typing.copy", || typing::copy(text))
     }
 
     fn press_enter(&mut self) {
         if !self.quitting.load(Ordering::SeqCst) {
-            typing::press_enter();
+            diagnostics::scope("typing.enter", typing::press_enter);
         }
     }
 
@@ -135,6 +137,18 @@ impl Platform for Desktop {
     }
 
     fn show(&mut self, bar: Bar) {
+        diagnostics::event(
+            "bar",
+            match &bar {
+                Bar::Idle => "idle",
+                Bar::Listening { .. } => "listening",
+                Bar::Processing => "processing",
+                Bar::Done { .. } => "done",
+                Bar::Card { .. } => "copy_card",
+                Bar::Notice { error: true, .. } => "error_notice",
+                Bar::Notice { .. } => "notice",
+            },
+        );
         shell::show_bar(&self.app, &bar);
         // Anything that ends a dictation may have added to the history.
         if matches!(bar, Bar::Done { .. } | Bar::Card { .. }) {
