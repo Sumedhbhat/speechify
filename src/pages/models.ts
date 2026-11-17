@@ -190,14 +190,30 @@ export function createModelsPage(deps: Deps): Page {
         get: (s) => s.rewrite.url,
         set: (s, v) => (s.rewrite.url = v),
       }),
-      h("p", { className: `status-note${status.rewrite_reachable ? " ok" : " error"}` }, [
-        h("span", {
-          className: "status-dot",
-          "data-state": status.rewrite_reachable ? "ready" : "error",
-        }),
-        status.rewrite_reachable
-          ? "Connected"
-          : "Can't reach the server. If you use Ollama, check that it is running.",
+      h("div", { className: "row" }, [
+        h("p", { className: `status-note${status.rewrite_reachable ? " ok" : " error"}` }, [
+          h("span", {
+            className: "status-dot",
+            "data-state": status.rewrite_reachable ? "ready" : "error",
+          }),
+          status.rewrite_reachable
+            ? "Connected"
+            : "Can't reach the server. If you use Ollama, check that it is running.",
+        ]),
+        h(
+          "button",
+          {
+            type: "button",
+            className: "btn",
+            id: "rewrite-refresh",
+            title: "Check the server again and reload its models",
+            onclick: (event: MouseEvent) => {
+              (event.currentTarget as HTMLButtonElement).disabled = true;
+              void refreshLanguage();
+            },
+          },
+          [icon("refresh"), "Refresh"],
+        ),
       ]),
       text(store, settings, {
         label: "Model",
@@ -278,6 +294,19 @@ export function createModelsPage(deps: Deps): Page {
       ]),
     );
     renderPull();
+  }
+
+  /** Asks the server again, e.g. after starting Ollama with the page open. */
+  async function refreshLanguage(): Promise<void> {
+    await guard(async () => {
+      // A server address typed just before clicking may still be saving.
+      const settings = await store.settled();
+      renderLanguage(settings, await api.getStatus());
+    });
+    // Either the redrawn button or, after an error, the one that was clicked.
+    const button = language.querySelector<HTMLButtonElement>("#rewrite-refresh")!;
+    button.disabled = false;
+    button.focus();
   }
 
   void events.modelProgress((progress) => {

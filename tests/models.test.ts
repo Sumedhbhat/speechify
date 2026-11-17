@@ -253,4 +253,30 @@ describe("models page", () => {
     );
     expect(button(document, "Download with Ollama").disabled).toBe(true);
   });
+
+  it("checks the language-model server again on refresh", async () => {
+    ctx.api.getStatus.mockResolvedValue(status({ rewrite_reachable: false, rewrite_models: [] }));
+    await setup();
+    expect(button(document, "Download with Ollama").disabled).toBe(true);
+
+    ctx.api.getStatus.mockResolvedValue(status());
+    const refresh = button(document, "Refresh");
+    refresh.click();
+    expect(refresh.disabled).toBe(true);
+    await settle();
+    expect(document.querySelector(".status-note.ok")!.textContent).toBe("Connected");
+    expect(button(document, "Download with Ollama").disabled).toBe(false);
+    expect(
+      [...document.querySelectorAll("#rewrite-models option")].map(
+        (o) => (o as HTMLOptionElement).value,
+      ),
+    ).toEqual(["qwen2.5:1.5b", "llama3.2:3b"]);
+    expect(button(document, "Refresh").disabled).toBe(false);
+
+    ctx.api.getStatus.mockRejectedValueOnce("Speechify is not responding.");
+    button(document, "Refresh").click();
+    await settle();
+    expect(toasts()).toContain("Speechify is not responding.");
+    expect(button(document, "Refresh").disabled).toBe(false);
+  });
 });
