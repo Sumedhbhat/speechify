@@ -57,6 +57,12 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Shared {
     pub fn send(&self, msg: Msg) {
         let input = matches!(msg, Msg::Input(_));
+        if let Msg::Input(event) = &msg {
+            if !matches!(event, Event::Tick) {
+                // Events contain binding names, never the raw keys being typed.
+                crate::diagnostics::event("input.queued", &format!("{event:?}"));
+            }
+        }
         if input {
             // Count queued input rather than resetting a flag at review start:
             // a start already in the channel must also interrupt the review.
@@ -179,7 +185,8 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
     let (tx, rx) = channel();
     // The key reader is tied to the thread that creates it, so this one only
     // answers "can we read keys at all?".
-    let keyboard_available = Keyboard::new().available();
+    let keyboard_available = crate::diagnostics::scope("keyboard.open", || Keyboard::new().available());
+    crate::diagnostics::event("keyboard.available", if keyboard_available { "yes" } else { "no" });
     let shared = Arc::new(Shared {
         tx: Mutex::new(tx),
         db: Mutex::new(Store::open(&db_path)?),
@@ -286,7 +293,7 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
                         if at >= accept_after {
                             let was_idle = controller.is_idle();
                             let began = Instant::now();
-                            controller.handle(event);
+                            crate::diagnostics::scope("input.handle", || controller.handle(event));
                             if controller.is_idle() && (!was_idle || began.elapsed() >= Duration::from_millis(100)) {
                                 accept_after = Instant::now();
                             }
@@ -299,6 +306,7 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
                                         | speechify_core::hotkey::Bind::Command
                                 )
                         ) {
+                            crate::diagnostics::event("input.stale", "discarded");
                             crate::shell::show_bar(
                                 &app,
                                 &speechify_core::app::Bar::Notice {
@@ -384,6 +392,7 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
         if state.quitting.load(Ordering::SeqCst) {
             app.exit(0);
         } else if result.is_err() {
+            crate::diagnostics::event("worker", "panicked");
             let message = "The dictation worker stopped. Restart Speechify to continue.";
             {
                 let mut status = lock(&state.speech);

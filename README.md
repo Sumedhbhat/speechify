@@ -113,6 +113,8 @@ See [docs/building.md](docs/building.md), [docs/testing.md](docs/testing.md) and
 
 ## Documentation
 
+- [docs/diagnostics.md](docs/diagnostics.md): recording crash logs, collection steps and initial macOS findings
+
 - [docs/features.md](docs/features.md): what the formatter, dictionary, snippets, Command Mode, teacher and insights do, with examples
 - [docs/architecture.md](docs/architecture.md): crates, threads, data model, how to extend
 - [docs/building.md](docs/building.md): toolchain and build steps
