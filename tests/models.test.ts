@@ -293,6 +293,7 @@ describe("models page", () => {
     const field = byLabel<HTMLInputElement>(document, "Model");
     button(document, "Refresh").click();
     await settle();
+    expect(button(document, "Refresh").disabled).toBe(true);
     field.value = "mistral:7b";
     answer(status({ rewrite_reachable: false, rewrite_models: [] }));
     await settle();
@@ -303,6 +304,22 @@ describe("models page", () => {
     );
     expect(document.querySelectorAll("#rewrite-models option")).toHaveLength(0);
     expect(button(document, "Download with Ollama").disabled).toBe(true);
+
+    // A server address typed just before clicking is saved before the server is asked.
+    let saved!: () => void;
+    ctx.api.saveSettings.mockReturnValueOnce(new Promise<void>((resolve) => (saved = resolve)));
+    ctx.api.getStatus.mockResolvedValue(status());
+    const asked = ctx.api.getStatus.mock.calls.length;
+    change(byLabel<HTMLInputElement>(document, "Server"), "http://localhost:11500");
+    button(document, "Refresh").click();
+    await settle();
+    expect(ctx.api.getStatus).toHaveBeenCalledTimes(asked);
+    expect(button(document, "Refresh").disabled).toBe(true);
+    saved();
+    await settle();
+    expect(ctx.api.getStatus).toHaveBeenCalledTimes(asked + 1);
+    expect(document.querySelector(".status-note.ok")!.textContent).toBe("Connected");
+    expect(button(document, "Refresh").disabled).toBe(false);
 
     ctx.api.getStatus.mockRejectedValueOnce("Speechify is not responding.");
     button(document, "Refresh").click();
