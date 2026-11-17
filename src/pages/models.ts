@@ -261,8 +261,9 @@ export function createModelsPage(deps: Deps): Page {
     startHeartbeat();
   }
 
-  function renderLanguage(settings: Settings, status: Status): void {
-    renderReach({ reachable: status.rewrite_reachable, models: status.rewrite_models });
+  function renderLanguage(settings: Settings, status: Status, current: boolean): void {
+    if (current)
+      renderReach({ reachable: status.rewrite_reachable, models: status.rewrite_models });
     language.replaceChildren(
       toggle(store, settings, {
         label: "Tidy text with a language model",
@@ -371,6 +372,8 @@ export function createModelsPage(deps: Deps): Page {
   return {
     el,
     async show() {
+      // Opening the page asks the server too, so a check still in flight is now older.
+      const ticket = ++latest;
       const [list, status, settings] = await Promise.all([
         api.models(),
         api.getStatus(),
@@ -379,7 +382,7 @@ export function createModelsPage(deps: Deps): Page {
       models = list;
       renderCards();
       renderDevice(settings, status);
-      renderLanguage(settings, status);
+      renderLanguage(settings, status, ticket === latest);
       startHeartbeat();
     },
   };

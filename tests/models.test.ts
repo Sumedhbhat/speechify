@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RewriteStatus } from "../src/api";
+import type { RewriteStatus, Status } from "../src/api";
 import { createModelsPage, HEARTBEAT_MS } from "../src/pages/models";
 import type { Page } from "../src/deps";
 import { byLabel, byText, change, makeDeps, model, settle, status, toasts } from "./fakes";
@@ -406,6 +406,30 @@ describe("models page", () => {
       await page.show();
       await tick();
       expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(calls + 2);
+
+      // A beat still pending when the page is opened again cannot undo the newer answer.
+      let late!: (value: RewriteStatus) => void;
+      ctx.api.rewriteStatus.mockReturnValueOnce(new Promise((resolve) => (late = resolve)));
+      await tick();
+      page.el.remove();
+      document.body.append(page.el);
+      await page.show();
+      expect(document.querySelector(".status-note.error")).not.toBeNull();
+      late(UP);
+      await settle();
+      expect(document.querySelector(".status-note.error")).not.toBeNull();
+
+      // ...and a Refresh that answers while the page is opening wins over the page's own answer.
+      let opened!: (value: Status) => void;
+      ctx.api.getStatus.mockReturnValueOnce(new Promise((resolve) => (opened = resolve)));
+      const showing = page.show();
+      ctx.api.rewriteStatus.mockResolvedValueOnce(UP);
+      button(document, "Refresh").click();
+      await settle();
+      expect(document.querySelector(".status-note.ok")).not.toBeNull();
+      opened(status({ rewrite_reachable: false, rewrite_models: [] }));
+      await showing;
+      expect(document.querySelector(".status-note.ok")).not.toBeNull();
     } finally {
       Reflect.deleteProperty(document, "hidden");
       vi.useRealTimers();
