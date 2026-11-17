@@ -1,7 +1,11 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { createModelsPage } from "../src/pages/models";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RewriteStatus } from "../src/api";
+import { createModelsPage, HEARTBEAT_MS } from "../src/pages/models";
 import type { Page } from "../src/deps";
 import { byLabel, byText, change, makeDeps, model, settle, status, toasts } from "./fakes";
+
+const UP: RewriteStatus = { reachable: true, models: ["qwen2.5:1.5b", "llama3.2:3b"] };
+const DOWN: RewriteStatus = { reachable: false, models: [] };
 
 let ctx: ReturnType<typeof makeDeps>;
 let page: Page;
@@ -259,7 +263,6 @@ describe("models page", () => {
     await setup();
     expect(button(document, "Download with Ollama").disabled).toBe(true);
 
-    ctx.api.getStatus.mockResolvedValue(status());
     const refresh = button(document, "Refresh");
     refresh.click();
     expect(refresh.disabled).toBe(true);
@@ -288,14 +291,14 @@ describe("models page", () => {
     expect(document.activeElement).toBe(byLabel(document, "Server"));
 
     // Fields keep text typed while the check is still running.
-    let answer!: (value: ReturnType<typeof status>) => void;
-    ctx.api.getStatus.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    let answer!: (value: RewriteStatus) => void;
+    ctx.api.rewriteStatus.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
     const field = byLabel<HTMLInputElement>(document, "Model");
     button(document, "Refresh").click();
     await settle();
     expect(button(document, "Refresh").disabled).toBe(true);
     field.value = "mistral:7b";
-    answer(status({ rewrite_reachable: false, rewrite_models: [] }));
+    answer(DOWN);
     await settle();
     expect(byLabel<HTMLInputElement>(document, "Model")).toBe(field);
     expect(field.value).toBe("mistral:7b");
@@ -308,23 +311,104 @@ describe("models page", () => {
     // A server address typed just before clicking is saved before the server is asked.
     let saved!: () => void;
     ctx.api.saveSettings.mockReturnValueOnce(new Promise<void>((resolve) => (saved = resolve)));
-    ctx.api.getStatus.mockResolvedValue(status());
-    const asked = ctx.api.getStatus.mock.calls.length;
+    ctx.api.rewriteStatus.mockResolvedValue(UP);
+    const asked = ctx.api.rewriteStatus.mock.calls.length;
     change(byLabel<HTMLInputElement>(document, "Server"), "http://localhost:11500");
     button(document, "Refresh").click();
     await settle();
-    expect(ctx.api.getStatus).toHaveBeenCalledTimes(asked);
+    expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(asked);
     expect(button(document, "Refresh").disabled).toBe(true);
     saved();
     await settle();
-    expect(ctx.api.getStatus).toHaveBeenCalledTimes(asked + 1);
+    expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(asked + 1);
     expect(document.querySelector(".status-note.ok")!.textContent).toBe("Connected");
     expect(button(document, "Refresh").disabled).toBe(false);
 
-    ctx.api.getStatus.mockRejectedValueOnce("Speechify is not responding.");
+    ctx.api.rewriteStatus.mockRejectedValueOnce("Speechify is not responding.");
     button(document, "Refresh").click();
     await settle();
     expect(toasts()).toContain("Speechify is not responding.");
     expect(button(document, "Refresh").disabled).toBe(false);
+  });
+
+  it("checks the language-model server every 10 seconds while the page is open", async () => {
+    vi.useFakeTimers();
+    try {
+      ctx.api.getStatus.mockResolvedValue(status({ rewrite_reachable: false, rewrite_models: [] }));
+      ctx.api.rewriteStatus.mockResolvedValue(DOWN);
+      await setup();
+      const tick = async () => {
+        await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
+        await settle();
+      };
+      expect(ctx.api.rewriteStatus).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_MS - 1);
+      expect(ctx.api.rewriteStatus).not.toHaveBeenCalled();
+
+      // Same answer: the page is left exactly as it was.
+      const note = document.querySelector(".status-note.error")!.firstChild;
+      await tick();
+      expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(1);
+      expect(document.querySelector(".status-note.error")!.firstChild).toBe(note);
+
+      // Ollama starts: the next beat shows it without a click.
+      ctx.api.rewriteStatus.mockResolvedValue(UP);
+      await tick();
+      expect(document.querySelector(".status-note.ok")!.textContent).toBe("Connected");
+      expect(button(document, "Download with Ollama").disabled).toBe(false);
+      expect(document.querySelectorAll("#rewrite-models option")).toHaveLength(2);
+      expect(button(document, "Refresh").disabled).toBe(false);
+
+      // A failed beat is quiet and the heartbeat keeps going.
+      ctx.api.rewriteStatus.mockRejectedValueOnce("Speechify is not responding.");
+      await tick();
+      expect(toasts()).not.toContain("Speechify is not responding.");
+      await tick();
+      expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(4);
+
+      // A slow beat is never doubled up.
+      let answer!: (value: RewriteStatus) => void;
+      ctx.api.rewriteStatus.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+      await tick();
+      await tick();
+      await tick();
+      expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(5);
+
+      // ...and when a Refresh answers first, the older, slower beat cannot undo it.
+      ctx.api.rewriteStatus.mockResolvedValueOnce(DOWN);
+      button(document, "Refresh").click();
+      await settle();
+      expect(document.querySelector(".status-note.error")).not.toBeNull();
+      answer(UP);
+      await settle();
+      expect(document.querySelector(".status-note.error")).not.toBeNull();
+      ctx.api.rewriteStatus.mockResolvedValue(UP);
+      await tick();
+      expect(document.querySelector(".status-note.ok")).not.toBeNull();
+
+      // Hidden window: no checks.
+      const calls = ctx.api.rewriteStatus.mock.calls.length;
+      Object.defineProperty(document, "hidden", { configurable: true, value: true });
+      await tick();
+      await tick();
+      expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(calls);
+      Object.defineProperty(document, "hidden", { configurable: true, value: false });
+      await tick();
+      expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(calls + 1);
+
+      // Leaving the page stops it; showing the page again starts it once.
+      page.el.remove();
+      await tick();
+      await tick();
+      expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(calls + 1);
+      document.body.append(page.el);
+      await page.show();
+      await page.show();
+      await tick();
+      expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(calls + 2);
+    } finally {
+      Reflect.deleteProperty(document, "hidden");
+      vi.useRealTimers();
+    }
   });
 });

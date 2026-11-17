@@ -1,10 +1,13 @@
 // Models: speech models to download and pick, the device, the language model.
 
-import type { Progress, Settings, SpeechModel, Status } from "../api";
+import type { Progress, RewriteStatus, Settings, SpeechModel, Status } from "../api";
 import { number, select, text, toggle } from "../controls";
 import type { Deps, Page } from "../deps";
 import { formatBytes } from "../format";
 import { confirmButton, errorText, h, icon, pageHeader, section, toast } from "../ui";
+
+/** How often the open Models page asks the language-model server again. */
+export const HEARTBEAT_MS = 10_000;
 
 const DEVICES: [string, string][] = [
   ["auto", "Automatic"],
@@ -49,12 +52,16 @@ export function createModelsPage(deps: Deps): Page {
     {
       type: "button",
       className: "btn",
-      title: "Check the server again and reload its models",
+      title: "Check the server now (it is also checked every 10 seconds)",
       onclick: () => void refreshReach(),
     },
     [icon("refresh"), "Refresh"],
   );
-  const reachRow = h("div", { className: "row" }, [reachNote, refreshButton]);
+  // The button sits at the end of the row, so a status change never moves it.
+  const reachRow = h("div", { className: "reach" }, [reachNote, refreshButton]);
+  let shown = "";
+  let latest = 0;
+  let heartbeat: ReturnType<typeof setTimeout> | undefined;
   const pullButton = h(
     "button",
     {
@@ -203,15 +210,26 @@ export function createModelsPage(deps: Deps): Page {
   }
 
   /** Shows whether the server answered; the editable fields are left alone. */
-  function renderReach(status: Status): void {
-    const ok = status.rewrite_reachable;
+  function renderReach(reach: RewriteStatus): void {
+    // The heartbeat usually brings the same answer; leave the page untouched then.
+    const key = JSON.stringify(reach);
+    if (key === shown) return;
+    shown = key;
+    const ok = reach.reachable;
     reachNote.className = `status-note${ok ? " ok" : " error"}`;
     reachNote.replaceChildren(
       h("span", { className: "status-dot", "data-state": ok ? "ready" : "error" }),
       ok ? "Connected" : "Can't reach the server. If you use Ollama, check that it is running.",
     );
-    modelList.replaceChildren(...status.rewrite_models.map((name) => h("option", { value: name })));
+    modelList.replaceChildren(...reach.models.map((name) => h("option", { value: name })));
     pullButton.disabled = !ok;
+  }
+
+  /** Asks the server; only the newest answer is shown, so a slow one cannot undo a later one. */
+  async function checkReach(): Promise<void> {
+    const ticket = ++latest;
+    const reach = await api.rewriteStatus();
+    if (ticket === latest) renderReach(reach);
   }
 
   /** Asks the server again, e.g. after starting Ollama with the page open. */
@@ -221,15 +239,30 @@ export function createModelsPage(deps: Deps): Page {
     await guard(async () => {
       // A server address typed just before clicking may still be saving.
       await store.settled();
-      renderReach(await api.getStatus());
+      await checkReach();
     });
     refreshButton.disabled = false;
     // Disabling drops keyboard focus; give it back unless the user moved on.
     if (focused && document.activeElement === document.body) refreshButton.focus();
   }
 
+  /** Checks the server every HEARTBEAT_MS while this page is open and the window visible. */
+  function startHeartbeat(): void {
+    clearTimeout(heartbeat);
+    heartbeat = setTimeout(() => void beat(), HEARTBEAT_MS);
+  }
+
+  async function beat(): Promise<void> {
+    // Leaving the page stops the heartbeat; showing it again restarts it.
+    if (!el.isConnected) return;
+    // A failed heartbeat stays quiet; the next one, or Refresh, tries again.
+    if (!document.hidden) await checkReach().catch(() => undefined);
+    // The next beat is timed from the end of this one, so a slow server is never asked twice at once.
+    startHeartbeat();
+  }
+
   function renderLanguage(settings: Settings, status: Status): void {
-    renderReach(status);
+    renderReach({ reachable: status.rewrite_reachable, models: status.rewrite_models });
     language.replaceChildren(
       toggle(store, settings, {
         label: "Tidy text with a language model",
@@ -347,6 +380,7 @@ export function createModelsPage(deps: Deps): Page {
       renderCards();
       renderDevice(settings, status);
       renderLanguage(settings, status);
+      startHeartbeat();
     },
   };
 }
