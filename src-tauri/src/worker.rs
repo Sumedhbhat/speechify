@@ -11,7 +11,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -41,6 +41,10 @@ pub struct Shared {
     pub speech: Arc<Mutex<SpeechStatus>>,
     pub teacher_running: AtomicBool,
     pub quitting: Arc<AtomicBool>,
+    /// The process is already exiting, so the worker must not ask it to.
+    exiting: AtomicBool,
+    /// Set once the worker has stopped and dropped the speech models.
+    stopped: (Mutex<bool>, Condvar),
     /// Number of queued input messages, so a running review yields.
     wanted: AtomicUsize,
     /// Cancel flags for model downloads in progress.
@@ -98,6 +102,28 @@ impl Shared {
         {
             app.exit(0);
         }
+    }
+
+    /// Stops the worker and waits until it has dropped the speech models.
+    ///
+    /// ggml's Metal backend asserts at process exit that no GPU buffers are
+    /// left (`GGML_ASSERT([rsets->data count] == 0)` in a static destructor).
+    /// A model still loaded then aborts the process, and macOS reports the
+    /// quit as a crash. Quits that skip `quit` (Dock › Quit, logging out, an
+    /// installer's or script's quit Apple event, an update's restart) all
+    /// reach `RunEvent::Exit` first, which calls this.
+    pub fn release_for_exit(&self, wait: Duration) {
+        self.exiting.store(true, Ordering::SeqCst);
+        self.quitting.store(true, Ordering::SeqCst);
+        let _ = lock(&self.tx).send(Queued {
+            message: Msg::Quit,
+            at: Instant::now(),
+        });
+        let (stopped, signal) = &self.stopped;
+        let (stopped, _) = signal
+            .wait_timeout_while(lock(stopped), wait, |stopped| !*stopped)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::diagnostics::event("app.release_models", if *stopped { "released" } else { "timed out" });
     }
 
     pub fn db(&self) -> MutexGuard<'_, Store> {
@@ -196,6 +222,8 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
         speech: Arc::new(Mutex::new(SpeechStatus::default())),
         teacher_running: AtomicBool::new(false),
         quitting: Arc::new(AtomicBool::new(false)),
+        exiting: AtomicBool::new(false),
+        stopped: (Mutex::new(false), Condvar::new()),
         wanted: AtomicUsize::new(0),
         downloads: Mutex::new(HashMap::new()),
         runtime_dir: runtime_dir(&app),
@@ -411,9 +439,15 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
             }
         }));
         state.teacher_running.store(false, Ordering::Relaxed);
+        // The controller, and with it every model, was dropped when the
+        // closure above returned or unwound.
+        *lock(&state.stopped.0) = true;
+        state.stopped.1.notify_all();
         if state.quitting.load(Ordering::SeqCst) {
             crate::diagnostics::event("worker", "shutdown_complete");
-            app.exit(0);
+            if !state.exiting.load(Ordering::SeqCst) {
+                app.exit(0);
+            }
         } else if result.is_err() {
             crate::diagnostics::event("worker", "panicked");
             let message = "The dictation worker stopped. Restart Speechify to continue.";

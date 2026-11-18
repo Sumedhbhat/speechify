@@ -64,3 +64,16 @@ Cmd+Q produced a separate, reproducible SIGABRT in `ggml_abort` during native gl
 
 
 The installed candidate passed a physical Ctrl+Alt dictation test, detected permission grants without restart, exported a real JSON bundle from Settings, and exited cleanly with Cmd+Q without a new crash report. See [candidate validation and screenshots](evidence/macos-validation.md) for the observed stage records and limits.
+
+## Quits outside the menu, 18 November 2026
+
+Routing Cmd+Q through the worker left every other way out unprotected. Dock › Quit, logging out, an installer's or script's quit Apple event, and the in-app update's restart still went from `NSApplication terminate:` (or `exit`) straight to native teardown, and macOS showed "Speechify quit unexpectedly". Running the binary with stderr captured and sending a quit Apple event shows the failing assertion:
+
+```text
+ggml/src/ggml-metal/ggml-metal-device.m:1040: GGML_ASSERT([rsets->data count] == 0) failed
+  ggml_abort ← libggml-metal ← __cxa_finalize_ranges ← exit ← -[NSApplication terminate:] ← _handleAEQuit
+```
+
+ggml's Metal device is destroyed by a static destructor at exit and asserts that no GPU buffers are still registered. A loaded speech model's buffers still are, so the process aborts (exit status 134).
+
+Every one of those paths emits `RunEvent::Exit` first (tao's `applicationWillTerminate`, `AppHandle::exit`, and `restart` from a background thread). The app now stops the worker there and waits up to 5 s until it has dropped the models, logging `app.release_models released` (or `timed out` if a native call is still busy). On the installed release build, a quit Apple event left one new crash report before the change and none in six runs after it; Cmd+Q and an update restart from 0.1.0-nightly.1001 to .1002 also left none.

@@ -145,8 +145,14 @@ fn main() {
                 shell::show_main(app, "home");
                 return;
             }
-            #[cfg(not(target_os = "macos"))]
-            let _ = app;
+            // Every way out (Quit, Cmd+Q, Dock › Quit, logout, an installer's
+            // quit, an update's restart) passes here before the process exits.
+            if let RunEvent::Exit = event {
+                if let Some(shared) = app.try_state::<Arc<worker::Shared>>() {
+                    shared.release_for_exit(std::time::Duration::from_secs(5));
+                }
+                return;
+            }
             if let RunEvent::ExitRequested { api, code, .. } = event {
                 diagnostics::event(
                     "app.exit_requested",
