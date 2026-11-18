@@ -175,12 +175,19 @@ export interface Status {
   platform: "windows" | "macos" | "linux";
   wayland: boolean; // a Wayland session: apps cannot watch global keys
   shortcuts: boolean; // global shortcuts work; false on Wayland, or on a Mac without Accessibility
+  updates: boolean; // this build can update itself (macOS)
   speech_ready: boolean;
   speech_device: string; // e.g. "vulkan NVIDIA GeForce RTX 4060"; empty until loaded
   speech_error: string; // empty when fine
   rewrite_reachable: boolean; // the language-model server answers
   rewrite_models: string[]; // models that server has
   microphones: string[];
+}
+
+/** A release newer than the running one. */
+export interface Update {
+  version: string;
+  notes: string;
 }
 
 export interface RewriteStatus {
@@ -227,6 +234,10 @@ export const api = {
   getSettings: () => invoke<Settings>("get_settings"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
   getStatus: () => invoke<Status>("get_status"),
+  /** `null` when this is the newest release. */
+  checkUpdate: () => invoke<Update | null>("check_update"),
+  /** Replaces the app with the newest release and restarts; resolves only on failure. */
+  installUpdate: () => invoke<void>("install_update"),
 
   history: (search: string, limit: number, offset: number) =>
     invoke<Dictation[]>("history", { search, limit, offset }),

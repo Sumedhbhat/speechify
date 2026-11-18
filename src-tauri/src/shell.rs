@@ -103,6 +103,7 @@ pub fn show_main(app: &AppHandle, page: &str) {
 
 pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let item = |id: &str, label: &str| MenuItem::with_id(app, id, label, true, None::<&str>);
+    let update = item("update", "Check for Updates…")?;
     let menu = Menu::with_items(
         app,
         &[
@@ -116,6 +117,11 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             &item("quit", "Quit Speechify")?,
         ],
     )?;
+    if crate::updates::SUPPORTED {
+        // Just above "Quit Speechify".
+        menu.insert(&update, 7)?;
+        crate::updates::watch(app, update);
+    }
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("Speechify")
         .menu(&menu)
@@ -127,7 +133,8 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         let shared = app.state::<Arc<Shared>>();
         match event.id().as_ref() {
             "open" => show_main(app, "home"),
-            "settings" => show_main(app, "settings"),
+            // The Settings page checks for updates and offers to install.
+            "settings" | "update" => show_main(app, "settings"),
             "toggle" => shared.send(Msg::Input(Event::BarClick)),
             "paste" => {
                 // The menu has closed and no keys are held, so paste right away.

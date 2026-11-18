@@ -2,8 +2,8 @@
 
 import type { Settings } from "../api";
 import { select, text, toggle, type Binding } from "../controls";
-import type { Deps, Page } from "../deps";
-import { h, pageHeader, section } from "../ui";
+import type { Api, Deps, Page } from "../deps";
+import { errorText, h, pageHeader, section } from "../ui";
 
 type Hotkey = keyof Settings["hotkeys"];
 
@@ -175,6 +175,7 @@ export function createSettingsPage({ api, settings: store }: Deps): Page {
             set: (s, v) => (s.theme = v),
           }),
         ]),
+        ...(status.updates ? [updatesSection(api)] : []),
         h("p", {
           className: "about hint",
           textContent: `Speechify ${status.version} · ${status.platform}`,
@@ -182,4 +183,49 @@ export function createSettingsPage({ api, settings: store }: Deps): Page {
       );
     },
   };
+}
+
+/** Checks for a newer release as soon as it is shown and offers to install it. */
+function updatesSection(api: Api): HTMLElement {
+  const line = h("p", { className: "hint", role: "status" });
+  const button = h("button", { type: "button" });
+  const offer = (label: string, primary: boolean, action: () => Promise<void>) => {
+    button.textContent = label;
+    button.className = primary ? "btn primary" : "btn";
+    button.disabled = false;
+    button.hidden = false;
+    button.onclick = () => void action();
+  };
+  const check = async () => {
+    button.hidden = true;
+    line.textContent = "Checking for updates…";
+    try {
+      const update = await api.checkUpdate();
+      if (update) {
+        line.textContent = `Speechify ${update.version} is available.`;
+        offer("Install and restart", true, install);
+      } else {
+        line.textContent = "Speechify is up to date.";
+        offer("Check again", false, check);
+      }
+    } catch (error) {
+      line.textContent = errorText(error);
+      offer("Try again", false, check);
+    }
+  };
+  const install = async () => {
+    button.disabled = true;
+    line.textContent = "Installing the update. Speechify will restart by itself.";
+    try {
+      await api.installUpdate();
+    } catch (error) {
+      line.textContent = errorText(error);
+      offer("Try again", false, install);
+    }
+  };
+  void check();
+  return section("Updates", "Updates install in place and keep Speechify’s permissions.", [
+    line,
+    button,
+  ]);
 }

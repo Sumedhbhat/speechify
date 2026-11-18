@@ -52,6 +52,8 @@ pub struct Status {
     /// Global shortcuts can be read: false on Wayland, or on a Mac where
     /// Speechify has not been allowed Accessibility access.
     shortcuts: bool,
+    /// This build can update itself (macOS only).
+    updates: bool,
     speech_ready: bool,
     speech_device: String,
     speech_error: String,
@@ -85,6 +87,7 @@ pub fn get_status(shared: App) -> Status {
         },
         wayland: speechify_os::is_wayland(),
         shortcuts: shared.keyboard_available.load(Ordering::Relaxed),
+        updates: crate::updates::SUPPORTED,
         speech_ready: speech.ready,
         speech_device: speech.device,
         speech_error: speech.error,
@@ -92,6 +95,28 @@ pub fn get_status(shared: App) -> Status {
         rewrite_models: models.unwrap_or_default(),
         microphones: speechify_os::capture::microphones(),
     }
+}
+
+/// A release newer than the running one.
+#[derive(Serialize)]
+pub struct Update {
+    version: String,
+    notes: String,
+}
+
+#[tauri::command]
+pub async fn check_update(app: AppHandle) -> Result<Option<Update>> {
+    let found = crate::updates::find(&app).await?;
+    Ok(found.map(|update| Update {
+        version: update.version,
+        notes: update.body.unwrap_or_default(),
+    }))
+}
+
+/// Installs the newest release and restarts; returns only on failure.
+#[tauri::command]
+pub async fn install_update(app: AppHandle) -> Result<()> {
+    crate::updates::install(&app).await
 }
 
 /// Whether the language-model server answers, and the models it has.

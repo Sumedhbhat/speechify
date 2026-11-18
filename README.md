@@ -14,7 +14,7 @@ Known gaps:
 - **Command Mode needs the language model.** Without it, a command shows an error.
 - **Clipboard restore covers text only.** If you had an image or files on the clipboard, they are not put back after a paste.
 - **Mac Fn key.** It cannot be used as a shortcut. The Mac default is Ctrl+Alt.
-- **Unsigned installers.** Windows will warn about an unknown publisher. The macOS app is only ad-hoc signed.
+- **Unsigned installers.** Windows will warn about an unknown publisher. The macOS app is signed with Speechify's own certificate, not an Apple Developer ID, so the first time you open it macOS asks you to allow it under System Settings › Privacy & Security › Open Anyway. Updates after that keep the Accessibility permission.
 - **Not built yet:** retrying a dictation from History, dragging or docking the bar, a scratchpad shortcut, mouse-button shortcuts, IDE file tagging, and detecting playing media before muting. The mute option mutes all system output while you dictate.
 
 ## What it does
@@ -78,7 +78,7 @@ If no text field has focus, or the paste fails, the bar shows a **copy card** ab
 1. Open the Models page and download a speech model. Whisper large-v3 turbo (about 0.9 GB) is the default and needs a graphics card to feel fast. Parakeet TDT 0.6B v3 is the recommended choice without one.
 2. Optional: install [Ollama](https://ollama.com), then on the Models page pull the cleanup model (`gemma3:4b` by default). Without it, the rule-based formatter does the cleanup.
 3. Optional: pull a larger model for the nightly teacher (`qwen3.5:9b-q4_K_M` by default) and download Whisper large-v3 for it.
-4. On macOS, allow the microphone when asked. Accessibility access is needed to type into other apps.
+4. On macOS, allow the microphone when asked. Accessibility access is needed to type into other apps. You allow it once: Speechify updates itself from Settings or the menu bar, and updates keep the permission.
 5. Hold the shortcut and talk.
 
 ## How it works

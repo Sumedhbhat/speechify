@@ -31,6 +31,8 @@ jobs:
           persist-credentials: false
       - name: Determine version and channel
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # The workspace Cargo.toml is the only place the version is written.
           manifest="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
@@ -44,6 +46,15 @@ jobs:
                 "$line".*) ;;
                 *) echo "Cargo.toml version $manifest does not belong to release/$line." >&2; exit 1 ;;
               esac
+              # Only the current release line publishes. The "release: retired"
+              # ruleset makes every other release/* branch read-only, so a
+              # branch it covers was retired by scripts/cut-release.sh or was
+              # created without it.
+              retired="$(gh api "repos/$GITHUB_REPOSITORY/rules/branches/release/$line" --jq 'map(select(.type == "update")) | length')"
+              if [ "$retired" != 0 ]; then
+                echo "release/$line is not the current release line, so it publishes nothing. Use scripts/cut-release.sh (docs/releases.md)." >&2
+                exit 1
+              fi
               channel=stable
               version="$manifest"
               ;;
@@ -120,18 +131,31 @@ jobs:
 
       - name: Build (macOS)
         if: runner.os == 'macOS'
+        env:
+          CHANNEL: ${{ needs.version.outputs.channel }}
         run: |
-          npm run tauri -- build --ci --config "{\"version\":\"$VERSION\"}" --bundles app -- --locked
-          bundle=target/release/bundle/macos/Speechify.app
+          # Nightlies update from nightly.json; everything else from the
+          # stable.json named in tauri.conf.json.
+          config="{\"version\":\"$VERSION\"}"
+          if [ "$CHANNEL" = nightly ]; then
+            feed="https://github.com/$GITHUB_REPOSITORY/releases/download/updates/nightly.json"
+            config="{\"version\":\"$VERSION\",\"plugins\":{\"updater\":{\"endpoints\":[\"$feed\"]}}}"
+          fi
+          npm run tauri -- build --ci --config "$config" --bundles app -- --locked
           test "$(target/release/speechify --version)" = "speechify $VERSION"
-          # Ad-hoc signed until there is an Apple Developer ID.
-          codesign --force --deep --sign - --entitlements src-tauri/Entitlements.plist "$bundle"
-          codesign --verify --deep --strict --verbose=2 "$bundle"
-          mkdir -p artifacts/dmg-stage
-          cp -R "$bundle" artifacts/dmg-stage/
-          ln -s /Applications artifacts/dmg-stage/Applications
-          hdiutil create -volname Speechify -srcfolder artifacts/dmg-stage -ov -format UDZO "artifacts/Speechify-$VERSION-mac-arm64.dmg"
-          rm -rf artifacts/dmg-stage
+
+      # A separate step so the build, which runs dependency build scripts,
+      # never sees the signing secrets. Pull requests get none and sign ad hoc.
+      - name: Sign and package (macOS)
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERTIFICATE_P12: ${{ github.event_name == 'push' && secrets.MACOS_CERTIFICATE_P12 || '' }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ github.event_name == 'push' && secrets.MACOS_CERTIFICATE_PASSWORD || '' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ github.event_name == 'push' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ github.event_name == 'push' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+          # Anything that will be published must keep users' permissions.
+          REQUIRE_SIGNING: ${{ needs.version.outputs.channel != 'none' && '1' || '' }}
+        run: bash scripts/macos-package.sh target/release/bundle/macos/Speechify.app "$VERSION" artifacts
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
@@ -163,6 +187,10 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       CHANNEL: ${{ needs.version.outputs.channel }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: installer-*
@@ -189,6 +217,30 @@ jobs:
           - **macOS** (Apple silicon): [Speechify-$VERSION-mac-arm64.dmg]($url/Speechify-$VERSION-mac-arm64.dmg)
           - **Ubuntu, Debian**: [Speechify-$VERSION-linux-amd64.deb]($url/Speechify-$VERSION-linux-amd64.deb)
 
-          To update, install the new version over the old one. Your dictations, dictionary, settings and models are kept. See docs/releases.md for channels."
+          On macOS, Speechify updates itself: use Check for Updates in the menu bar or Settings. Elsewhere, install the new version over the old one. Your dictations, dictionary, settings and models are kept. See docs/releases.md for channels."
           gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "Speechify $VERSION" \
             --notes "$notes" --generate-notes $prerelease
+
+      # The app reads updates/<channel>.json. This runs after the versioned
+      # release exists, also on a rerun, and never moves the feed to an older
+      # version (an older release/X.Y patch, or a rerun of an old build).
+      - name: Publish the update feed
+        run: |
+          tag="v$VERSION"
+          archive="Speechify-$VERSION-mac-arm64.app.tar.gz"
+          if ! gh release view updates >/dev/null 2>&1; then
+            gh release create updates --target "$GITHUB_SHA" --prerelease --title "Update feed" \
+              --notes "Read by Speechify's in-app updater. Not a download: get installers from the versioned releases."
+          fi
+          gh release download updates --pattern "$CHANNEL.json" --output current.json 2>/dev/null || true
+          # The signature of the archive the release really holds: a full rerun
+          # rebuilds dist/ but does not replace an existing release's files.
+          gh release download "$tag" --pattern "$archive.sig" --output published.sig
+          status=0
+          python3 scripts/update-feed.py "$VERSION" published.sig \
+            "https://github.com/$GH_REPO/releases/download/$tag/$archive" \
+            "https://github.com/$GH_REPO/releases/tag/$tag" current.json > "$CHANNEL.json" || status=$?
+          if [ "$status" = 3 ]; then exit 0; fi
+          test "$status" = 0
+          cat "$CHANNEL.json"
+          gh release upload updates "$CHANNEL.json" --clobber
