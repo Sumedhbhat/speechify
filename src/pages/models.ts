@@ -36,12 +36,14 @@ function meter(progress: Progress): { el: HTMLElement; update: (progress: Progre
 
 /**
  * Whether Ollama already has `name`. Ollama lists a bare name as "name:latest"
- * and ignores case.
+ * and ignores case. Only a colon after the last "/" is a tag; one before it is
+ * a registry port, as in "host:5000/team/model".
  */
 export function ollamaHas(models: string[], name: string): boolean {
   const wanted = name.trim().toLowerCase();
   if (!wanted) return false;
-  const full = wanted.includes(":") ? wanted : `${wanted}:latest`;
+  const tagged = wanted.slice(wanted.lastIndexOf("/") + 1).includes(":");
+  const full = tagged ? wanted : `${wanted}:latest`;
   return models.some((listed) => {
     const have = listed.toLowerCase();
     return have === wanted || have === full;
@@ -54,8 +56,10 @@ export function createModelsPage(deps: Deps): Page {
   const meters = new Map<string, (progress: Progress) => void>();
   let models: SpeechModel[] = [];
   let pull: Progress | null = null;
-  // The last server answer and the model typed in Settings, to tell if it is already there.
+  // The last server answer, the server it came from and the model typed in
+  // Settings, to tell if that model is already there.
   let reach: RewriteStatus = { reachable: false, models: [] };
+  let server = "";
   let wanted = "";
 
   const cards = h("div", { className: "model-grid" });
@@ -291,6 +295,7 @@ export function createModelsPage(deps: Deps): Page {
 
   function renderLanguage(settings: Settings, status: Status, current: boolean): void {
     wanted = settings.rewrite.model;
+    server = settings.rewrite.url;
     if (current)
       renderReach({ reachable: status.rewrite_reachable, models: status.rewrite_models });
     language.replaceChildren(
@@ -393,6 +398,13 @@ export function createModelsPage(deps: Deps): Page {
   // Typing another model name shows or hides the button without waiting for the server.
   store.subscribe((next) => {
     wanted = next.rewrite.model;
+    if (next.rewrite.url !== server) {
+      server = next.rewrite.url;
+      // The old server's list says nothing about the new one: offer the
+      // download until the new server answers.
+      reach = { reachable: false, models: [] };
+      if (el.isConnected) void checkReach().catch(() => undefined);
+    }
     renderPullButton();
   });
 

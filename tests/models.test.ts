@@ -284,12 +284,39 @@ describe("models page", () => {
     expect(download.hidden).toBe(true);
     expect(byText(document, ".status-note.ok", "gemma3:4b is downloaded").hidden).toBe(false);
 
+    // Another server is asked straight away; until it answers, the old list does not count.
+    let answer: (status: RewriteStatus) => void = () => undefined;
+    ctx.api.rewriteStatus.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    const asked = ctx.api.rewriteStatus.mock.calls.length;
+    change(byLabel<HTMLInputElement>(document, "Server"), "http://other:11434");
+    await settle();
+    expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(asked + 1);
+    expect(download.hidden).toBe(false);
+    answer({ reachable: true, models: ["gemma3:4b"] });
+    await settle();
+    expect(download.hidden).toBe(true);
+
     // A server that stops answering cannot vouch for the model.
     ctx.api.rewriteStatus.mockResolvedValue(DOWN);
     button(document, "Refresh").click();
     await settle();
     expect(download.hidden).toBe(false);
     expect(download.disabled).toBe(true);
+
+    // A failed check of a new server stays quiet; the heartbeat tries again.
+    const before = toasts().length;
+    ctx.api.rewriteStatus.mockRejectedValueOnce("Speechify is not responding.");
+    change(byLabel<HTMLInputElement>(document, "Server"), "http://third:11434");
+    await settle();
+    expect(toasts().slice(before)).toEqual([]);
+
+    // With the page closed, a server change waits for the page to open again.
+    const field = byLabel<HTMLInputElement>(document, "Server");
+    page.el.remove();
+    const calls = ctx.api.rewriteStatus.mock.calls.length;
+    change(field, "http://fourth:11434");
+    await settle();
+    expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(calls);
   });
 
   it("matches Ollama model names the way Ollama does", () => {
@@ -299,6 +326,13 @@ describe("models page", () => {
     expect(ollamaHas(["gemma3:4b"], "gemma3")).toBe(false);
     expect(ollamaHas(["gemma3:4b"], "gemma3:1b")).toBe(false);
     expect(ollamaHas(["gemma3:4b"], "")).toBe(false);
+    // A colon before the last "/" is a registry port, not a tag.
+    expect(
+      ollamaHas(["registry.example:5000/team/model:latest"], "registry.example:5000/team/model"),
+    ).toBe(true);
+    expect(
+      ollamaHas(["registry.example:5000/team/model:q4"], "registry.example:5000/team/model"),
+    ).toBe(false);
   });
 
   it("explains an unreachable language-model server", async () => {
@@ -372,7 +406,8 @@ describe("models page", () => {
     expect(button(document, "Refresh").disabled).toBe(true);
     saved();
     await settle();
-    expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(asked + 1);
+    // The new address is checked once it saves, and Refresh asks too; the newer answer wins.
+    expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(asked + 2);
     expect(document.querySelector(".status-note.ok")!.textContent).toBe("Connected");
     expect(button(document, "Refresh").disabled).toBe(false);
 
