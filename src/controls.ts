@@ -116,7 +116,13 @@ export function text(
     "aria-describedby": describedBy(id, binding),
   });
   if (binding.list) input.setAttribute("list", binding.list);
-  const commit = bind(store, settings, binding, (value) => (input.value = value), error);
+  const write = (value: string) => {
+    if (input.value === value) return;
+    input.value = value;
+    // A rejected save puts the old value back; tell anyone following the typing.
+    input.dispatchEvent(new Event("input"));
+  };
+  const commit = bind(store, settings, binding, write, error);
   input.addEventListener("change", () => void commit(input.value.trim()));
   return field(id, binding, input, error);
 }

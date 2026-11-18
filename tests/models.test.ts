@@ -284,6 +284,15 @@ describe("models page", () => {
     expect(download.hidden).toBe(false);
     expect(document.querySelector(".row .status-note.ok")!.hasAttribute("hidden")).toBe(true);
 
+    // A rejected save puts the saved name back, and the button follows it.
+    ctx.api.saveSettings.mockRejectedValueOnce("Could not save.");
+    type(byLabel<HTMLInputElement>(document, "Model"), "llama3.2:3b");
+    expect(download.hidden).toBe(true);
+    change(byLabel<HTMLInputElement>(document, "Model"), "llama3.2:3b");
+    await settle();
+    expect(byLabel<HTMLInputElement>(document, "Model").value).toBe("gemma3:4b");
+    expect(download.hidden).toBe(false);
+
     // The heartbeat notices the model arriving, e.g. pulled from a terminal.
     ctx.api.rewriteStatus.mockResolvedValue({ reachable: true, models: ["gemma3:4b"] });
     button(document, "Refresh").click();
