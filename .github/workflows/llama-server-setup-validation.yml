@@ -1,0 +1,38 @@
+name: Clean llama-server setup
+on:
+  push:
+    branches: [sb/llama-server-setup-validation]
+permissions:
+  contents: read
+jobs:
+  setup:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            package: macos-arm64.tar.gz
+            sha: 6ebeeea8575081ff968eb1c26f6fffcafe8e3ff2a0fb5d548c0aea7f5575e038
+          - runner: macos-15-intel
+            package: macos-x64.tar.gz
+            sha: 8f78d3e6d405dac94c539e76834c132bff394ab8835d66f968c6a23eea9dcbe7
+          - runner: windows-2025
+            package: win-cpu-x64.zip
+            sha: bd4e093bce292452248c318d4b176fbfebe1ca43a7f3779ebb3846fe7753653e
+          - runner: ubuntu-24.04
+            package: ubuntu-x64.tar.gz
+            sha: ab8343cb39e17a18f183ce0a35543a6c3dcc15fb287f55909dd182cb975e345e
+          - runner: ubuntu-24.04-arm
+            package: ubuntu-arm64.tar.gz
+            sha: 58b79679075d275b5708ab5ededecae83b0d806d3678b08745bd83533be00860
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - shell: bash
+        env:
+          PACKAGE: ${{ matrix.package }}
+          EXPECTED_SHA: ${{ matrix.sha }}
+        run: python3 scripts/validate-cleanup-setup.py
