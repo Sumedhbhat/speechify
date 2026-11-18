@@ -45,6 +45,12 @@
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data:; connect-src ipc: http://ipc.localhost"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDczNDY5OEE2ODBDODkyRTUKUldUbGtzaUFwcGhHYzFVY3c2V1FvM3NoZnhqYXlOMTdoVTVlbzZ4c1lqQ1dGbXNPb0J5N1JvT3cK",
+      "endpoints": ["https://github.com/Sumedhbhat/speechify/releases/download/updates/stable.json"]
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis", "deb", "app", "dmg"],

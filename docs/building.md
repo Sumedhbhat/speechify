@@ -71,7 +71,7 @@ npm run tauri -- build --ci --config "{\"version\":\"$SPEECHIFY_VERSION\"}" --bu
 npm run tauri -- build --ci --config "{\"version\":\"$SPEECHIFY_VERSION\"}" --bundles nsis -- --locked   # Windows
 ```
 
-Output lands in `target/release/bundle/`. The Linux package depends on `libasound2t64`. The macOS release job signs the `.app` ad hoc with `src-tauri/Entitlements.plist` and wraps it in a `.dmg`. Nothing is signed for distribution yet, so Windows and macOS will warn about an unidentified publisher.
+Output lands in `target/release/bundle/`. The Linux package depends on `libasound2t64`. On macOS, `scripts/macos-package.sh` signs the `.app` with `src-tauri/Entitlements.plist`, wraps it in a `.dmg` and writes the in-app update archive (see [releases.md](releases.md#macos-signing-and-updates)). Without the signing secrets it signs ad hoc, which is fine for trying a build but loses Accessibility access whenever you install another build. Nothing is signed by Apple or Microsoft, so Windows and macOS will warn about an unidentified publisher.
 
 ## Where things are
 

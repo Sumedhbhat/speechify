@@ -6,6 +6,7 @@ mod desktop;
 mod diagnostics;
 mod models;
 mod shell;
+mod updates;
 mod worker;
 
 use speechify_core::session::Event;
@@ -43,12 +44,19 @@ fn main() {
             let Some(shared) = app.try_state::<Arc<worker::Shared>>() else { return };
             if args.iter().any(|arg| arg == "--toggle") {
                 shared.send(worker::Msg::Input(Event::BarClick));
+            } else if args.iter().any(|arg| arg == "--update") {
+                // `speechify --update` installs the newest release, if any.
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = updates::install(&app).await;
+                });
             } else if args.iter().any(|arg| arg == "--cancel") {
                 shared.send(worker::Msg::Input(Event::BarCancel));
             } else if !args.iter().any(|arg| arg == "--background") {
                 shell::show_main(app, "home");
             }
         }))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--background"]),
@@ -90,6 +98,8 @@ fn main() {
             commands::try_format,
             commands::bar_action,
             commands::open_main,
+            commands::check_update,
+            commands::install_update,
         ])
         .setup(move |app| {
             match app.path().app_log_dir() {

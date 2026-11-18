@@ -2,6 +2,19 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createSettingsPage } from "../src/pages/settings";
 import { byLabel, byText, change, makeDeps, settle, status } from "./fakes";
 
+const mac = status({ platform: "macos", updates: true });
+
+function updates() {
+  const section = [...document.querySelectorAll("section")].find(
+    (el) => el.querySelector("h2")?.textContent === "Updates",
+  );
+  return {
+    section,
+    line: section?.querySelector("[role=status]")?.textContent,
+    button: section?.querySelector("button") as HTMLButtonElement | undefined,
+  };
+}
+
 let ctx: ReturnType<typeof makeDeps>;
 
 async function setup() {
@@ -127,5 +140,59 @@ describe("settings page", () => {
       }),
     );
     expect(document.querySelector(".about")!.textContent).toBe("Speechify 1.2.3 · linux");
+  });
+
+  it("leaves out updates where the build cannot update itself", async () => {
+    await setup();
+    expect(updates().section).toBeUndefined();
+    expect(ctx.api.checkUpdate).not.toHaveBeenCalled();
+  });
+
+  it("says when Speechify is up to date and checks again on request", async () => {
+    ctx.api.getStatus.mockResolvedValue(mac);
+    await setup();
+    await settle();
+    expect(updates().line).toBe("Speechify is up to date.");
+    expect(updates().button!.textContent).toBe("Check again");
+    ctx.api.checkUpdate.mockResolvedValueOnce({ version: "1.3.0", notes: "" });
+    updates().button!.click();
+    expect(updates().button!.hidden).toBe(true);
+    expect(updates().line).toBe("Checking for updates…");
+    await settle();
+    expect(updates().line).toBe("Speechify 1.3.0 is available.");
+    expect(ctx.api.checkUpdate).toHaveBeenCalledTimes(2);
+  });
+
+  it("installs an available update and offers a retry when it fails", async () => {
+    ctx.api.getStatus.mockResolvedValue(mac);
+    ctx.api.checkUpdate.mockResolvedValue({ version: "1.3.0", notes: "Fixes" });
+    ctx.api.installUpdate.mockRejectedValueOnce("Could not install the update: offline");
+    await setup();
+    await settle();
+    const button = updates().button!;
+    expect(button.textContent).toBe("Install and restart");
+    expect(button.className).toBe("btn primary");
+    button.click();
+    expect(button.disabled).toBe(true);
+    expect(updates().line).toBe("Installing the update. Speechify will restart by itself.");
+    await settle();
+    expect(updates().line).toBe("Could not install the update: offline");
+    expect(button.textContent).toBe("Try again");
+    expect(button.disabled).toBe(false);
+    button.click();
+    await settle();
+    expect(ctx.api.installUpdate).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows why a check failed and tries again", async () => {
+    ctx.api.getStatus.mockResolvedValue(mac);
+    ctx.api.checkUpdate.mockRejectedValueOnce("Could not check for updates: offline");
+    await setup();
+    await settle();
+    expect(updates().line).toBe("Could not check for updates: offline");
+    expect(updates().button!.textContent).toBe("Try again");
+    updates().button!.click();
+    await settle();
+    expect(updates().line).toBe("Speechify is up to date.");
   });
 });

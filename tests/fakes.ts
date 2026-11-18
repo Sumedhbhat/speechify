@@ -1,7 +1,15 @@
 // Plain fakes for the api/events boundary, plus small test helpers.
 
 import { vi, type Mock } from "vitest";
-import type { Dictation, Insights, Settings, SpeechModel, Status, TeacherStatus } from "../src/api";
+import type {
+  Dictation,
+  Insights,
+  Settings,
+  SpeechModel,
+  Status,
+  TeacherStatus,
+  Update,
+} from "../src/api";
 import type { Api, Deps, Events } from "../src/deps";
 import { createSettingsStore } from "../src/settings";
 
@@ -64,6 +72,7 @@ export function status(over: Partial<Status> = {}): Status {
     platform: "linux",
     wayland: false,
     shortcuts: true,
+    updates: false,
     speech_ready: true,
     speech_device: "vulkan NVIDIA GeForce RTX 4060",
     speech_error: "",
@@ -166,6 +175,8 @@ export function fakeApi(): FakeApi {
     getSettings: vi.fn(async () => settings()),
     saveSettings: vi.fn(async () => undefined),
     getStatus: vi.fn(async () => status()),
+    checkUpdate: vi.fn(async (): Promise<Update | null> => null),
+    installUpdate: vi.fn(async () => undefined),
     history: vi.fn(async () => []),
     editDictation: vi.fn(async () => []),
     deleteDictations: vi.fn(async () => undefined),

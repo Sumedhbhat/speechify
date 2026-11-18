@@ -11,20 +11,56 @@ The version is written in one place: `version` under `[workspace.package]` in th
 
 ## Install and update
 
-Each release has three installers, plus `SHA256SUMS`:
+Each release has three installers, the macOS update archive, and `SHA256SUMS`:
 
 - `Speechify-<version>-windows-x64-installer.exe`
 - `Speechify-<version>-mac-arm64.dmg` (Apple silicon)
+- `Speechify-<version>-mac-arm64.app.tar.gz` and `.sig` (read by the in-app updater)
 - `Speechify-<version>-linux-amd64.deb`
 
-To update, install the new version over the old one. Dictations, dictionary, settings and models live in the app data folder and are kept. The installers are not signed. The macOS app is signed ad hoc until there is an Apple Developer ID. There is no in-app updater.
+On macOS, Speechify updates itself. Settings › Updates checks when the page opens and offers **Install and restart**. The menu bar's **Check for Updates…** opens that page, and is renamed **Update to <version>…** when a background check (a minute after start, then every six hours) finds one. With Speechify running, `speechify --update` installs the newest release from a terminal. Nothing installs without being asked.
+
+On Windows and Linux, install the new version over the old one. Dictations, dictionary, settings and models live in the app data folder and are kept on every platform.
+
+## macOS signing and updates
+
+macOS remembers Accessibility access together with the app's *designated requirement*. An ad-hoc signature's requirement is the hash of one exact build (`cdhash H"…"`), so every new build counted as a new app and people had to remove and re-add Speechify after each update. Releases are signed with one self-signed certificate instead. The requirement becomes `identifier "org.sumedhbhat.speechify" and certificate root = H"<certificate hash>"`, which every release signed with that certificate meets, so the permission is kept. `scripts/macos-package.sh` checks the requirement and fails if it still pins a hash.
+
+What it does not change: the certificate is not from Apple, so Gatekeeper still asks people to allow the app (System Settings › Privacy & Security › Open Anyway) the first time they open a downloaded `.dmg`, as it did with ad-hoc signing. Updates installed by the app are not quarantined and open without that prompt. Moving to an Apple Developer ID with notarization later would remove the first-open prompt, and would ask everyone to allow Accessibility one more time.
+
+Updates come from a feed on the `updates` release (a prerelease, so it is never shown as the latest download): `stable.json` for stable builds and `nightly.json` for nightlies. The publish job rewrites its channel's feed only after the versioned release exists. Each feed names one `.app.tar.gz`; the app checks it against the public key in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`) before replacing itself, then restarts. Nightlies compare by run number (`0.1.0-nightly.1000` is newer than `0.1.0-nightly.999`), and a stable `0.1.0` is newer than any `0.1.0-nightly.N`.
+
+### Secrets
+
+Signing runs in its own step after the build, and only on pushes, so dependency build scripts and pull requests never see these. Pull request builds are signed ad hoc and have no update archive. A push to `main` or `release/*` fails without them rather than publishing a build that would make everyone allow Accessibility again.
+
+| Secret | What it is |
+| --- | --- |
+| `MACOS_CERTIFICATE_P12` | The signing certificate and key as a base64 `.p12` (`base64 -i signing.p12`) |
+| `MACOS_CERTIFICATE_PASSWORD` | Its password |
+| `TAURI_SIGNING_PRIVATE_KEY` | The update key: the contents of the file `tauri signer generate` writes |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Its password |
+
+Keep offline copies of both keys. **Never replace the certificate**: a release signed with a different one makes every user allow Accessibility again. If the update key is lost, installed apps cannot verify new updates and everyone has to download the next `.dmg` by hand; a new key also needs its public half in `tauri.conf.json`.
+
+To create them, once (the certificate's `[ext]` must allow code signing):
+
+```sh
+printf '%s\n' '[req]' 'distinguished_name=dn' 'x509_extensions=ext' 'prompt=no' \
+  '[dn]' 'CN=Speechify Release Signing' 'O=Speechify' \
+  '[ext]' 'basicConstraints=critical,CA:false' 'keyUsage=critical,digitalSignature' \
+  'extendedKeyUsage=critical,codeSigning' 'subjectKeyIdentifier=hash' > cs.cnf
+/usr/bin/openssl req -x509 -newkey rsa:3072 -nodes -keyout key.pem -out cert.pem -days 7300 -config cs.cnf
+/usr/bin/openssl pkcs12 -export -inkey key.pem -in cert.pem -out signing.p12 -name "Speechify Release Signing"
+npx tauri signer generate -w updater.key      # prints the public key for tauri.conf.json
+```
 
 ## What a push does
 
 1. **Determine version.** On `release/*` the branch name must be `release/<major>.<minor>` (not three parts) and the `Cargo.toml` version must start with it, or the job fails. On `main` it is the nightly version above. Anything else is a development build and publishes nothing.
 2. **Tests.** On pushes, the workflow runs `ci.yml` as a reusable workflow: the tests on Linux, macOS and Windows, and the coverage gate. A release is published only after they pass.
-3. **Package.** One job per platform fetches the pinned speech runtime, builds with `SPEECHIFY_VERSION` set, and checks that `speechify --version` prints `speechify <version>`. Linux builds a `.deb`, macOS a signed-ad-hoc `.app` in a `.dmg`, Windows an NSIS installer.
-4. **Publish.** It collects the installers, writes `SHA256SUMS`, and creates the release `v<version>` with generated notes. Nightlies are marked as prereleases.
+3. **Package.** One job per platform fetches the pinned speech runtime, builds with `SPEECHIFY_VERSION` set, and checks that `speechify --version` prints `speechify <version>`. Linux builds a `.deb` and Windows an NSIS installer. macOS builds the `.app` (nightlies point the updater at `nightly.json`), then `scripts/macos-package.sh` signs it, wraps it in a `.dmg` and writes the signed update archive.
+4. **Publish.** It collects the installers, writes `SHA256SUMS`, and creates the release `v<version>` with generated notes. Nightlies are marked as prereleases. Then it points the channel's update feed at the new release.
 
 Pull requests run the tests and build every installer, and publish nothing. A commit message containing `[no-release]` on a push skips publishing and keeps the build artifacts (kept for 7 days).
 
