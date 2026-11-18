@@ -191,12 +191,10 @@ jobs:
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
       - name: Create release
-        id: release
         run: |
           tag="v$VERSION"
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "::notice::$tag is already released. Bump the patch version in Cargo.toml to publish a fix."
-            echo "created=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           prerelease=""
@@ -211,20 +209,27 @@ jobs:
           On macOS, Speechify updates itself: use Check for Updates in the menu bar or Settings. Elsewhere, install the new version over the old one. Your dictations, dictionary, settings and models are kept. See docs/releases.md for channels."
           gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "Speechify $VERSION" \
             --notes "$notes" --generate-notes $prerelease
-          echo "created=true" >> "$GITHUB_OUTPUT"
 
-      # The app reads updates/<channel>.json; only point it at a release that exists.
+      # The app reads updates/<channel>.json. This runs after the versioned
+      # release exists, also on a rerun, and never moves the feed to an older
+      # version (an older release/X.Y patch, or a rerun of an old build).
       - name: Publish the update feed
-        if: steps.release.outputs.created == 'true'
         run: |
           tag="v$VERSION"
           archive="Speechify-$VERSION-mac-arm64.app.tar.gz"
-          python3 scripts/update-feed.py "$VERSION" "dist/$archive.sig" \
-            "https://github.com/$GH_REPO/releases/download/$tag/$archive" \
-            "https://github.com/$GH_REPO/releases/tag/$tag" > "$CHANNEL.json"
-          cat "$CHANNEL.json"
           if ! gh release view updates >/dev/null 2>&1; then
             gh release create updates --target "$GITHUB_SHA" --prerelease --title "Update feed" \
               --notes "Read by Speechify's in-app updater. Not a download: get installers from the versioned releases."
           fi
+          gh release download updates --pattern "$CHANNEL.json" --output current.json 2>/dev/null || true
+          # The signature of the archive the release really holds: a full rerun
+          # rebuilds dist/ but does not replace an existing release's files.
+          gh release download "$tag" --pattern "$archive.sig" --output published.sig
+          status=0
+          python3 scripts/update-feed.py "$VERSION" published.sig \
+            "https://github.com/$GH_REPO/releases/download/$tag/$archive" \
+            "https://github.com/$GH_REPO/releases/tag/$tag" current.json > "$CHANNEL.json" || status=$?
+          if [ "$status" = 3 ]; then exit 0; fi
+          test "$status" = 0
+          cat "$CHANNEL.json"
           gh release upload updates "$CHANNEL.json" --clobber
