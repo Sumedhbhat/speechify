@@ -68,25 +68,21 @@ If a release for that tag exists already, the publish step prints a notice and e
 
 ## Cutting a stable release
 
-```
-git switch main
-git switch -c release/0.2                 # branch from main at the commit to ship
-# set version = "0.2.0" in the root Cargo.toml, then refresh the lock file:
-cargo update --workspace                  # CI builds with --locked, so Cargo.lock must match
-git commit -am "Release 0.2.0"
-git push -u origin release/0.2
-```
+Only one release branch takes changes at a time: the current line. Every other `release/*` branch is read-only, and the release workflow refuses to publish from one. `scripts/cut-release.sh` moves to a new line (see Branch rules below).
 
-That builds and publishes `v0.2.0`. A run already going on a `release/*` branch is never cancelled. GitHub keeps only one pending run per branch, though: if you push twice while a release is building, the first of the two waiting runs is dropped. Push one patch release at a time and let it finish before pushing the next.
+1. Set `version = "0.2.0"` in the root `Cargo.toml` and run `cargo update --workspace` (CI builds with `--locked`), then merge that to `main` through a pull request. Nightlies become `0.2.0-nightly.N`.
+2. Run `scripts/cut-release.sh 0.2`. It retires the current line (for example `release/0.1`, which becomes read-only), then creates `release/0.2` from `main`. Creating the branch publishes `v0.2.0`.
+3. Through another pull request, set `main` to the next minor version (`0.3.0`), so nightlies count toward the next release.
+
+The script refuses a line older than the current one, a line `main`'s version does not match, and a branch that exists already. It needs the repository admin role, because only admins may create `release/*` branches.
 
 ## Patch releases
 
-Fixes ship from the release branch they belong to.
+Fixes ship on the current line only. Once `release/0.2` is cut, `release/0.1` takes no more changes, and a fix for 0.1 users ships as 0.2.x.
 
-1. Land the fix on `main` first (or cherry-pick it from there).
-2. Cherry-pick it onto `release/0.2`.
-3. Bump the patch version in `Cargo.toml` (0.2.0 to 0.2.1), run `cargo update --workspace`, and commit `Cargo.lock` with it in the same push, so the workflow has a new tag to create and the `--locked` build passes.
-
+1. Land the fix on `main` first.
+2. Open a pull request into `release/0.2` that cherry-picks it and bumps the patch version (0.2.0 to 0.2.1) with its `Cargo.lock`, so the workflow has a new tag to create and the `--locked` build passes.
+3. Merging it publishes `v0.2.1`. Merge one patch release at a time and let it finish before merging the next: GitHub keeps only one pending run per branch.
 
 ## Dependencies
 
@@ -99,6 +95,17 @@ The policy is in `.github/dependabot.yml`.
 - **Overrides.** An npm override or a Cargo `[patch]` must have an entry in `.github/dependency-overrides.yml` in the same commit, and is removed, with its entry, once upstream no longer needs it. The file lists no overrides today.
 - **Pins.** Manifests use exact versions, and the workflows pin actions by commit hash. Update them through Dependabot, not by hand.
 
-## Branch protection
+## Branch rules
 
-The `main` ruleset requires these checks by name: `Test (ubuntu-24.04)`, `Test (windows-2025)` and `Tauri full coverage gate`. If you rename a job in `ci.yml`, update the ruleset in the same change. A cancelled macOS run needs a rerun, not a rewrite.
+Repository rulesets (Settings › Rules › Rulesets) enforce these. Nobody can bypass them except where noted, the admin included.
+
+| Ruleset | Applies to | What it does |
+| --- | --- | --- |
+| `main: pull requests only` | `main` | Changes only through pull requests with these checks passing: `Test (ubuntu-24.04)`, `Test (windows-2025)` and `Tauri full coverage gate`. No force pushes or deletion. |
+| `release: pull requests only` | `release/*` | The same, for release branches. |
+| `release: create` | `release/*` | Only the repository admin role may create release branches. |
+| `release: retired` | `release/*` except the current line | Nothing may change these branches, not even through a pull request. `scripts/cut-release.sh` moves its one exclusion to the new line. |
+
+The release workflow checks the rules on a `release/*` branch before publishing and stops if `release: retired` covers it, so a branch created by hand without the script publishes nothing.
+
+If you rename a job in `ci.yml`, update both pull request rulesets in the same change. A cancelled macOS run needs a rerun, not a rewrite.

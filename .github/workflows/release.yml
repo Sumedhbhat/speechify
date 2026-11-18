@@ -31,6 +31,8 @@ jobs:
           persist-credentials: false
       - name: Determine version and channel
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # The workspace Cargo.toml is the only place the version is written.
           manifest="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
@@ -44,6 +46,15 @@ jobs:
                 "$line".*) ;;
                 *) echo "Cargo.toml version $manifest does not belong to release/$line." >&2; exit 1 ;;
               esac
+              # Only the current release line publishes. The "release: retired"
+              # ruleset makes every other release/* branch read-only, so a
+              # branch it covers was retired by scripts/cut-release.sh or was
+              # created without it.
+              retired="$(gh api "repos/$GITHUB_REPOSITORY/rules/branches/release/$line" --jq 'map(select(.type == "update")) | length')"
+              if [ "$retired" != 0 ]; then
+                echo "release/$line is not the current release line, so it publishes nothing. Use scripts/cut-release.sh (docs/releases.md)." >&2
+                exit 1
+              fi
               channel=stable
               version="$manifest"
               ;;
