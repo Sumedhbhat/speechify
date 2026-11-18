@@ -51,7 +51,7 @@ beforeEach(() => {
 });
 
 describe("home header", () => {
-  it("greets, shows headline numbers and the checklist", async () => {
+  it("greets and shows headline numbers, with no checklist once every step is done", async () => {
     await setup([]);
     expect(document.querySelector("h1")!.textContent).toMatch(/Good|Working/);
     expect(document.querySelector(".lede")!.textContent).toBe("You have dictated 250 words today.");
@@ -62,8 +62,20 @@ describe("home header", () => {
       "Streak4days",
       "Time saved210min",
     ]);
+    expect(document.querySelector(".checklist")).toBeNull();
+  });
+
+  it("shows the checklist again when a step is no longer done", async () => {
+    ctx.api.getStatus.mockResolvedValue(status({ platform: "macos", shortcuts: false }));
+    await setup([]);
     expect(document.querySelector(".checklist h2")!.textContent).toBe("Ready when you are");
-    expect(document.querySelectorAll(".step.done").length).toBe(3);
+    expect(document.querySelectorAll(".step.done").length).toBe(2);
+  });
+
+  it("names the shortcut while a step is left", async () => {
+    ctx.api.getStatus.mockResolvedValue(status({ rewrite_reachable: false }));
+    await setup([]);
+    expect(document.querySelector(".checklist h2")!.textContent).toBe("Getting started");
     expect(document.querySelector("kbd")!.textContent).toBe("Ctrl+Meta+Space");
   });
 
