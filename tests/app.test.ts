@@ -57,7 +57,7 @@ describe("app shell", () => {
     byText<HTMLButtonElement>(document, "button", "Try again").click();
     await settle();
     expect(document.body.textContent).not.toContain("This page did not load");
-    expect(document.querySelector(".page.home .checklist")).not.toBeNull();
+    expect(document.querySelector(".page.home .stats")).not.toBeNull();
   });
 
   it("does not cover a page the user has moved on to with an old failure", async () => {

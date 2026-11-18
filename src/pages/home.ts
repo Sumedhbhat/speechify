@@ -1,4 +1,6 @@
 // Home: greeting, headline numbers, getting-started checklist, history.
+// The checklist is shown only while a step is left, and comes back if one
+// stops being done (a model removed, Accessibility turned off).
 
 import type { Insights, Settings, Status } from "../api";
 import type { Deps, Page } from "../deps";
@@ -40,7 +42,7 @@ function checklist(
   status: Status,
   settings: Settings,
   navigate: (page: string) => void,
-): HTMLElement {
+): HTMLElement | null {
   const go = (page: string, label: string) =>
     h("button", {
       type: "button",
@@ -93,6 +95,7 @@ function checklist(
         ),
     shortcut,
   ];
+  if (items.every((item) => item.classList.contains("done"))) return null;
   const ready = status.speech_ready && status.rewrite_reachable;
   return h("section", { className: "section checklist" }, [
     h("h2", { textContent: ready ? "Ready when you are" : "Getting started" }),
@@ -130,8 +133,9 @@ export function createHomePage(deps: Deps): Page {
           }),
         ]),
         stats(insights),
-        checklist(status, current, deps.navigate),
       );
+      const steps = checklist(status, current, deps.navigate);
+      if (steps) top.append(steps);
       await history.refresh();
     },
   };
