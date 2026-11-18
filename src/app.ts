@@ -108,9 +108,14 @@ export function createApp(root: HTMLElement, base: Pick<Deps, "api" | "events">)
 
   async function refreshStatus(): Promise<void> {
     try {
-      const [status, models] = await Promise.all([base.api.getStatus(), base.api.models()]);
+      const asked = base.api.getStatus();
+      // The version shows even when the model list fails, as that is when screenshots matter.
+      void asked.then(
+        (status) => (versionLine.textContent = `Version ${status.version}`),
+        () => {},
+      );
+      const [status, models] = await Promise.all([asked, base.api.models()]);
       const model = models.find((m) => m.active);
-      versionLine.textContent = `Version ${status.version}`;
       const device = status.speech_device.split(" ")[0];
       let state = "ready";
       let line = `Ready · ${model?.name}${device ? ` on ${device}` : ""}`;

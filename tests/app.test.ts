@@ -101,6 +101,14 @@ describe("app shell", () => {
     await settle();
     expect(statusLine(root)).toBe("Ready · Whisper turbo");
 
+    // A failed model list still leaves the version on screen.
+    api.getStatus.mockResolvedValue(status({ version: "2.0.0" }));
+    api.models.mockRejectedValueOnce("Speechify is not responding.");
+    vi.advanceTimersByTime(15_000);
+    await settle();
+    expect(statusLine(root)).toBe("Speechify is not responding.");
+    expect(root.querySelector(".version-line")!.textContent).toBe("Version 2.0.0");
+
     api.getStatus.mockRejectedValue("Speechify is not responding.");
     vi.advanceTimersByTime(15_000);
     await settle();

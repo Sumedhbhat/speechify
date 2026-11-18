@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RewriteStatus, Status } from "../src/api";
 import { createModelsPage, HEARTBEAT_MS, ollamaHas } from "../src/pages/models";
 import type { Page } from "../src/deps";
-import { byLabel, byText, change, makeDeps, model, settle, status, toasts } from "./fakes";
+import { byLabel, byText, change, makeDeps, model, settle, status, toasts, type } from "./fakes";
 
 const UP: RewriteStatus = { reachable: true, models: ["qwen2.5:1.5b", "llama3.2:3b"] };
 const DOWN: RewriteStatus = { reachable: false, models: [] };
@@ -272,6 +272,13 @@ describe("models page", () => {
     expect(download.hidden).toBe(true);
     expect(note().hidden).toBe(false);
 
+    // The button follows the name while it is typed, before the field saves.
+    type(byLabel<HTMLInputElement>(document, "Model"), "gemma3:4b");
+    expect(download.hidden).toBe(false);
+    type(byLabel<HTMLInputElement>(document, "Model"), "llama3.2:3b");
+    expect(download.hidden).toBe(true);
+    expect(byText(document, ".status-note.ok", "llama3.2:3b is downloaded").hidden).toBe(false);
+
     change(byLabel<HTMLInputElement>(document, "Model"), "gemma3:4b");
     await settle();
     expect(download.hidden).toBe(false);
@@ -319,6 +326,15 @@ describe("models page", () => {
     expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(calls);
   });
 
+  it("ignores settings changes made before the page first opens", async () => {
+    page = createModelsPage(ctx.deps);
+    await ctx.deps.settings.update((s) => (s.theme = "dark"));
+    expect(ctx.api.rewriteStatus).not.toHaveBeenCalled();
+    document.body.append(page.el);
+    await page.show();
+    expect(button(document, "Download with Ollama").hidden).toBe(true);
+  });
+
   it("matches Ollama model names the way Ollama does", () => {
     expect(ollamaHas(["gemma3:4b"], "gemma3:4b")).toBe(true);
     expect(ollamaHas(["gemma3:4b"], " Gemma3:4B ")).toBe(true);
@@ -326,6 +342,7 @@ describe("models page", () => {
     expect(ollamaHas(["gemma3:4b"], "gemma3")).toBe(false);
     expect(ollamaHas(["gemma3:4b"], "gemma3:1b")).toBe(false);
     expect(ollamaHas(["gemma3:4b"], "")).toBe(false);
+    expect(ollamaHas(["gemma3"], "gemma3:latest")).toBe(true);
     // A colon before the last "/" is a registry port, not a tag.
     expect(
       ollamaHas(["registry.example:5000/team/model:latest"], "registry.example:5000/team/model"),

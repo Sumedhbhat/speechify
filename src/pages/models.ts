@@ -40,14 +40,15 @@ function meter(progress: Progress): { el: HTMLElement; update: (progress: Progre
  * a registry port, as in "host:5000/team/model".
  */
 export function ollamaHas(models: string[], name: string): boolean {
-  const wanted = name.trim().toLowerCase();
-  if (!wanted) return false;
-  const tagged = wanted.slice(wanted.lastIndexOf("/") + 1).includes(":");
-  const full = tagged ? wanted : `${wanted}:latest`;
-  return models.some((listed) => {
-    const have = listed.toLowerCase();
-    return have === wanted || have === full;
-  });
+  if (!name.trim()) return false;
+  const wanted = ollamaName(name);
+  return models.some((listed) => ollamaName(listed) === wanted);
+}
+
+function ollamaName(name: string): string {
+  const lower = name.trim().toLowerCase();
+  const tagged = lower.slice(lower.lastIndexOf("/") + 1).includes(":");
+  return tagged ? lower : `${lower}:latest`;
 }
 
 export function createModelsPage(deps: Deps): Page {
@@ -56,11 +57,11 @@ export function createModelsPage(deps: Deps): Page {
   const meters = new Map<string, (progress: Progress) => void>();
   let models: SpeechModel[] = [];
   let pull: Progress | null = null;
-  // The last server answer, the server it came from and the model typed in
-  // Settings, to tell if that model is already there.
+  // The last server answer, the server it came from and the Model field, to
+  // tell if the model typed there is already on the server.
   let reach: RewriteStatus = { reachable: false, models: [] };
   let server = "";
-  let wanted = "";
+  let modelInput: HTMLInputElement | undefined;
 
   const cards = h("div", { className: "model-grid" });
   const device = h("div");
@@ -225,10 +226,11 @@ export function createModelsPage(deps: Deps): Page {
 
   /** Offers the download only while the server does not have the chosen model yet. */
   function renderPullButton(): void {
+    const wanted = modelInput?.value.trim() ?? "";
     const have = reach.reachable && ollamaHas(reach.models, wanted);
     pullButton.hidden = have;
     pulled.hidden = !have;
-    pulled.textContent = have ? `${wanted.trim()} is downloaded` : "";
+    pulled.textContent = have ? `${wanted} is downloaded` : "";
   }
 
   function renderPull(): void {
@@ -294,7 +296,16 @@ export function createModelsPage(deps: Deps): Page {
   }
 
   function renderLanguage(settings: Settings, status: Status, current: boolean): void {
-    wanted = settings.rewrite.model;
+    const modelField = text(store, settings, {
+      label: "Model",
+      placeholder: "gemma3:4b",
+      list: modelList.id,
+      get: (s) => s.rewrite.model,
+      set: (s, v) => (s.rewrite.model = v),
+    });
+    // Follow the name while it is typed; the setting saves when the field is left.
+    modelInput = modelField.querySelector("input")!;
+    modelInput.addEventListener("input", renderPullButton);
     server = settings.rewrite.url;
     if (current)
       renderReach({ reachable: status.rewrite_reachable, models: status.rewrite_models });
@@ -314,13 +325,7 @@ export function createModelsPage(deps: Deps): Page {
         set: (s, v) => (s.rewrite.url = v),
       }),
       reachRow,
-      text(store, settings, {
-        label: "Model",
-        placeholder: "gemma3:4b",
-        list: modelList.id,
-        get: (s) => s.rewrite.model,
-        set: (s, v) => (s.rewrite.model = v),
-      }),
+      modelField,
       modelList,
       h("div", { className: "row" }, [pullButton, pulled]),
       pullMeter,
@@ -370,6 +375,7 @@ export function createModelsPage(deps: Deps): Page {
         }),
       ]),
     );
+    renderPullButton();
     renderPull();
   }
 
@@ -395,9 +401,7 @@ export function createModelsPage(deps: Deps): Page {
     if (progress.finished) void checkReach().catch(() => undefined);
   });
 
-  // Typing another model name shows or hides the button without waiting for the server.
   store.subscribe((next) => {
-    wanted = next.rewrite.model;
     if (next.rewrite.url !== server) {
       server = next.rewrite.url;
       // The old server's list says nothing about the new one: offer the
