@@ -50,6 +50,8 @@ export function createApp(root: HTMLElement, base: Pick<Deps, "api" | "events">)
 
   const statusDot = h("span", { className: "status-dot" });
   const statusText = h("span", { textContent: "Starting" });
+  // Shown under the status so every screenshot says which build it came from.
+  const versionLine = h("p", { className: "version-line" });
   const content = h("main", { className: "content", tabIndex: -1 });
   const links = PAGES.map(({ id, label }) =>
     h(
@@ -68,6 +70,7 @@ export function createApp(root: HTMLElement, base: Pick<Deps, "api" | "events">)
         ]),
         h("nav", { "aria-label": "Pages" }, links),
         h("p", { className: "status-line", role: "status" }, [statusDot, statusText]),
+        versionLine,
       ]),
       content,
     ]),
@@ -107,6 +110,7 @@ export function createApp(root: HTMLElement, base: Pick<Deps, "api" | "events">)
     try {
       const [status, models] = await Promise.all([base.api.getStatus(), base.api.models()]);
       const model = models.find((m) => m.active);
+      versionLine.textContent = `Version ${status.version}`;
       const device = status.speech_device.split(" ")[0];
       let state = "ready";
       let line = `Ready · ${model?.name}${device ? ` on ${device}` : ""}`;

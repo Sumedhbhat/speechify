@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RewriteStatus, Status } from "../src/api";
-import { createModelsPage, HEARTBEAT_MS } from "../src/pages/models";
+import { createModelsPage, HEARTBEAT_MS, ollamaHas } from "../src/pages/models";
 import type { Page } from "../src/deps";
 import { byLabel, byText, change, makeDeps, model, settle, status, toasts } from "./fakes";
 
@@ -210,7 +210,9 @@ describe("models page", () => {
   });
 
   it("downloads a language model through Ollama", async () => {
+    ctx.api.getStatus.mockResolvedValue(status({ rewrite_models: ["llama3.2:3b"] }));
     await setup();
+    expect(button(document, "Download with Ollama").hidden).toBe(false);
     button(document, "Download with Ollama").click();
     await settle();
     expect(ctx.api.pullRewriteModel).toHaveBeenCalledWith("qwen2.5:1.5b");
@@ -224,6 +226,8 @@ describe("models page", () => {
       error: "",
     });
     expect(document.querySelector(".pull")!.textContent).toBe("500 MB of 1.0 GB");
+    ctx.api.rewriteStatus.mockResolvedValue(UP);
+    const asked = ctx.api.rewriteStatus.mock.calls.length;
     ctx.emit("rewriteProgress", {
       id: "qwen2.5:1.5b",
       done: 1,
@@ -233,6 +237,11 @@ describe("models page", () => {
     });
     expect(document.querySelector(".pull")!.textContent).toBe("");
     expect(toasts()).toContain("qwen2.5:1.5b is ready");
+    // The server is asked again at once, so the button goes without waiting for the heartbeat.
+    expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(asked + 1);
+    await settle();
+    expect(button(document, "Download with Ollama").hidden).toBe(true);
+    ctx.api.rewriteStatus.mockResolvedValue({ reachable: true, models: ["llama3.2:3b"] });
 
     ctx.emit("rewriteProgress", {
       id: "x",
@@ -243,10 +252,53 @@ describe("models page", () => {
     });
     expect(toasts()).toContain("Ollama refused: no such model.");
 
+    // A failed re-check stays quiet; the heartbeat tries again.
+    const before = toasts().length;
+    ctx.api.rewriteStatus.mockRejectedValueOnce("Speechify is not responding.");
+    ctx.emit("rewriteProgress", { id: "x", done: 0, total: 0, finished: true, error: "" });
+    await settle();
+    expect(toasts().slice(before)).toEqual(["x is ready"]);
+
     ctx.api.pullRewriteModel.mockRejectedValueOnce("Ollama is not running.");
     button(document, "Download with Ollama").click();
     await settle();
     expect(toasts()).toContain("Ollama is not running.");
+  });
+
+  it("hides the Ollama download once the server has the model", async () => {
+    await setup();
+    const download = button(document, "Download with Ollama");
+    const note = () => byText(document, ".status-note.ok", "qwen2.5:1.5b is downloaded");
+    expect(download.hidden).toBe(true);
+    expect(note().hidden).toBe(false);
+
+    change(byLabel<HTMLInputElement>(document, "Model"), "gemma3:4b");
+    await settle();
+    expect(download.hidden).toBe(false);
+    expect(document.querySelector(".row .status-note.ok")!.hasAttribute("hidden")).toBe(true);
+
+    // The heartbeat notices the model arriving, e.g. pulled from a terminal.
+    ctx.api.rewriteStatus.mockResolvedValue({ reachable: true, models: ["gemma3:4b"] });
+    button(document, "Refresh").click();
+    await settle();
+    expect(download.hidden).toBe(true);
+    expect(byText(document, ".status-note.ok", "gemma3:4b is downloaded").hidden).toBe(false);
+
+    // A server that stops answering cannot vouch for the model.
+    ctx.api.rewriteStatus.mockResolvedValue(DOWN);
+    button(document, "Refresh").click();
+    await settle();
+    expect(download.hidden).toBe(false);
+    expect(download.disabled).toBe(true);
+  });
+
+  it("matches Ollama model names the way Ollama does", () => {
+    expect(ollamaHas(["gemma3:4b"], "gemma3:4b")).toBe(true);
+    expect(ollamaHas(["gemma3:4b"], " Gemma3:4B ")).toBe(true);
+    expect(ollamaHas(["gemma3:latest"], "gemma3")).toBe(true);
+    expect(ollamaHas(["gemma3:4b"], "gemma3")).toBe(false);
+    expect(ollamaHas(["gemma3:4b"], "gemma3:1b")).toBe(false);
+    expect(ollamaHas(["gemma3:4b"], "")).toBe(false);
   });
 
   it("explains an unreachable language-model server", async () => {

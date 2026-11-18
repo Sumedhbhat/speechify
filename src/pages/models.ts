@@ -34,12 +34,29 @@ function meter(progress: Progress): { el: HTMLElement; update: (progress: Progre
   return { el: h("div", { className: "meter" }, [bar, label]), update };
 }
 
+/**
+ * Whether Ollama already has `name`. Ollama lists a bare name as "name:latest"
+ * and ignores case.
+ */
+export function ollamaHas(models: string[], name: string): boolean {
+  const wanted = name.trim().toLowerCase();
+  if (!wanted) return false;
+  const full = wanted.includes(":") ? wanted : `${wanted}:latest`;
+  return models.some((listed) => {
+    const have = listed.toLowerCase();
+    return have === wanted || have === full;
+  });
+}
+
 export function createModelsPage(deps: Deps): Page {
   const { api, events, settings: store } = deps;
   const downloads = new Map<string, Progress>();
   const meters = new Map<string, (progress: Progress) => void>();
   let models: SpeechModel[] = [];
   let pull: Progress | null = null;
+  // The last server answer and the model typed in Settings, to tell if it is already there.
+  let reach: RewriteStatus = { reachable: false, models: [] };
+  let wanted = "";
 
   const cards = h("div", { className: "model-grid" });
   const device = h("div");
@@ -78,6 +95,7 @@ export function createModelsPage(deps: Deps): Page {
     },
     [icon("download"), "Download with Ollama"],
   );
+  const pulled = h("p", { className: "status-note ok", hidden: true });
 
   async function guard(run: () => Promise<unknown>): Promise<void> {
     try {
@@ -201,6 +219,14 @@ export function createModelsPage(deps: Deps): Page {
     );
   }
 
+  /** Offers the download only while the server does not have the chosen model yet. */
+  function renderPullButton(): void {
+    const have = reach.reachable && ollamaHas(reach.models, wanted);
+    pullButton.hidden = have;
+    pulled.hidden = !have;
+    pulled.textContent = have ? `${wanted.trim()} is downloaded` : "";
+  }
+
   function renderPull(): void {
     if (!pull) {
       pullMeter.replaceChildren();
@@ -210,26 +236,28 @@ export function createModelsPage(deps: Deps): Page {
   }
 
   /** Shows whether the server answered; the editable fields are left alone. */
-  function renderReach(reach: RewriteStatus): void {
+  function renderReach(answer: RewriteStatus): void {
     // The heartbeat usually brings the same answer; leave the page untouched then.
-    const key = JSON.stringify(reach);
+    reach = answer;
+    renderPullButton();
+    const key = JSON.stringify(answer);
     if (key === shown) return;
     shown = key;
-    const ok = reach.reachable;
+    const ok = answer.reachable;
     reachNote.className = `status-note${ok ? " ok" : " error"}`;
     reachNote.replaceChildren(
       h("span", { className: "status-dot", "data-state": ok ? "ready" : "error" }),
       ok ? "Connected" : "Can't reach the server. If you use Ollama, check that it is running.",
     );
-    modelList.replaceChildren(...reach.models.map((name) => h("option", { value: name })));
+    modelList.replaceChildren(...answer.models.map((name) => h("option", { value: name })));
     pullButton.disabled = !ok;
   }
 
   /** Asks the server; only the newest answer is shown, so a slow one cannot undo a later one. */
   async function checkReach(): Promise<void> {
     const ticket = ++latest;
-    const reach = await api.rewriteStatus();
-    if (ticket === latest) renderReach(reach);
+    const answer = await api.rewriteStatus();
+    if (ticket === latest) renderReach(answer);
   }
 
   /** Asks the server again, e.g. after starting Ollama with the page open. */
@@ -262,6 +290,7 @@ export function createModelsPage(deps: Deps): Page {
   }
 
   function renderLanguage(settings: Settings, status: Status, current: boolean): void {
+    wanted = settings.rewrite.model;
     if (current)
       renderReach({ reachable: status.rewrite_reachable, models: status.rewrite_models });
     language.replaceChildren(
@@ -288,7 +317,7 @@ export function createModelsPage(deps: Deps): Page {
         set: (s, v) => (s.rewrite.model = v),
       }),
       modelList,
-      h("div", { className: "row" }, [pullButton]),
+      h("div", { className: "row" }, [pullButton, pulled]),
       pullMeter,
       number(store, settings, {
         label: "Give up after",
@@ -357,6 +386,14 @@ export function createModelsPage(deps: Deps): Page {
     renderPull();
     if (progress.error) toast(progress.error, "error");
     else if (progress.finished) toast(`${progress.id} is ready`);
+    // Hide the button straight away rather than at the next heartbeat.
+    if (progress.finished) void checkReach().catch(() => undefined);
+  });
+
+  // Typing another model name shows or hides the button without waiting for the server.
+  store.subscribe((next) => {
+    wanted = next.rewrite.model;
+    renderPullButton();
   });
 
   const el = h("div", { className: "page models" }, [

@@ -23,6 +23,7 @@ describe("app shell", () => {
     expect(root.querySelector(".page.home")).not.toBeNull();
     expect(statusLine(root)).toBe("Ready · Whisper turbo on vulkan");
     expect(root.querySelector<HTMLElement>(".status-dot")!.dataset.state).toBe("ready");
+    expect(root.querySelector(".version-line")!.textContent).toBe("Version 1.2.3");
   });
 
   it("switches pages from the nav and from navigate events, building each page once", async () => {
