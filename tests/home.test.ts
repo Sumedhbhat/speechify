@@ -65,11 +65,16 @@ describe("home header", () => {
     expect(document.querySelector(".checklist")).toBeNull();
   });
 
-  it("shows the checklist again when a step is no longer done", async () => {
+  it("shows the checklist again when a step is no longer done, and hides it once it is", async () => {
+    const page = await setup([]);
+    expect(document.querySelector(".checklist")).toBeNull();
     ctx.api.getStatus.mockResolvedValue(status({ platform: "macos", shortcuts: false }));
-    await setup([]);
+    await page.show();
     expect(document.querySelector(".checklist h2")!.textContent).toBe("Ready when you are");
     expect(document.querySelectorAll(".step.done").length).toBe(2);
+    ctx.api.getStatus.mockResolvedValue(status({ platform: "macos" }));
+    await page.show();
+    expect(document.querySelector(".checklist")).toBeNull();
   });
 
   it("names the shortcut while a step is left", async () => {
