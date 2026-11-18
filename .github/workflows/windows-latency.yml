@@ -1,0 +1,46 @@
+name: Windows latency benchmark
+
+on:
+  push:
+    branches: [sb/windows-latency-benchmark]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: windows-2025
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        workload: [speech, cleanup]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Record runner hardware
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_Processor | Format-List Name,NumberOfCores,NumberOfLogicalProcessors
+          Get-CimInstance Win32_VideoController | Format-List Name
+      - name: Build benchmark
+        run: cargo build --release --locked -p speechify-bench --example windows-latency
+      - name: Benchmark batch speech recognition
+        if: matrix.workload == 'speech'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results
+          python scripts/fetch-native.py
+          target/release/examples/windows-latency.exe speech | tee benchmark-results/speech.jsonl
+      - name: Benchmark language-model cleanup
+        if: matrix.workload == 'cleanup'
+        run: python bench/windows-latency.py
+      - name: Upload benchmark records
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-${{ matrix.workload }}
+          path: benchmark-results/
