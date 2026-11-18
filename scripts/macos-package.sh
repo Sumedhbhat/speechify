@@ -30,13 +30,30 @@ if [ -n "${MACOS_CERTIFICATE_P12:-}" ]; then
   work="$(mktemp -d)"
   keychain="$work/signing.keychain-db"
   keychain_password="$(openssl rand -hex 16)"
-  trap 'security delete-keychain "$keychain" 2>/dev/null || true; rm -rf "$work"' EXIT
+  # The search list as it was, one path per entry (paths can hold spaces).
+  searched=()
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line#\"}"
+    line="${line%\"}"
+    if [ -n "$line" ]; then searched+=("$line"); fi
+  done < <(security list-keychains -d user)
+  cleanup() {
+    security list-keychains -d user -s ${searched[@]+"${searched[@]}"}
+    security delete-keychain "$keychain" 2>/dev/null || true
+    rm -rf "$work"
+  }
+  trap cleanup EXIT
   printf '%s' "$MACOS_CERTIFICATE_P12" | base64 --decode > "$work/signing.p12"
   security create-keychain -p "$keychain_password" "$keychain"
   security set-keychain-settings "$keychain"
   security unlock-keychain -p "$keychain_password" "$keychain"
-  security import "$work/signing.p12" -k "$keychain" -P "${MACOS_CERTIFICATE_PASSWORD:-}" -T /usr/bin/codesign >/dev/null
+  security import "$work/signing.p12" -k "$keychain" -f pkcs12 -P "${MACOS_CERTIFICATE_PASSWORD:-}" -T /usr/bin/codesign >/dev/null
   security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
+  # codesign looks for the private key only in keychains on the search list,
+  # even with --keychain. Without this a CI runner finds the certificate but
+  # not its key ("The specified item could not be found in the keychain").
+  security list-keychains -d user -s "$keychain" ${searched[@]+"${searched[@]}"}
   # Self-signed, so not "valid" to the system: list all identities, not just -v.
   identity="$(security find-identity -p codesigning "$keychain" | awk '/^ *1\)/ { print $2; exit }')"
   if [ -z "$identity" ]; then
