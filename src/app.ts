@@ -50,6 +50,8 @@ export function createApp(root: HTMLElement, base: Pick<Deps, "api" | "events">)
 
   const statusDot = h("span", { className: "status-dot" });
   const statusText = h("span", { textContent: "Starting" });
+  // Shown under the status so every screenshot says which build it came from.
+  const versionLine = h("p", { className: "version-line" });
   const content = h("main", { className: "content", tabIndex: -1 });
   const links = PAGES.map(({ id, label }) =>
     h(
@@ -68,6 +70,7 @@ export function createApp(root: HTMLElement, base: Pick<Deps, "api" | "events">)
         ]),
         h("nav", { "aria-label": "Pages" }, links),
         h("p", { className: "status-line", role: "status" }, [statusDot, statusText]),
+        versionLine,
       ]),
       content,
     ]),
@@ -105,7 +108,13 @@ export function createApp(root: HTMLElement, base: Pick<Deps, "api" | "events">)
 
   async function refreshStatus(): Promise<void> {
     try {
-      const [status, models] = await Promise.all([base.api.getStatus(), base.api.models()]);
+      const asked = base.api.getStatus();
+      // The version shows even when the model list fails, as that is when screenshots matter.
+      void asked.then(
+        (status) => (versionLine.textContent = `Version ${status.version}`),
+        () => {},
+      );
+      const [status, models] = await Promise.all([asked, base.api.models()]);
       const model = models.find((m) => m.active);
       const device = status.speech_device.split(" ")[0];
       let state = "ready";

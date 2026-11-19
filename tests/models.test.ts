@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RewriteStatus, Status } from "../src/api";
-import { createModelsPage, HEARTBEAT_MS } from "../src/pages/models";
+import { createModelsPage, HEARTBEAT_MS, ollamaHas } from "../src/pages/models";
 import type { Page } from "../src/deps";
-import { byLabel, byText, change, makeDeps, model, settle, status, toasts } from "./fakes";
+import { byLabel, byText, change, makeDeps, model, settle, status, toasts, type } from "./fakes";
 
 const UP: RewriteStatus = { reachable: true, models: ["qwen2.5:1.5b", "llama3.2:3b"] };
 const DOWN: RewriteStatus = { reachable: false, models: [] };
@@ -210,7 +210,9 @@ describe("models page", () => {
   });
 
   it("downloads a language model through Ollama", async () => {
+    ctx.api.getStatus.mockResolvedValue(status({ rewrite_models: ["llama3.2:3b"] }));
     await setup();
+    expect(button(document, "Download with Ollama").hidden).toBe(false);
     button(document, "Download with Ollama").click();
     await settle();
     expect(ctx.api.pullRewriteModel).toHaveBeenCalledWith("qwen2.5:1.5b");
@@ -224,6 +226,8 @@ describe("models page", () => {
       error: "",
     });
     expect(document.querySelector(".pull")!.textContent).toBe("500 MB of 1.0 GB");
+    ctx.api.rewriteStatus.mockResolvedValue(UP);
+    const asked = ctx.api.rewriteStatus.mock.calls.length;
     ctx.emit("rewriteProgress", {
       id: "qwen2.5:1.5b",
       done: 1,
@@ -233,6 +237,11 @@ describe("models page", () => {
     });
     expect(document.querySelector(".pull")!.textContent).toBe("");
     expect(toasts()).toContain("qwen2.5:1.5b is ready");
+    // The server is asked again at once, so the button goes without waiting for the heartbeat.
+    expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(asked + 1);
+    await settle();
+    expect(button(document, "Download with Ollama").hidden).toBe(true);
+    ctx.api.rewriteStatus.mockResolvedValue({ reachable: true, models: ["llama3.2:3b"] });
 
     ctx.emit("rewriteProgress", {
       id: "x",
@@ -243,10 +252,113 @@ describe("models page", () => {
     });
     expect(toasts()).toContain("Ollama refused: no such model.");
 
+    // A failed re-check stays quiet; the heartbeat tries again.
+    const before = toasts().length;
+    ctx.api.rewriteStatus.mockRejectedValueOnce("Speechify is not responding.");
+    ctx.emit("rewriteProgress", { id: "x", done: 0, total: 0, finished: true, error: "" });
+    await settle();
+    expect(toasts().slice(before)).toEqual(["x is ready"]);
+
     ctx.api.pullRewriteModel.mockRejectedValueOnce("Ollama is not running.");
     button(document, "Download with Ollama").click();
     await settle();
     expect(toasts()).toContain("Ollama is not running.");
+  });
+
+  it("hides the Ollama download once the server has the model", async () => {
+    await setup();
+    const download = button(document, "Download with Ollama");
+    const note = () => byText(document, ".status-note.ok", "qwen2.5:1.5b is downloaded");
+    expect(download.hidden).toBe(true);
+    expect(note().hidden).toBe(false);
+
+    // The button follows the name while it is typed, before the field saves.
+    type(byLabel<HTMLInputElement>(document, "Model"), "gemma3:4b");
+    expect(download.hidden).toBe(false);
+    type(byLabel<HTMLInputElement>(document, "Model"), "llama3.2:3b");
+    expect(download.hidden).toBe(true);
+    expect(byText(document, ".status-note.ok", "llama3.2:3b is downloaded").hidden).toBe(false);
+
+    change(byLabel<HTMLInputElement>(document, "Model"), "gemma3:4b");
+    await settle();
+    expect(download.hidden).toBe(false);
+    expect(document.querySelector(".row .status-note.ok")!.hasAttribute("hidden")).toBe(true);
+
+    // A rejected save puts the saved name back, and the button follows it.
+    ctx.api.saveSettings.mockRejectedValueOnce("Could not save.");
+    type(byLabel<HTMLInputElement>(document, "Model"), "llama3.2:3b");
+    expect(download.hidden).toBe(true);
+    change(byLabel<HTMLInputElement>(document, "Model"), "llama3.2:3b");
+    await settle();
+    expect(byLabel<HTMLInputElement>(document, "Model").value).toBe("gemma3:4b");
+    expect(download.hidden).toBe(false);
+
+    // The heartbeat notices the model arriving, e.g. pulled from a terminal.
+    ctx.api.rewriteStatus.mockResolvedValue({ reachable: true, models: ["gemma3:4b"] });
+    button(document, "Refresh").click();
+    await settle();
+    expect(download.hidden).toBe(true);
+    expect(byText(document, ".status-note.ok", "gemma3:4b is downloaded").hidden).toBe(false);
+
+    // Another server is asked straight away; until it answers, the old list does not count.
+    let answer: (status: RewriteStatus) => void = () => undefined;
+    ctx.api.rewriteStatus.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    const asked = ctx.api.rewriteStatus.mock.calls.length;
+    change(byLabel<HTMLInputElement>(document, "Server"), "http://other:11434");
+    await settle();
+    expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(asked + 1);
+    expect(download.hidden).toBe(false);
+    answer({ reachable: true, models: ["gemma3:4b"] });
+    await settle();
+    expect(download.hidden).toBe(true);
+
+    // A server that stops answering cannot vouch for the model.
+    ctx.api.rewriteStatus.mockResolvedValue(DOWN);
+    button(document, "Refresh").click();
+    await settle();
+    expect(download.hidden).toBe(false);
+    expect(download.disabled).toBe(true);
+
+    // A failed check of a new server stays quiet; the heartbeat tries again.
+    const before = toasts().length;
+    ctx.api.rewriteStatus.mockRejectedValueOnce("Speechify is not responding.");
+    change(byLabel<HTMLInputElement>(document, "Server"), "http://third:11434");
+    await settle();
+    expect(toasts().slice(before)).toEqual([]);
+
+    // With the page closed, a server change waits for the page to open again.
+    const field = byLabel<HTMLInputElement>(document, "Server");
+    page.el.remove();
+    const calls = ctx.api.rewriteStatus.mock.calls.length;
+    change(field, "http://fourth:11434");
+    await settle();
+    expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(calls);
+  });
+
+  it("ignores settings changes made before the page first opens", async () => {
+    page = createModelsPage(ctx.deps);
+    await ctx.deps.settings.update((s) => (s.theme = "dark"));
+    expect(ctx.api.rewriteStatus).not.toHaveBeenCalled();
+    document.body.append(page.el);
+    await page.show();
+    expect(button(document, "Download with Ollama").hidden).toBe(true);
+  });
+
+  it("matches Ollama model names the way Ollama does", () => {
+    expect(ollamaHas(["gemma3:4b"], "gemma3:4b")).toBe(true);
+    expect(ollamaHas(["gemma3:4b"], " Gemma3:4B ")).toBe(true);
+    expect(ollamaHas(["gemma3:latest"], "gemma3")).toBe(true);
+    expect(ollamaHas(["gemma3:4b"], "gemma3")).toBe(false);
+    expect(ollamaHas(["gemma3:4b"], "gemma3:1b")).toBe(false);
+    expect(ollamaHas(["gemma3:4b"], "")).toBe(false);
+    expect(ollamaHas(["gemma3"], "gemma3:latest")).toBe(true);
+    // A colon before the last "/" is a registry port, not a tag.
+    expect(
+      ollamaHas(["registry.example:5000/team/model:latest"], "registry.example:5000/team/model"),
+    ).toBe(true);
+    expect(
+      ollamaHas(["registry.example:5000/team/model:q4"], "registry.example:5000/team/model"),
+    ).toBe(false);
   });
 
   it("explains an unreachable language-model server", async () => {
@@ -320,7 +432,8 @@ describe("models page", () => {
     expect(button(document, "Refresh").disabled).toBe(true);
     saved();
     await settle();
-    expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(asked + 1);
+    // The new address is checked once it saves, and Refresh asks too; the newer answer wins.
+    expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(asked + 2);
     expect(document.querySelector(".status-note.ok")!.textContent).toBe("Connected");
     expect(button(document, "Refresh").disabled).toBe(false);
 

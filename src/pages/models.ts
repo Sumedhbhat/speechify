@@ -34,12 +34,34 @@ function meter(progress: Progress): { el: HTMLElement; update: (progress: Progre
   return { el: h("div", { className: "meter" }, [bar, label]), update };
 }
 
+/**
+ * Whether Ollama already has `name`. Ollama lists a bare name as "name:latest"
+ * and ignores case. Only a colon after the last "/" is a tag; one before it is
+ * a registry port, as in "host:5000/team/model".
+ */
+export function ollamaHas(models: string[], name: string): boolean {
+  if (!name.trim()) return false;
+  const wanted = ollamaName(name);
+  return models.some((listed) => ollamaName(listed) === wanted);
+}
+
+function ollamaName(name: string): string {
+  const lower = name.trim().toLowerCase();
+  const tagged = lower.slice(lower.lastIndexOf("/") + 1).includes(":");
+  return tagged ? lower : `${lower}:latest`;
+}
+
 export function createModelsPage(deps: Deps): Page {
   const { api, events, settings: store } = deps;
   const downloads = new Map<string, Progress>();
   const meters = new Map<string, (progress: Progress) => void>();
   let models: SpeechModel[] = [];
   let pull: Progress | null = null;
+  // The last server answer, the server it came from and the Model field, to
+  // tell if the model typed there is already on the server.
+  let reach: RewriteStatus = { reachable: false, models: [] };
+  let server = "";
+  let modelInput: HTMLInputElement | undefined;
 
   const cards = h("div", { className: "model-grid" });
   const device = h("div");
@@ -78,6 +100,7 @@ export function createModelsPage(deps: Deps): Page {
     },
     [icon("download"), "Download with Ollama"],
   );
+  const pulled = h("p", { className: "status-note ok", hidden: true });
 
   async function guard(run: () => Promise<unknown>): Promise<void> {
     try {
@@ -201,6 +224,15 @@ export function createModelsPage(deps: Deps): Page {
     );
   }
 
+  /** Offers the download only while the server does not have the chosen model yet. */
+  function renderPullButton(): void {
+    const wanted = modelInput?.value.trim() ?? "";
+    const have = reach.reachable && ollamaHas(reach.models, wanted);
+    pullButton.hidden = have;
+    pulled.hidden = !have;
+    pulled.textContent = have ? `${wanted} is downloaded` : "";
+  }
+
   function renderPull(): void {
     if (!pull) {
       pullMeter.replaceChildren();
@@ -210,26 +242,28 @@ export function createModelsPage(deps: Deps): Page {
   }
 
   /** Shows whether the server answered; the editable fields are left alone. */
-  function renderReach(reach: RewriteStatus): void {
+  function renderReach(answer: RewriteStatus): void {
     // The heartbeat usually brings the same answer; leave the page untouched then.
-    const key = JSON.stringify(reach);
+    reach = answer;
+    renderPullButton();
+    const key = JSON.stringify(answer);
     if (key === shown) return;
     shown = key;
-    const ok = reach.reachable;
+    const ok = answer.reachable;
     reachNote.className = `status-note${ok ? " ok" : " error"}`;
     reachNote.replaceChildren(
       h("span", { className: "status-dot", "data-state": ok ? "ready" : "error" }),
       ok ? "Connected" : "Can't reach the server. If you use Ollama, check that it is running.",
     );
-    modelList.replaceChildren(...reach.models.map((name) => h("option", { value: name })));
+    modelList.replaceChildren(...answer.models.map((name) => h("option", { value: name })));
     pullButton.disabled = !ok;
   }
 
   /** Asks the server; only the newest answer is shown, so a slow one cannot undo a later one. */
   async function checkReach(): Promise<void> {
     const ticket = ++latest;
-    const reach = await api.rewriteStatus();
-    if (ticket === latest) renderReach(reach);
+    const answer = await api.rewriteStatus();
+    if (ticket === latest) renderReach(answer);
   }
 
   /** Asks the server again, e.g. after starting Ollama with the page open. */
@@ -262,6 +296,17 @@ export function createModelsPage(deps: Deps): Page {
   }
 
   function renderLanguage(settings: Settings, status: Status, current: boolean): void {
+    const modelField = text(store, settings, {
+      label: "Model",
+      placeholder: "gemma3:4b",
+      list: modelList.id,
+      get: (s) => s.rewrite.model,
+      set: (s, v) => (s.rewrite.model = v),
+    });
+    // Follow the name while it is typed; the setting saves when the field is left.
+    modelInput = modelField.querySelector("input")!;
+    modelInput.addEventListener("input", renderPullButton);
+    server = settings.rewrite.url;
     if (current)
       renderReach({ reachable: status.rewrite_reachable, models: status.rewrite_models });
     language.replaceChildren(
@@ -280,15 +325,9 @@ export function createModelsPage(deps: Deps): Page {
         set: (s, v) => (s.rewrite.url = v),
       }),
       reachRow,
-      text(store, settings, {
-        label: "Model",
-        placeholder: "gemma3:4b",
-        list: modelList.id,
-        get: (s) => s.rewrite.model,
-        set: (s, v) => (s.rewrite.model = v),
-      }),
+      modelField,
       modelList,
-      h("div", { className: "row" }, [pullButton]),
+      h("div", { className: "row" }, [pullButton, pulled]),
       pullMeter,
       number(store, settings, {
         label: "Give up after",
@@ -336,6 +375,7 @@ export function createModelsPage(deps: Deps): Page {
         }),
       ]),
     );
+    renderPullButton();
     renderPull();
   }
 
@@ -357,6 +397,19 @@ export function createModelsPage(deps: Deps): Page {
     renderPull();
     if (progress.error) toast(progress.error, "error");
     else if (progress.finished) toast(`${progress.id} is ready`);
+    // Hide the button straight away rather than at the next heartbeat.
+    if (progress.finished) void checkReach().catch(() => undefined);
+  });
+
+  store.subscribe((next) => {
+    if (next.rewrite.url !== server) {
+      server = next.rewrite.url;
+      // The old server's list says nothing about the new one: offer the
+      // download until the new server answers.
+      reach = { reachable: false, models: [] };
+      if (el.isConnected) void checkReach().catch(() => undefined);
+    }
+    renderPullButton();
   });
 
   const el = h("div", { className: "page models" }, [

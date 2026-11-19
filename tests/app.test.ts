@@ -23,6 +23,7 @@ describe("app shell", () => {
     expect(root.querySelector(".page.home")).not.toBeNull();
     expect(statusLine(root)).toBe("Ready · Whisper turbo on vulkan");
     expect(root.querySelector<HTMLElement>(".status-dot")!.dataset.state).toBe("ready");
+    expect(root.querySelector(".version-line")!.textContent).toBe("Version 1.2.3");
   });
 
   it("switches pages from the nav and from navigate events, building each page once", async () => {
@@ -99,6 +100,14 @@ describe("app shell", () => {
     vi.advanceTimersByTime(15_000);
     await settle();
     expect(statusLine(root)).toBe("Ready · Whisper turbo");
+
+    // A failed model list still leaves the version on screen.
+    api.getStatus.mockResolvedValue(status({ version: "2.0.0" }));
+    api.models.mockRejectedValueOnce("Speechify is not responding.");
+    vi.advanceTimersByTime(15_000);
+    await settle();
+    expect(statusLine(root)).toBe("Speechify is not responding.");
+    expect(root.querySelector(".version-line")!.textContent).toBe("Version 2.0.0");
 
     api.getStatus.mockRejectedValue("Speechify is not responding.");
     vi.advanceTimersByTime(15_000);
