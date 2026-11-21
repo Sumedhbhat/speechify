@@ -16,19 +16,70 @@ pub fn to_mono_16k(samples: &[f32], channels: u16, rate: u32) -> Vec<f32> {
         .chunks(channels)
         .map(|frame| frame.iter().sum::<f32>() / frame.len() as f32)
         .collect();
-    if rate == RATE || mono.is_empty() || rate == 0 {
-        return mono;
+    let mut resampler = Resampler::new(rate);
+    let mut out = resampler.push(&mono);
+    out.extend(resampler.finish());
+    out
+}
+
+/// Converts mono audio to 16 kHz as it arrives, so a recording can be
+/// recognised while it is still going. Feeding a recording in any number of
+/// parts gives exactly the samples `to_mono_16k` gives for the whole of it.
+#[derive(Debug, Clone)]
+pub struct Resampler {
+    step: f64,
+    /// Input not yet fully used; `held[0]` is input sample number `offset`.
+    held: Vec<f32>,
+    offset: usize,
+    /// Input samples received and output samples produced so far.
+    received: usize,
+    produced: usize,
+}
+
+impl Resampler {
+    pub fn new(rate: u32) -> Resampler {
+        Resampler {
+            step: if rate == 0 { 1.0 } else { rate as f64 / RATE as f64 },
+            held: Vec::new(),
+            offset: 0,
+            received: 0,
+            produced: 0,
+        }
     }
-    let step = rate as f64 / RATE as f64;
-    let length = (mono.len() as f64 / step) as usize;
-    (0..length)
-        .map(|i| {
-            let position = i as f64 * step;
+
+    /// The 16 kHz samples that `input` completes.
+    pub fn push(&mut self, input: &[f32]) -> Vec<f32> {
+        self.held.extend_from_slice(input);
+        self.received += input.len();
+        // An output sample needs the input sample after it, unless it is the last.
+        self.emit(|index, received| index + 1 < received)
+    }
+
+    /// The last samples, once the recording has ended.
+    pub fn finish(&mut self) -> Vec<f32> {
+        self.emit(|_, _| true)
+    }
+
+    fn emit(&mut self, ready: impl Fn(usize, usize) -> bool) -> Vec<f32> {
+        let mut out = Vec::new();
+        let total = (self.received as f64 / self.step) as usize;
+        while self.produced < total {
+            let position = self.produced as f64 * self.step;
             let index = position as usize;
-            let next = mono[(index + 1).min(mono.len() - 1)];
-            mono[index] + (next - mono[index]) * (position - index as f64) as f32
-        })
-        .collect()
+            if !ready(index, self.received) {
+                break;
+            }
+            let here = self.held[index - self.offset];
+            let next = self.held[(index + 1).min(self.received - 1) - self.offset];
+            out.push(here + (next - here) * (position - index as f64) as f32);
+            self.produced += 1;
+        }
+        // Keep only the input the next output sample still needs.
+        let needed = ((self.produced as f64 * self.step) as usize).min(self.received);
+        self.held.drain(..needed - self.offset);
+        self.offset = needed;
+        out
+    }
 }
 
 fn rms(frame: &[f32]) -> f32 {
@@ -316,6 +367,44 @@ mod tests {
         assert_eq!(up, vec![0.0, 0.5, 1.0, 1.0]);
         assert!(to_mono_16k(&[], 0, 44_100).is_empty());
         assert_eq!(to_mono_16k(&[0.1], 1, 0), vec![0.1]);
+    }
+
+    #[test]
+    fn resampling_in_parts_matches_resampling_the_whole() {
+        // The interpolation the app has always used, written out directly.
+        let whole = |mono: &[f32], rate: u32| -> Vec<f32> {
+            if rate == RATE || mono.is_empty() {
+                return mono.to_vec();
+            }
+            let step = rate as f64 / RATE as f64;
+            (0..(mono.len() as f64 / step) as usize)
+                .map(|i| {
+                    let position = i as f64 * step;
+                    let index = position as usize;
+                    let next = mono[(index + 1).min(mono.len() - 1)];
+                    mono[index] + (next - mono[index]) * (position - index as f64) as f32
+                })
+                .collect()
+        };
+        let signal: Vec<f32> = (0..20_011).map(|i| ((i * 7919) % 1000) as f32 / 1000.0 - 0.5).collect();
+        for rate in [8_000, 16_000, 22_050, 44_100, 48_000, 96_000] {
+            for part in [1, 7, 441, 480, 1024, 20_011] {
+                let mut resampler = Resampler::new(rate);
+                let mut out = Vec::new();
+                for piece in signal.chunks(part) {
+                    out.extend(resampler.push(piece));
+                }
+                out.extend(resampler.finish());
+                assert_eq!(out, whole(&signal, rate), "{rate} Hz in parts of {part}");
+            }
+        }
+        // Nothing in, nothing out; a second finish adds nothing.
+        let mut idle = Resampler::new(48_000);
+        assert!(idle.push(&[]).is_empty() && idle.finish().is_empty());
+        let mut done = Resampler::new(RATE);
+        done.push(&[0.5; 3000]);
+        assert_eq!(done.finish().len(), 1);
+        assert!(done.finish().is_empty());
     }
 
     #[test]

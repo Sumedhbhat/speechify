@@ -15,6 +15,9 @@ pub struct Hint<'a> {
     pub language: &'a str,
     /// Names and terms to prefer.
     pub vocabulary: &'a [String],
+    /// What was said just before this audio, when a recording is recognised
+    /// in pieces. Whisper continues the style and spelling of its prompt.
+    pub previous: &'a str,
 }
 
 pub trait Recognizer {
@@ -89,8 +92,26 @@ pub fn prompt(hint: &Hint) -> String {
         terms.reverse();
         text.push_str(&format!(" Glossary: {}.", terms.join(", ")));
     }
+    let previous = hint.previous.trim();
+    if !previous.is_empty() {
+        // The most recent words, cut at a word boundary, last in the prompt
+        // where Whisper expects the preceding transcript.
+        let start = if previous.len() <= PREVIOUS_CHARS {
+            0
+        } else {
+            previous
+                .char_indices()
+                .find(|(index, c)| c.is_whitespace() && previous.len() - index <= PREVIOUS_CHARS)
+                .map_or(previous.len(), |(index, _)| index + 1)
+        };
+        text.push(' ');
+        text.push_str(&previous[start..]);
+    }
     text.trim().to_string()
 }
+
+/// How much of the preceding transcript a piece's prompt carries.
+const PREVIOUS_CHARS: usize = 200;
 
 /// Phrases Whisper produces from silence or noise, learned from video captions.
 const PHANTOMS: &[&str] = &[
@@ -209,7 +230,10 @@ impl Recognizer for Remote {
 #[cfg(test)]
 pub(crate) struct Fixed {
     pub answers: Vec<Result<String>>,
-    pub heard: Vec<(usize, String, Vec<String>)>,
+    /// Each call: samples, language, vocabulary, previous text.
+    pub heard: Vec<(usize, String, Vec<String>, String)>,
+    /// Finds speech exactly, wherever the samples are not silent.
+    pub detects: bool,
 }
 
 #[cfg(test)]
@@ -218,6 +242,15 @@ impl Fixed {
         Fixed {
             answers: answers.iter().map(|text| Ok(text.to_string())).collect(),
             heard: vec![],
+            detects: false,
+        }
+    }
+
+    /// Like `new`, with a voice detector.
+    pub fn detecting(answers: &[&str]) -> Fixed {
+        Fixed {
+            detects: true,
+            ..Fixed::new(answers)
         }
     }
 }
@@ -225,13 +258,21 @@ impl Fixed {
 #[cfg(test)]
 impl Recognizer for Fixed {
     fn transcribe(&mut self, audio: &[f32], hint: &Hint) -> Result<String> {
-        self.heard
-            .push((audio.len(), hint.language.to_string(), hint.vocabulary.to_vec()));
+        self.heard.push((
+            audio.len(),
+            hint.language.to_string(),
+            hint.vocabulary.to_vec(),
+            hint.previous.to_string(),
+        ));
         self.answers.remove(0)
     }
 
     fn name(&self) -> &str {
         "fixed"
+    }
+
+    fn detect(&mut self, audio: &[f32], _: f64) -> Option<Result<Vec<std::ops::Range<usize>>>> {
+        self.detects.then(|| Ok(crate::testing::sounding(audio)))
     }
 }
 
@@ -310,14 +351,16 @@ mod tests {
         assert_eq!(
             prompt(&Hint {
                 language: "en",
-                vocabulary: &[]
+                vocabulary: &[],
+                previous: "",
             }),
             STYLE_PROMPT
         );
         assert_eq!(
             prompt(&Hint {
                 language: "hi",
-                vocabulary: &[]
+                vocabulary: &[],
+                previous: "",
             }),
             ""
         );
@@ -325,14 +368,16 @@ mod tests {
         assert_eq!(
             prompt(&Hint {
                 language: "",
-                vocabulary: &terms
+                vocabulary: &terms,
+                previous: "",
             }),
             format!("{STYLE_PROMPT} Glossary: Sumedh, kubectl.")
         );
         assert_eq!(
             prompt(&Hint {
                 language: "hi",
-                vocabulary: &terms
+                vocabulary: &terms,
+                previous: "",
             }),
             "Glossary: Sumedh, kubectl."
         );
@@ -340,8 +385,37 @@ mod tests {
         let long = prompt(&Hint {
             language: "hi",
             vocabulary: &many,
+            previous: "",
         });
         assert!(long.ends_with("Term098, Term099.") && !long.contains("Term000") && long.len() < 430);
+        // A later piece also gets the end of what was said before it.
+        let before = prompt(&Hint {
+            language: "en",
+            vocabulary: &[],
+            previous: " We met on Monday. ",
+        });
+        assert_eq!(before, format!("{STYLE_PROMPT} We met on Monday."));
+        let story = (0..100).map(|i| format!("w{i:02}")).collect::<Vec<_>>().join(" ");
+        let tail = prompt(&Hint {
+            language: "hi",
+            vocabulary: &[],
+            previous: &story,
+        });
+        // Whole words only, the newest ones, at most 200 characters.
+        assert!(
+            tail.ends_with("w98 w99") && tail.starts_with('w') && tail.len() <= 200,
+            "{tail}"
+        );
+        assert!(!tail.contains("w49"));
+        let unbroken = "x".repeat(300);
+        assert_eq!(
+            prompt(&Hint {
+                language: "hi",
+                vocabulary: &[],
+                previous: &unbroken,
+            }),
+            ""
+        );
     }
 
     #[test]
@@ -375,7 +449,8 @@ mod tests {
                     &[0.0; 160],
                     &Hint {
                         language: "en",
-                        vocabulary: &terms
+                        vocabulary: &terms,
+                        previous: "",
                     }
                 )
                 .unwrap(),
@@ -413,13 +488,14 @@ mod tests {
                     &[0.0; 3],
                     &Hint {
                         language: "en",
-                        vocabulary: &[]
+                        vocabulary: &[],
+                        previous: "",
                     }
                 )
                 .unwrap(),
             "one"
         );
-        assert_eq!(fixed.heard, vec![(3, "en".to_string(), vec![])]);
+        assert_eq!(fixed.heard, vec![(3, "en".to_string(), vec![], String::new())]);
         assert_eq!(fixed.name(), "fixed");
     }
 

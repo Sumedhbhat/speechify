@@ -141,7 +141,13 @@ pub struct Brief<'a> {
     pub vocabulary: &'a [String],
     /// Worked examples from the nightly teacher: (heard, ideal).
     pub examples: &'a [(String, String)],
+    /// The cleaned-up text that comes before RAW in the same dictation,
+    /// when a long one is cleaned up in blocks while it is being spoken.
+    pub before: &'a str,
 }
+
+/// How much of the earlier text a block's prompt carries.
+const BEFORE_CHARS: usize = 400;
 
 /// Returns (system, user) messages asking a model to clean `raw`.
 pub fn cleanup_prompt(raw: &str, brief: &Brief) -> (String, String) {
@@ -208,6 +214,15 @@ pub fn cleanup_prompt(raw: &str, brief: &Brief) -> (String, String) {
             user.push_str(&format!(", window \"{title}\""));
         }
         user.push_str("\n\n");
+    }
+    let before = brief.before.trim();
+    if !before.is_empty() {
+        let skip = before.chars().count().saturating_sub(BEFORE_CHARS);
+        let tail: String = before.chars().skip(skip).collect();
+        let ellipsis = if skip > 0 { "…" } else { "" };
+        user.push_str(&format!(
+            "EARLIER (already typed; context only, do not repeat it):\n<<<\n{ellipsis}{tail}\n>>>\n\nClean up only what follows. Continue a numbered list if RAW continues it.\n\n"
+        ));
     }
     user.push_str(&format!("RAW:\n<<<\n{raw}\n>>>"));
     (system.trim_end().to_string(), user)
@@ -435,6 +450,7 @@ mod tests {
             target,
             vocabulary,
             examples,
+            before: "",
         }
     }
 
@@ -490,6 +506,22 @@ mod tests {
         assert!(cleanup_prompt("x", &brief(&app_only, &[], &[]))
             .1
             .starts_with("CONTEXT: typing into Notes\n\n"));
+    }
+
+    #[test]
+    fn a_later_block_sees_the_end_of_what_came_before() {
+        let target = Target::default();
+        let mut b = brief(&target, &[], &[]);
+        b.before = "We need two things:\n1. A budget";
+        let (_, user) = cleanup_prompt("two a colour scheme", &b);
+        assert_eq!(
+            user,
+            "EARLIER (already typed; context only, do not repeat it):\n<<<\nWe need two things:\n1. A budget\n>>>\n\nClean up only what follows. Continue a numbered list if RAW continues it.\n\nRAW:\n<<<\ntwo a colour scheme\n>>>"
+        );
+        let long = "word ".repeat(200);
+        b.before = &long;
+        let (_, user) = cleanup_prompt("x", &b);
+        assert!(user.contains("<<<\n…") && user.len() < 600, "{user}");
     }
 
     #[test]

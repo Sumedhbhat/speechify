@@ -127,6 +127,7 @@ pub fn run(manifest: &Path, output: &Path, model: &str, asr: bool) -> Result<()>
     let hint = Hint {
         language: "en",
         vocabulary: &[],
+        previous: "",
     };
     for (n, clip) in clips.iter().enumerate() {
         if done.contains(&clip.id) {
@@ -210,6 +211,7 @@ pub fn examples(manifest: &Path, output: &Path, model: &str, ids: &[String]) -> 
     let hint = Hint {
         language: "en",
         vocabulary: &[],
+        previous: "",
     };
     let mut rows = Vec::new();
     for id in ids {

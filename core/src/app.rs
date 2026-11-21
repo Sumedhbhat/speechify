@@ -4,11 +4,12 @@
 //! the outside world only through `Platform` and `Engines`, so the whole
 //! behaviour of the app is tested here without a microphone or a screen.
 
-use crate::asr::Recognizer;
+use crate::asr::{Hint, Recognizer};
 use crate::audio::Chime;
 use crate::context::{categorize, restore_delay_ms, Os, PasteKeys, Target};
+use crate::live::Live;
 use crate::llm::Rewriter;
-use crate::pipeline::{self, Outcome, Request, RewriteCircuit};
+use crate::pipeline::{self, Destination, Draft, Outcome, Request, RewriteCircuit};
 use crate::session::{Effect, Event, Notice, Session};
 use crate::settings::{Retention, Settings};
 use crate::store::{self, Clock, Store};
@@ -56,6 +57,9 @@ pub trait Platform {
     fn start_capture(&mut self, microphone: &str) -> Result<()>;
     /// Stops recording and returns 16 kHz mono samples.
     fn stop_capture(&mut self) -> Vec<f32>;
+    /// The 16 kHz mono samples recorded so far, from sample `from` on,
+    /// without stopping. The samples are those `stop_capture` will return.
+    fn recorded(&mut self, from: usize) -> Vec<f32>;
     fn target(&mut self) -> Target;
     fn focus(&mut self) -> Focus;
     /// The selected text in the focused app, for Command Mode.
@@ -116,6 +120,11 @@ pub struct Controller<P: Platform, E: Engines> {
     /// The last cancelled or failed recording, for Undo and retry.
     kept: Option<(Vec<f32>, Target, bool, String)>,
     muted: bool,
+    /// The recording in progress, recognised and cleaned up as it is made.
+    draft: Draft,
+    /// How long the recogniser took over its last piece, which sets how
+    /// long the next recording's pieces must be.
+    piece_cost_ms: u64,
     rewrite_circuit: RewriteCircuit,
     rewrite_settings: crate::settings::Rewrite,
 }
@@ -132,6 +141,8 @@ impl<P: Platform, E: Engines> Controller<P, E> {
             command: false,
             kept: None,
             muted: false,
+            draft: Draft::default(),
+            piece_cost_ms: 0,
             rewrite_circuit: RewriteCircuit::default(),
             rewrite_settings,
         }
@@ -194,11 +205,14 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                     }
                     let target = self.target.clone();
                     let selection = if command { self.platform.selection() } else { String::new() };
-                    self.process(&settings, audio, target, command, selection);
+                    let draft = std::mem::take(&mut self.draft);
+                    self.piece_cost_ms = draft.live.cost_ms();
+                    self.process(&settings, audio, draft, target, command, selection);
                     self.session.handle(Event::Finished, self.platform.now_ms());
                 }
                 Effect::Discard { keep } => {
                     let audio = self.platform.stop_capture();
+                    self.draft = Draft::default();
                     self.unmute();
                     self.kept = keep.then(|| {
                         let selection = if self.command { self.platform.selection() } else { String::new() };
@@ -208,7 +222,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                 }
                 Effect::Retry => {
                     if let Some((audio, target, command, selection)) = self.kept.take() {
-                        self.process(&settings, audio, target, command, selection);
+                        self.process(&settings, audio, Draft::default(), target, command, selection);
                     }
                     self.session.handle(Event::Finished, self.platform.now_ms());
                 }
@@ -226,11 +240,46 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                 Effect::Notice(Notice::Cancelled) => self.notice("Dictation cancelled", false, true),
             }
         }
+        if event == Event::Tick && self.session.is_recording() {
+            self.listen(&settings);
+        }
+    }
+
+    /// Recognises what has been said so far, up to the last pause, and
+    /// cleans up finished sentences, so that little is left to do when the
+    /// recording stops. A failure here costs nothing: that audio is
+    /// recognised again when the recording ends.
+    fn listen(&mut self, settings: &Settings) {
+        if !self.draft.live.listening() {
+            return;
+        }
+        let pending = self.platform.recorded(self.draft.live.done());
+        self.sync_rewrite_settings(settings);
+        let Ok((recognizer, rewriter)) = self.engines.everyday(settings) else { return };
+        let vocabulary = self.store.vocabulary();
+        let hint = Hint {
+            language: &settings.speech.language,
+            vocabulary: &vocabulary,
+            previous: "",
+        };
+        if !matches!(self.draft.live.advance(&pending, recognizer, &hint), Ok(true)) || self.command {
+            return;
+        }
+        let into = Destination {
+            target: &self.target,
+            category: categorize(&self.target, &self.store.rules()),
+            settings,
+            store: &self.store,
+            rewriter,
+        };
+        let now_ms = self.platform.now_ms();
+        self.draft.clean(&into, (&mut self.rewrite_circuit, now_ms));
     }
 
     fn start(&mut self, settings: &Settings) -> bool {
         // Remember where the text is headed before the bar or anything else can take focus.
         self.target = self.platform.target();
+        self.draft = Draft::new(Live::costing(self.piece_cost_ms));
         if let Err(error) = self.platform.start_capture(&settings.microphone) {
             self.session = Session::new();
             self.platform.chime(Chime::Error);
@@ -251,7 +300,15 @@ impl<P: Platform, E: Engines> Controller<P, E> {
         true
     }
 
-    fn process(&mut self, settings: &Settings, audio: Vec<f32>, target: Target, command: bool, selection: String) {
+    fn process(
+        &mut self,
+        settings: &Settings,
+        audio: Vec<f32>,
+        draft: Draft,
+        target: Target,
+        command: bool,
+        selection: String,
+    ) {
         self.platform.show(Bar::Processing);
         let clock = self.platform.clock();
         let request = Request {
@@ -266,8 +323,9 @@ impl<P: Platform, E: Engines> Controller<P, E> {
         let mut active = settings.clone();
         active.rewrite.enabled &= !self.rewrite_circuit.cooling(now_ms) || command;
         let outcome = self.engines.everyday(&active).and_then(|(recognizer, rewriter)| {
-            pipeline::run_guarded(
+            pipeline::run_live(
                 &request,
+                draft,
                 &active,
                 &self.store,
                 recognizer,
@@ -283,6 +341,9 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                 mut record,
                 press_enter,
             }) => {
+                // Recognising what was left at the end is the latest measure
+                // of how slow the recogniser is.
+                self.piece_cost_ms = self.piece_cost_ms.max(record.asr_ms as u64);
                 let pasted = self.deliver(&paste, &target, press_enter);
                 record.outcome = if pasted { store::Outcome::Pasted } else { store::Outcome::Copied };
                 // A bare "press enter" typed nothing, so there is nothing to keep.
@@ -508,6 +569,10 @@ mod tests {
             self.log.push("stop".into());
             self.audio.clone()
         }
+        fn recorded(&mut self, from: usize) -> Vec<f32> {
+            // As if the whole recording had already been made.
+            self.audio.get(from..).unwrap_or_default().to_vec()
+        }
         fn target(&mut self) -> Target {
             let (app, process) = self.switched_to.unwrap_or(("Slack", "slack.exe"));
             Target {
@@ -629,6 +694,130 @@ mod tests {
         let mut settings = app.store.settings();
         change(&mut settings);
         app.store.save_settings(&settings).unwrap();
+    }
+
+    #[test]
+    fn speech_is_recognised_while_the_user_is_still_talking() {
+        let mut app = app(&["first part", "and the second part"]);
+        app.engines.asr.detects = true;
+        app.platform.audio = [tone(4000, 0.3), vec![0.0; 16_000], tone(2000, 0.3)].concat();
+        app.handle(Event::Down(Bind::PushToTalk));
+        app.platform.now += 5000;
+        // A tick while recording recognises the speech before the pause.
+        app.handle(Event::Tick);
+        assert_eq!(app.engines.asr.heard.len(), 1);
+        assert_eq!(app.engines.asr.heard[0].0, 4000 * 16 + 4800);
+        app.platform.now += 2000;
+        app.handle(Event::Up(Bind::PushToTalk));
+        // Only the words after the pause were left to recognise.
+        assert_eq!(app.engines.asr.heard.len(), 2);
+        assert_eq!(app.engines.asr.heard[1].3, "first part");
+        assert_eq!(
+            app.platform.log.last().unwrap(),
+            "paste:First part and the second part. |Standard|usual delay"
+        );
+        // The saved recording is the whole of it.
+        assert_eq!(app.platform.saved[0].split(':').nth(1), Some("112000"));
+        assert_eq!(app.store.last().unwrap().speech_ms, 6000);
+    }
+
+    #[test]
+    fn long_dictations_are_cleaned_up_while_the_user_is_still_talking() {
+        let first = "so the plan for the launch is simple we finish the review on monday we fix whatever it finds on tuesday and wednesday and we ship on thursday morning if nothing else comes up before then and the build stays green.";
+        let mut app = app(&[
+            first,
+            "and that is all for this week",
+            first,
+            "and that is all for this week",
+        ]);
+        set(&mut app, |s| s.rewrite.enabled = true);
+        app.engines.asr.detects = true;
+        app.engines.llm = Some(Scripted::new(vec![
+            Ok("The plan is simple.".into()),
+            Ok("That is all for this week.".into()),
+            Ok("Shorter.".into()),
+        ]));
+        let audio = [tone(4000, 0.3), vec![0.0; 16_000], tone(2000, 0.3)].concat();
+        app.platform.audio = audio.clone();
+        app.handle(Event::Down(Bind::PushToTalk));
+        app.platform.now += 5000;
+        app.handle(Event::Tick);
+        // The first block was cleaned up during the recording.
+        assert_eq!(app.engines.llm.as_ref().unwrap().seen.borrow().len(), 1);
+        app.platform.now += 2000;
+        app.handle(Event::Up(Bind::PushToTalk));
+        assert_eq!(
+            app.platform.log.last().unwrap(),
+            "paste:The plan is simple. That is all for this week. |Standard|usual delay"
+        );
+        // Command Mode recognises early but never cleans up early.
+        app.handle(Event::Down(Bind::Command));
+        app.platform.now += 5000;
+        app.handle(Event::Tick);
+        assert_eq!(app.engines.asr.heard.len(), 3);
+        assert_eq!(app.engines.llm.as_ref().unwrap().seen.borrow().len(), 2);
+    }
+
+    #[test]
+    fn a_slow_recogniser_makes_the_next_recordings_pieces_longer() {
+        let mut app = app(&["slow", "next"]);
+        app.engines.asr.detects = true;
+        dictate(&mut app);
+        // Pretend the end of that dictation took 30 s to recognise.
+        app.piece_cost_ms = app.piece_cost_ms.max(30_000);
+        app.platform.audio = [tone(4000, 0.3), vec![0.0; 16_000], tone(2000, 0.3)].concat();
+        app.handle(Event::Down(Bind::PushToTalk));
+        app.platform.now += 5000;
+        app.handle(Event::Tick);
+        // A 5 s piece would take longer than it lasts: nothing is recognised early.
+        assert_eq!(app.engines.asr.heard.len(), 1);
+        app.platform.now += 2000;
+        app.handle(Event::Up(Bind::PushToTalk));
+        assert_eq!(app.engines.asr.heard.len(), 2);
+        // The final recognition's time is what the next recording goes by.
+        let last = app.store.last().unwrap().asr_ms as u64;
+        assert!(app.piece_cost_ms >= last);
+    }
+
+    #[test]
+    fn listening_early_never_gets_in_the_way() {
+        let mut app = app(&["cancelled words", "all of it"]);
+        app.engines.asr.detects = true;
+        app.platform.audio = [tone(4000, 0.3), vec![0.0; 16_000], tone(2000, 0.3)].concat();
+        // A model that will not load is simply not used until the end.
+        app.engines.broken = Some("loading".into());
+        app.handle(Event::Down(Bind::PushToTalk));
+        app.platform.now += 5000;
+        app.handle(Event::Tick);
+        assert!(app.engines.asr.heard.is_empty());
+        app.engines.broken = None;
+        app.handle(Event::Tick);
+        assert_eq!(app.engines.asr.heard.len(), 1);
+        // A cancelled recording's pieces are forgotten with it.
+        app.handle(Event::Down(Bind::Cancel));
+        app.handle(Event::Released);
+        app.platform.audio = tone(3000, 0.3);
+        app.handle(Event::Down(Bind::PushToTalk));
+        app.platform.now += 3000;
+        app.handle(Event::Up(Bind::PushToTalk));
+        assert_eq!(app.engines.asr.heard.len(), 2);
+        assert_eq!(app.engines.asr.heard[1].3, "");
+        assert_eq!(app.store.last().unwrap().raw, "all of it");
+        // Ticks while idle do not listen.
+        app.handle(Event::Tick);
+        assert_eq!(app.engines.asr.heard.len(), 2);
+        // Without a voice detector, listening stops after the first look.
+        app.engines.asr.detects = false;
+        app.engines.asr.answers = vec![Ok("once".into())];
+        app.platform.audio = [tone(4000, 0.3), vec![0.0; 16_000]].concat();
+        app.handle(Event::Down(Bind::PushToTalk));
+        app.platform.now += 5000;
+        app.handle(Event::Tick);
+        assert!(!app.draft.live.listening());
+        app.platform.now += 1000;
+        app.handle(Event::Tick);
+        app.handle(Event::Up(Bind::PushToTalk));
+        assert_eq!(app.store.last().unwrap().raw, "once");
     }
 
     #[test]

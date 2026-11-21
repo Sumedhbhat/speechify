@@ -764,6 +764,7 @@ mod tests {
                 &Hint {
                     language: "en",
                     vocabulary: &terms,
+                    previous: "",
                 },
             )
             .unwrap()
@@ -819,6 +820,7 @@ mod tests {
         let hint = Hint {
             language: "en",
             vocabulary: &[],
+            previous: "",
         };
         let text = engine.transcribe(&found.samples, &hint).unwrap().to_lowercase();
         assert!(text.contains("what your country can do for you"), "{text}");
@@ -879,6 +881,7 @@ mod tests {
                 &Hint {
                     language: "en",
                     vocabulary: &[],
+                    previous: "",
                 },
             )
             .unwrap();
@@ -927,7 +930,8 @@ mod tests {
                 &[0.0; 16000],
                 &Hint {
                     language: "hi",
-                    vocabulary: &[]
+                    vocabulary: &[],
+                    previous: "",
                 }
             )
             .unwrap_err()
@@ -938,7 +942,8 @@ mod tests {
                 &[0.0; 16000],
                 &Hint {
                     language: "en",
-                    vocabulary: &[]
+                    vocabulary: &[],
+                    previous: "",
                 }
             )
             .is_ok());

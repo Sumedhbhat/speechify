@@ -31,7 +31,8 @@ This is why the coverage gate can demand every line of `core`. The other two cra
 | `app` | `Controller`, `Platform`, `Engines`, the `Bar` states |
 | `session` | The state machine: hold, tap, double-tap lock, cancel, limits |
 | `hotkey` | Parses shortcuts, tracks chords over raw key state |
-| `pipeline` | One dictation from audio to text; `compose` turns words into typed text |
+| `pipeline` | One dictation from audio to text; `compose` turns words into typed text; `Draft` cleans up long dictations in blocks while they are spoken |
+| `live` | Recognises a recording piece by piece, at pauses, while it is still being made |
 | `format/*` | The deterministic formatter, one file per pass |
 | `llm` | Prompts, the Ollama/OpenAI-compatible client, vetting of answers |
 | `asr` | `Recognizer` trait, remote server client, prompt, phantom-phrase guard |
@@ -64,10 +65,10 @@ The app starts a second instance only to talk to the first one: `speechify --tog
 1. The keyboard thread sees the push-to-talk chord held. `Tracker` emits `Down(PushToTalk)`. Extra keys are accepted only when they extend the shortcut into another one (Ctrl+Meta into Ctrl+Meta+Space). Ctrl+Meta+Left is somebody else's shortcut.
 2. The worker feeds the event to `Session::handle`, which returns effects: `Start` and `Mode`.
 3. `Controller::start` asks the `Platform` for the focused window (`Target`: app, process, title) before anything else can take focus, opens the microphone, optionally mutes output, plays the start chime and calls `Engines::warm`, which nudges Ollama so its model is loaded by the time you stop.
-4. The bar shows "listening". Capture sends a loudness value about 20 times a second for the waveform.
+4. The bar shows "listening". Capture sends a loudness value about 20 times a second for the waveform. On every `Tick` while recording, `Controller::listen` asks for the audio recorded since the last piece (`Platform::recorded`) and hands it to `live::Live`. When the voice detector finds a pause of 400 ms or more after at least 3 s of new audio, everything up to the middle of the pause is recognised there and then (see "Recognising while recording" below).
 5. Key-up of the chord after at least 500 ms gives `Stop`. Under 500 ms it is a tap: the session waits 500 ms for a second press, which locks hands-free, and discards the recording otherwise.
 6. `Controller::process` shows "processing". For Command Mode it first reads the selection by copying it.
-7. `pipeline::run` trims silence, builds the glossary from the dictionary, and calls the recogniser. It drops empty text and phantom phrases. It sorts the target into a `Category`.
+7. `pipeline::run_live` recognises what is left since the last pause (for a short dictation, all of it): it trims silence, builds the glossary from the dictionary, and calls the recogniser. Pieces that come out empty or as phantom phrases are dropped. It sorts the target into a `Category`.
 8. `pipeline::compose` makes the text (see below). Command Mode instead sends the selection and the instruction to the rewriter.
 9. `Controller::deliver` checks `Platform::focus`. If the focus is clearly not a text field, the bar shows a copy card. Otherwise it calls `Platform::paste` with the paste keys for the category and OS. A failed paste also shows the card.
 10. `paste` puts the text on the clipboard (excluded from clipboard history where the OS supports it), waits for modifier keys to be released, sends the paste keys, and restores your previous text clipboard after a delay if nothing else was copied in the meantime.
@@ -107,6 +108,18 @@ One SQLite file, `speechify.db`, in the app data folder. The schema is the `SCHE
 Next to the database, in the same folder: `audio/` (16 kHz mono WAV files), `models/` (GGUF files), and `training.jsonl` once you export. The folder is the one Tauri picks for the identifier `org.sumedhbhat.speechify`: `%APPDATA%\org.sumedhbhat.speechify` on Windows, `~/Library/Application Support/org.sumedhbhat.speechify` on macOS, `~/.local/share/org.sumedhbhat.speechify` on Linux.
 
 Times are stored as Unix seconds plus the local offset at the time, so day boundaries in Insights and the nightly schedule follow the user's own clock.
+
+## Recognising while recording
+
+Waiting for the whole recording before recognising any of it made the wait after a long dictation grow with its length: on the development laptop's CPU, about 18 s after a minute of speech with Parakeet. `live::Live` recognises the recording in pieces while it is still being made, so when the user stops only the words since the last pause are left. The wait is then about the same however long the dictation was (about 1.3 s after a minute on the same CPU).
+
+- A piece ends only in a pause the voice detector found: at the middle of a silence of at least 400 ms, once the piece is at least 3 s long, or, after 20 s without such a pause, at the longest silence there is. Never inside a word. These values were chosen on the Svarah recordings in `bench/` (`speechify-bench latency … pieces`): longer pauses and pieces gave no better accuracy and left more to do at the end.
+- Each piece is normalised, trimmed and checked for phantom phrases on its own. Whisper is given the end of the text so far as its prompt, so it carries on in the same style.
+- A recogniser without a voice detector (a remote server) gets the whole recording at the end, as before; `Live` stops asking for audio once it knows.
+- Recognising in pieces also fixes long recordings: Parakeet given a minute or more at once loses words (half of one 67 s recording in the evaluation).
+- The worker thread does this work between key events, so a key-up that arrives while a piece is being recognised is handled when that piece is done.
+
+When the language model is on, `pipeline::Draft` does the same for cleanup: once at least 40 words ending in a full sentence have been recognised, they are cleaned up as a block while the user goes on speaking. The model sees the end of the text cleaned up so far, so it can carry on a numbered list. Blocks are joined (list items on their own lines) and the destination's style is applied once to the whole, so a style that drops the closing full stop does not drop one in the middle. Command Mode is never cleaned up early: the instruction only means something whole.
 
 ## Speech recognition
 

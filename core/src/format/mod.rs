@@ -14,6 +14,7 @@ mod spoken;
 mod style;
 mod tidy;
 
+pub(crate) use backtrack::reaches_back;
 pub(crate) use fillers::remove as remove_fillers;
 pub(crate) use lists::enumerated;
 pub use numbers::{group_digits, is_number_word};

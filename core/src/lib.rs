@@ -14,6 +14,7 @@ pub mod hotkey;
 pub mod http;
 pub mod insights;
 pub mod learn;
+pub mod live;
 pub mod llm;
 pub mod native;
 pub mod pipeline;
