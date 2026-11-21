@@ -241,7 +241,10 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                 }
                 Effect::Retry => {
                     if let Some((audio, target, command, selection)) = self.kept.take() {
-                        self.process(&settings, audio, Draft::default(), target, command, selection);
+                        // A retry recognises it all again; what is known of the
+                        // recogniser's speed carries on.
+                        let draft = Draft::new(Live::costing(self.piece_cost_ms));
+                        self.process(&settings, audio, draft, target, command, selection);
                     }
                     self.session.handle(Event::Finished, self.platform.now_ms());
                 }
@@ -1366,6 +1369,19 @@ mod tests {
         assert!(app.engines.llm.as_ref().unwrap().seen.borrow()[0]
             .1
             .contains("original selection"));
+    }
+
+    #[test]
+    fn retrying_a_silent_recording_keeps_what_is_known_of_the_recognisers_speed() {
+        let mut app = app(&[]);
+        app.platform.audio = vec![0.0; 32_000];
+        app.handle(Event::Down(Bind::PushToTalk));
+        app.platform.now += 2000;
+        app.piece_cost_ms = 5000;
+        app.handle(Event::BarCancel);
+        app.handle(Event::Undo);
+        assert!(app.engines.asr.heard.is_empty());
+        assert_eq!(app.piece_cost_ms, 5000);
     }
 
     #[test]
