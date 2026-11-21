@@ -102,6 +102,16 @@ fn same_app(now: &Target, then: &Target) -> bool {
     }
 }
 
+/// Whether a saved dictation's recogniser (a model file's name, or a
+/// server's model) is the one these settings use.
+fn same_recogniser(name: &str, speech: &crate::settings::Speech) -> bool {
+    if speech.remote_url.trim().is_empty() {
+        !speech.model.is_empty() && name.starts_with(&speech.model)
+    } else {
+        name == speech.remote_model
+    }
+}
+
 fn app_name(target: &Target) -> &str {
     if target.app.is_empty() {
         "that app"
@@ -125,6 +135,8 @@ pub struct Controller<P: Platform, E: Engines> {
     /// How long the recogniser took over its last piece, which sets how
     /// long the next recording's pieces must be.
     piece_cost_ms: u64,
+    /// The speech settings `piece_cost_ms` was measured with.
+    cost_for: crate::settings::Speech,
     rewrite_circuit: RewriteCircuit,
     rewrite_settings: crate::settings::Rewrite,
 }
@@ -134,7 +146,11 @@ impl<P: Platform, E: Engines> Controller<P, E> {
         let rewrite_settings = store.settings().rewrite;
         // Until a piece has been timed, the last dictation says how slow the
         // recogniser is, so even the first recording cannot block for long.
-        let piece_cost_ms = store.last().map_or(0, |last| last.asr_ms as u64);
+        let speech = store.settings().speech;
+        let piece_cost_ms = store
+            .last()
+            .filter(|last| same_recogniser(&last.speech_model, &speech))
+            .map_or(0, |last| last.asr_ms as u64);
         Self {
             platform,
             engines,
@@ -146,6 +162,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
             muted: false,
             draft: Draft::default(),
             piece_cost_ms,
+            cost_for: speech,
             rewrite_circuit: RewriteCircuit::default(),
             rewrite_settings,
         }
@@ -282,6 +299,11 @@ impl<P: Platform, E: Engines> Controller<P, E> {
     fn start(&mut self, settings: &Settings) -> bool {
         // Remember where the text is headed before the bar or anything else can take focus.
         self.target = self.platform.target();
+        // Another model or device has its own speed, still to be measured.
+        if self.cost_for != settings.speech {
+            self.piece_cost_ms = 0;
+            self.cost_for = settings.speech.clone();
+        }
         self.draft = Draft::new(Live::costing(self.piece_cost_ms));
         if let Err(error) = self.platform.start_capture(&settings.microphone) {
             self.session = Session::new();
@@ -346,7 +368,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
             }) => {
                 // Recognising what was left at the end is the latest measure
                 // of how slow the recogniser is.
-                self.piece_cost_ms = self.piece_cost_ms.max(record.asr_ms as u64);
+                self.piece_cost_ms = record.asr_ms as u64;
                 let pasted = self.deliver(&paste, &target, press_enter);
                 record.outcome = if pasted { store::Outcome::Pasted } else { store::Outcome::Copied };
                 // A bare "press enter" typed nothing, so there is nothing to keep.
@@ -766,6 +788,7 @@ mod tests {
         let store = Store::memory();
         let mut slow = crate::testing::dictation("an old one", "Slack", 1_800_000_000);
         slow.asr_ms = 30_000;
+        slow.speech_model = "whisper-large-v3-turbo-Q8_0".into();
         store.add_dictation(&slow).unwrap();
         let mut app = app(&[]);
         let fresh = Controller::new(
@@ -781,6 +804,16 @@ mod tests {
         );
         assert_eq!(fresh.piece_cost_ms, 30_000);
         assert_eq!(std::mem::take(&mut app.piece_cost_ms), 0);
+        // Only a dictation made with the model now in use says anything.
+        let mut speech = crate::settings::Settings::default().speech;
+        assert!(same_recogniser("whisper-large-v3-turbo-Q8_0", &speech));
+        speech.model = "parakeet-tdt-0.6b-v3".into();
+        assert!(!same_recogniser("whisper-large-v3-turbo-Q8_0", &speech));
+        speech.model.clear();
+        assert!(!same_recogniser("anything", &speech));
+        speech.remote_url = "http://server".into();
+        assert!(same_recogniser("whisper-large-v3-turbo", &speech));
+        assert!(!same_recogniser("whisper-large-v3-turbo-Q8_0", &speech));
     }
 
     #[test]
@@ -799,9 +832,16 @@ mod tests {
         app.platform.now += 2000;
         app.handle(Event::Up(Bind::PushToTalk));
         assert_eq!(app.engines.asr.heard.len(), 2);
-        // The final recognition's time is what the next recording goes by.
-        let last = app.store.last().unwrap().asr_ms as u64;
-        assert!(app.piece_cost_ms >= last);
+        // The final recognition's time is what the next recording goes by,
+        // so a faster recogniser brings it down again.
+        assert_eq!(app.piece_cost_ms, app.store.last().unwrap().asr_ms as u64);
+        assert!(app.piece_cost_ms < 30_000);
+        // A different model starts unmeasured.
+        app.piece_cost_ms = 30_000;
+        set(&mut app, |s| s.speech.model = "parakeet-tdt-0.6b-v3".into());
+        app.engines.asr.answers = vec![Ok("faster".into())];
+        app.handle(Event::Down(Bind::PushToTalk));
+        assert_eq!(app.piece_cost_ms, 0);
     }
 
     #[test]
