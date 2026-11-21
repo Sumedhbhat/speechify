@@ -366,7 +366,11 @@ impl Live {
         }
         let raw = if is_phantom(&raw, self.speech_ms) { String::new() } else { raw };
         let handed = stream.settled[..stream.handed.min(stream.settled.len())].trim();
-        let revised = !raw.starts_with(handed);
+        // The sentences handed out must still be whole sentences of the final
+        // text: "Hello." does not begin "Hello... there".
+        let revised = !raw
+            .strip_prefix(handed)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace));
         let mut parts = std::mem::take(&mut self.pieces);
         if revised {
             parts = vec![raw.clone()];
@@ -820,6 +824,15 @@ mod tests {
         let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
         assert!(heard.revised);
         assert_eq!(heard.parts, ["Won. Two too."]);
+        // The same words, but the handed sentence no longer ends there.
+        let mut asr = Talker::new(&["Hello. And"], "Hello... and then.");
+        let mut live = Live::default();
+        assert!(live.advance(&recording[..1000 * MS], &mut asr, &HINT).unwrap());
+        let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
+        assert_eq!(
+            (heard.revised, heard.parts),
+            (true, vec!["Hello... and then.".to_string()])
+        );
 
         // A failed feed gives the stream up; the whole recording is
         // recognised at the end instead.
