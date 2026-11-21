@@ -132,6 +132,9 @@ pub struct Controller<P: Platform, E: Engines> {
 impl<P: Platform, E: Engines> Controller<P, E> {
     pub fn new(platform: P, engines: E, store: Store) -> Self {
         let rewrite_settings = store.settings().rewrite;
+        // Until a piece has been timed, the last dictation says how slow the
+        // recogniser is, so even the first recording cannot block for long.
+        let piece_cost_ms = store.last().map_or(0, |last| last.asr_ms as u64);
         Self {
             platform,
             engines,
@@ -142,7 +145,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
             kept: None,
             muted: false,
             draft: Draft::default(),
-            piece_cost_ms: 0,
+            piece_cost_ms,
             rewrite_circuit: RewriteCircuit::default(),
             rewrite_settings,
         }
@@ -756,6 +759,28 @@ mod tests {
         app.handle(Event::Tick);
         assert_eq!(app.engines.asr.heard.len(), 3);
         assert_eq!(app.engines.llm.as_ref().unwrap().seen.borrow().len(), 2);
+    }
+
+    #[test]
+    fn the_first_recording_goes_by_the_last_saved_dictation() {
+        let store = Store::memory();
+        let mut slow = crate::testing::dictation("an old one", "Slack", 1_800_000_000);
+        slow.asr_ms = 30_000;
+        store.add_dictation(&slow).unwrap();
+        let mut app = app(&[]);
+        let fresh = Controller::new(
+            Fake::default(),
+            Models {
+                asr: Fixed::new(&[]),
+                llm: None,
+                teacher_asr: Fixed::new(&[]),
+                broken: None,
+                warmed: 0,
+            },
+            store,
+        );
+        assert_eq!(fresh.piece_cost_ms, 30_000);
+        assert_eq!(std::mem::take(&mut app.piece_cost_ms), 0);
     }
 
     #[test]

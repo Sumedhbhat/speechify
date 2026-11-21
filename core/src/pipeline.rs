@@ -48,9 +48,10 @@ pub struct Composed {
     pub rewrite_ms: u32,
     /// Why the language model was not used, if it was meant to be.
     pub fallback: Option<String>,
-    /// For a block: the dictionary and snippet rules it used, counted only
-    /// once the whole dictation is done, so a cancelled one counts nothing.
-    pub fired: Vec<usize>,
+    /// For a block: the dictionary entries and snippets it used, as (is a
+    /// snippet, row id), counted only once the whole dictation is done, so a
+    /// cancelled one counts nothing.
+    pub fired: Vec<(bool, i64)>,
 }
 
 /// Back off after two failed rewrites. The controller supplies monotonic time;
@@ -174,7 +175,7 @@ fn compose_part(
         if part == Part::Whole {
             let _ = store.record_hits(&rules, fired);
         } else {
-            out.fired = fired.to_vec();
+            out.fired = rules.origins_of(fired);
         }
     };
     let style = category.style(&settings.styles);
@@ -274,7 +275,11 @@ fn finish_blocks(
     to: &Destination,
     circuit: (&mut RewriteCircuit, u64),
 ) -> Option<Composed> {
-    let before = join_blocks(blocks.iter().map(|(raw, block)| (raw.as_str(), block.text.as_str())));
+    let literal = to.category.literal();
+    let before = join_blocks(
+        blocks.iter().map(|(raw, block)| (raw.as_str(), block.text.as_str())),
+        literal,
+    );
     let rest = rest.join(" ");
     let last = compose_part(
         &rest,
@@ -292,10 +297,10 @@ fn finish_blocks(
         .map(|(raw, block)| (raw.as_str(), block))
         .chain(last.as_ref().map(|block| (rest.as_str(), block)))
         .collect();
-    let joined = join_blocks(all.iter().map(|(raw, block)| (*raw, block.text.as_str())));
+    let joined = join_blocks(all.iter().map(|(raw, block)| (*raw, block.text.as_str())), literal);
     // The dictation is done: now the dictionary and snippets it used count.
-    let fired: Vec<usize> = all.iter().flat_map(|(_, block)| block.fired.iter().copied()).collect();
-    let _ = to.store.record_hits(&to.store.replacement_rules(), &fired);
+    let fired: Vec<(bool, i64)> = all.iter().flat_map(|(_, block)| block.fired.iter().copied()).collect();
+    let _ = to.store.record_origin_hits(&fired);
     out.fired.clear();
     out.text = if to.category.literal() {
         joined
@@ -374,11 +379,12 @@ impl Draft {
     }
 
     /// The text cleaned up so far.
-    fn written(&self) -> String {
+    fn written(&self, literal: bool) -> String {
         join_blocks(
             self.blocks
                 .iter()
                 .map(|(raw, block)| (raw.as_str(), block.text.as_str())),
+            literal,
         )
     }
 
@@ -411,7 +417,7 @@ impl Draft {
         {
             return false;
         }
-        let before = self.written();
+        let before = self.written(to.category.literal());
         let composed = compose_part(
             &pending,
             to,
@@ -431,25 +437,18 @@ impl Draft {
 
 /// Joins blocks of text, each given with the words it was made from. A
 /// numbered or bulleted line starts on a line of its own, and so does
-/// whatever follows one. A block whose words began with "new line" or "new
-/// paragraph" starts on a new line or paragraph: the formatter trims the
-/// break from the start of a block.
-fn join_blocks<'a>(blocks: impl Iterator<Item = (&'a str, &'a str)>) -> String {
+/// whatever follows one. A block whose words began with a spoken "new line"
+/// or "new paragraph" starts on a new line or paragraph: the formatter
+/// trims the break from the start of a block. Code and terminals take
+/// those words literally, so `literal` joins with spaces.
+fn join_blocks<'a>(blocks: impl Iterator<Item = (&'a str, &'a str)>, literal: bool) -> String {
     static ITEM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d+\.|-) ").unwrap());
-    static PARAGRAPH: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)^\W*(start a new paragraph|new paragraph|next paragraph)\b").unwrap());
-    static LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^\W*(new line|next line|line break)\b").unwrap());
     let mut out = String::new();
     for (raw, block) in blocks.filter(|(_, block)| !block.is_empty()) {
         if !out.is_empty() {
             let previous = out.lines().last().unwrap_or_default();
-            out.push_str(if PARAGRAPH.is_match(raw) {
-                "\n\n"
-            } else if LINE.is_match(raw) || ITEM.is_match(block) || ITEM.is_match(previous) {
-                "\n"
-            } else {
-                " "
-            });
+            let spoken = if literal { None } else { format::leading_break(raw) };
+            out.push_str(spoken.unwrap_or(if ITEM.is_match(block) || ITEM.is_match(previous) { "\n" } else { " " }));
         }
         out.push_str(block);
     }
@@ -858,22 +857,33 @@ mod tests {
                     ("um", ""),
                     ("", "Thanks.")
                 ]
-                .into_iter()
+                .into_iter(),
+                false
             ),
             "We need:\n1. A budget\n2. A colour scheme\nThanks."
         );
-        assert_eq!(join_blocks([("", "One."), ("", "Two.")].into_iter()), "One. Two.");
+        assert_eq!(
+            join_blocks([("", "One."), ("", "Two.")].into_iter(), false),
+            "One. Two."
+        );
         // A spoken break at the start of a block survives the join.
         assert_eq!(
             join_blocks(
                 [
                     ("one", "One."),
                     ("New paragraph, two", "Two."),
-                    ("new line three", "Three.")
+                    ("new line three", "Three."),
+                    ("new paragraph on the economy", "New paragraph on the economy.")
                 ]
-                .into_iter()
+                .into_iter(),
+                false
             ),
-            "One.\n\nTwo.\nThree."
+            "One.\n\nTwo.\nThree. New paragraph on the economy."
+        );
+        // Code and terminals take the words literally.
+        assert_eq!(
+            join_blocks([("ls", "ls"), ("new line", "new line")].into_iter(), true),
+            "ls new line"
         );
         let store = Store::memory();
         let settings = Settings::default();

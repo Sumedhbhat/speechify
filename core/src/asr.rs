@@ -102,7 +102,7 @@ pub fn prompt(hint: &Hint) -> String {
             previous
                 .char_indices()
                 .find(|(index, c)| c.is_whitespace() && previous.len() - index <= PREVIOUS_CHARS)
-                .map_or(previous.len(), |(index, _)| index + 1)
+                .map_or(previous.len(), |(index, c)| index + c.len_utf8())
         };
         text.push(' ');
         text.push_str(&previous[start..]);
@@ -407,6 +407,16 @@ mod tests {
             "{tail}"
         );
         assert!(!tail.contains("w49"));
+        // A wide space is still a word boundary, and is cut after whole.
+        let wide = format!("{}\u{3000}{}", "x".repeat(150), "y".repeat(100));
+        assert_eq!(
+            prompt(&Hint {
+                language: "hi",
+                vocabulary: &[],
+                previous: &wide,
+            }),
+            "y".repeat(100)
+        );
         let unbroken = "x".repeat(300);
         assert_eq!(
             prompt(&Hint {

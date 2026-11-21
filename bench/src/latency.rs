@@ -78,7 +78,38 @@ fn raw_of(outcome: Outcome) -> String {
     }
 }
 
+/// Saved rows count as done only for the same settings: a different
+/// model, device, gap or cut setting is a different experiment, and mixing
+/// them in one file is refused rather than silently skipped.
+fn check_resumable(rows: &[Value], setup: &Value) -> Result<()> {
+    match rows.iter().find(|row| row["setup"] != *setup) {
+        Some(row) => Err(format!(
+            "The output already holds results for other settings ({}); use a new file",
+            row["setup"]
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The output's folder, made before any time is spent measuring.
+fn prepare(output: &Path) -> Result<Vec<Value>> {
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    if output.exists() {
+        read(output)
+    } else {
+        Ok(vec![])
+    }
+}
+
 pub fn run(manifest: &Path, output: &Path, model: &str, seconds: f64, limit: usize, modes: &[String]) -> Result<()> {
+    if let Some(unknown) = modes
+        .iter()
+        .find(|mode| !["whole", "live", "pieces"].contains(&mode.as_str()))
+    {
+        return Err(format!("Unknown mode {unknown}: use whole, live or pieces"));
+    }
     let clips: Vec<Clip> = read(manifest)?;
     let runtime = std::env::var("SPEECHIFY_NATIVE_DIR").map_err(|e| e.to_string())?;
     let runtime = Path::new(&runtime);
@@ -90,7 +121,10 @@ pub fn run(manifest: &Path, output: &Path, model: &str, seconds: f64, limit: usi
     s.speech.device = device.clone();
     let store = Store::memory();
     let gap = env_ms("LIVE_GAP_MS", 350);
-    let mut rows: Vec<Value> = if output.exists() { read(output)? } else { vec![] };
+    let setup =
+        json!({"model": model, "device": device, "gap_ms": gap, "seconds": seconds, "cuts": format!("{:?}", cuts())});
+    let mut rows = prepare(output)?;
+    check_resumable(&rows, &setup)?;
     // One warm-up, so the first measured run does not pay for it.
     let warm = samples(&clips[0].audio)?;
     pipeline::run(&request(&warm), &s, &store, &mut engine, None)?;
@@ -177,7 +211,7 @@ pub fn run(manifest: &Path, output: &Path, model: &str, seconds: f64, limit: usi
                 "audio_s": duration.as_secs_f64(), "wait_ms": wait_ms, "left_ms": left_ms,
                 "busy_ms": busy.as_secs_f64() * 1000.0, "advance_errors": advance_errors,
                 "wer": wer, "reference": reference, "raw": raw,
-                "cuts": format!("{:?}", cuts()),
+                "setup": setup,
             }));
             save(output, &rows)?;
         }
@@ -202,7 +236,10 @@ pub fn blocks(manifest: &Path, output: &Path, model: &str, seconds: f64, limit: 
     s.rewrite.model = llm_model.clone();
     let store = Store::memory();
     let gap = env_ms("LIVE_GAP_MS", 350);
-    let mut rows: Vec<Value> = if output.exists() { read(output)? } else { vec![] };
+    let setup =
+        json!({"model": model, "llm": llm_model, "gap_ms": gap, "seconds": seconds, "cuts": format!("{:?}", cuts())});
+    let mut rows = prepare(output)?;
+    check_resumable(&rows, &setup)?;
     let hint_vocabulary: Vec<String> = vec![];
     let hint = Hint {
         language: "en",
@@ -272,7 +309,7 @@ pub fn blocks(manifest: &Path, output: &Path, model: &str, seconds: f64, limit: 
             "blocks": blocks, "early_ms": early_ms, "last_block_ms": record.rewrite_ms,
             "blocks_text": record.text, "blocks_rewritten": record.rewritten,
             "whole_ms": whole_ms, "whole_text": whole.text, "whole_rewritten": whole.rewritten,
-            "whole_fallback": whole.fallback,
+            "whole_fallback": whole.fallback, "setup": setup,
         }));
         save(output, &rows)?;
     }

@@ -244,5 +244,9 @@ speechify-bench latency "$EVAL/manifest.json" "$EVAL/latency/p3-30.json" parakee
 LIVE_LLM_URL=http://127.0.0.1:11434 speechify-bench blocks "$EVAL/manifest.json" "$EVAL/latency/blocks.json" parakeet-tdt-0.6b-v3 60 3
 ```
 
-The voice detector is used, as in the app. Word error rates are on raw
-recogniser output, so fillers and spoken numbers count as errors.
+The voice detector is used, as in the app. `latency` scores raw recogniser
+output, so fillers and spoken numbers count as errors there; `blocks` scores
+the cleaned-up text of both paths. Each output file holds one set of
+settings (model, device, gap, cuts; for `blocks` also the language model):
+rerunning with the same settings resumes it, and different settings are
+refused, so use a new file per experiment.
