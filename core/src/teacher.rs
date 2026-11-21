@@ -165,6 +165,7 @@ pub fn review(
             &Hint {
                 language: &settings.speech.language,
                 vocabulary: &vocabulary,
+                previous: "",
             },
         )?);
         let score = wer(&heard, &dictation.raw);
@@ -587,7 +588,7 @@ mod tests {
         assert_eq!(stopped.average_wer, None);
         let mut broken = Fixed {
             answers: vec![Err("out of memory".into())],
-            heard: vec![],
+            ..Fixed::new(&[])
         };
         assert_eq!(
             review(&store, &settings, &mut broken, None, &loader, NOW, &|| true).unwrap_err(),

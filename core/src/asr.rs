@@ -5,7 +5,8 @@ use crate::audio::encode_wav;
 use crate::http::Http;
 use crate::Result;
 use regex::Regex;
-use std::sync::LazyLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::Duration;
 
 /// What the recogniser is told about the speaker.
@@ -15,6 +16,9 @@ pub struct Hint<'a> {
     pub language: &'a str,
     /// Names and terms to prefer.
     pub vocabulary: &'a [String],
+    /// What was said just before this audio, when a recording is recognised
+    /// in pieces. Whisper continues the style and spelling of its prompt.
+    pub previous: &'a str,
 }
 
 pub trait Recognizer {
@@ -31,6 +35,89 @@ pub trait Recognizer {
     /// in each. Empty when the recogniser does not report it.
     fn heard(&self) -> Vec<Heard> {
         Vec::new()
+    }
+    /// Like `transcribe`, but a recogniser that can gives up early once
+    /// `stop` is set: nobody wants the answer any more.
+    fn transcribe_until(&mut self, audio: &[f32], hint: &Hint, _stop: &AtomicBool) -> Result<String> {
+        self.transcribe(audio, hint)
+    }
+    /// Another handle on this recogniser, for a thread of its own, if it
+    /// can be used from one. `None` means it works only where it is.
+    fn share(&mut self) -> Option<Box<dyn Recognizer + Send>> {
+        None
+    }
+    /// Whether a handle shared from this one is in the middle of something,
+    /// so that using this one now would wait for it.
+    fn busy(&self) -> bool {
+        false
+    }
+}
+
+/// A recogniser that threads take turns with: each use waits for the one
+/// before it, on whichever handle that was.
+pub struct Shared<R> {
+    inner: Arc<Mutex<R>>,
+    name: String,
+}
+
+impl<R: Recognizer> Shared<R> {
+    pub fn new(recognizer: R) -> Shared<R> {
+        Shared {
+            name: recognizer.name().to_string(),
+            inner: Arc::new(Mutex::new(recognizer)),
+        }
+    }
+
+    /// The recogniser itself, once no other handle is using it.
+    pub fn lock(&self) -> MutexGuard<'_, R> {
+        self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Waits up to `wait` for every other handle to be dropped, so that
+    /// dropping this one frees the recogniser here and now. Returns whether
+    /// that happened in time.
+    pub fn wait_alone(&self, wait: Duration) -> bool {
+        let deadline = std::time::Instant::now() + wait;
+        while Arc::strong_count(&self.inner) > 1 {
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        true
+    }
+}
+
+impl<R> Clone for Shared<R> {
+    fn clone(&self) -> Shared<R> {
+        Shared {
+            inner: self.inner.clone(),
+            name: self.name.clone(),
+        }
+    }
+}
+
+impl<R: Recognizer + Send + 'static> Recognizer for Shared<R> {
+    fn transcribe(&mut self, audio: &[f32], hint: &Hint) -> Result<String> {
+        self.lock().transcribe(audio, hint)
+    }
+    fn transcribe_until(&mut self, audio: &[f32], hint: &Hint, stop: &AtomicBool) -> Result<String> {
+        self.lock().transcribe_until(audio, hint, stop)
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn detect(&mut self, audio: &[f32], threshold: f64) -> Option<Result<Vec<std::ops::Range<usize>>>> {
+        self.lock().detect(audio, threshold)
+    }
+    fn heard(&self) -> Vec<Heard> {
+        self.lock().heard()
+    }
+    fn share(&mut self) -> Option<Box<dyn Recognizer + Send>> {
+        Some(Box::new(self.clone()))
+    }
+    fn busy(&self) -> bool {
+        matches!(self.inner.try_lock(), Err(std::sync::TryLockError::WouldBlock))
     }
 }
 
@@ -89,8 +176,26 @@ pub fn prompt(hint: &Hint) -> String {
         terms.reverse();
         text.push_str(&format!(" Glossary: {}.", terms.join(", ")));
     }
+    let previous = hint.previous.trim();
+    if !previous.is_empty() {
+        // The most recent words, cut at a word boundary, last in the prompt
+        // where Whisper expects the preceding transcript.
+        let start = if previous.len() <= PREVIOUS_CHARS {
+            0
+        } else {
+            previous
+                .char_indices()
+                .find(|(index, c)| c.is_whitespace() && previous.len() - index <= PREVIOUS_CHARS)
+                .map_or(previous.len(), |(index, c)| index + c.len_utf8())
+        };
+        text.push(' ');
+        text.push_str(&previous[start..]);
+    }
     text.trim().to_string()
 }
+
+/// How much of the preceding transcript a piece's prompt carries.
+const PREVIOUS_CHARS: usize = 200;
 
 /// Phrases Whisper produces from silence or noise, learned from video captions.
 const PHANTOMS: &[&str] = &[
@@ -146,6 +251,7 @@ pub fn strip_tags(text: &str) -> String {
 
 /// A recogniser behind an OpenAI-compatible `/audio/transcriptions` endpoint,
 /// for people who run a speech server on another machine.
+#[derive(Clone)]
 pub struct Remote {
     http: Http,
     url: String,
@@ -204,12 +310,22 @@ impl Recognizer for Remote {
     fn name(&self) -> &str {
         &self.model
     }
+
+    /// A server needs nothing in common between requests.
+    fn share(&mut self) -> Option<Box<dyn Recognizer + Send>> {
+        Some(Box::new(self.clone()))
+    }
 }
 
 #[cfg(test)]
 pub(crate) struct Fixed {
     pub answers: Vec<Result<String>>,
-    pub heard: Vec<(usize, String, Vec<String>)>,
+    /// Each call: samples, language, vocabulary, previous text.
+    pub heard: Vec<(usize, String, Vec<String>, String)>,
+    /// Finds speech exactly, wherever the samples are not silent.
+    pub detects: bool,
+    /// Each answer waits until this is free.
+    pub gate: Option<Arc<Mutex<()>>>,
 }
 
 #[cfg(test)]
@@ -218,6 +334,16 @@ impl Fixed {
         Fixed {
             answers: answers.iter().map(|text| Ok(text.to_string())).collect(),
             heard: vec![],
+            detects: false,
+            gate: None,
+        }
+    }
+
+    /// Like `new`, with a voice detector.
+    pub fn detecting(answers: &[&str]) -> Fixed {
+        Fixed {
+            detects: true,
+            ..Fixed::new(answers)
         }
     }
 }
@@ -225,13 +351,22 @@ impl Fixed {
 #[cfg(test)]
 impl Recognizer for Fixed {
     fn transcribe(&mut self, audio: &[f32], hint: &Hint) -> Result<String> {
-        self.heard
-            .push((audio.len(), hint.language.to_string(), hint.vocabulary.to_vec()));
+        self.heard.push((
+            audio.len(),
+            hint.language.to_string(),
+            hint.vocabulary.to_vec(),
+            hint.previous.to_string(),
+        ));
+        let _open = self.gate.as_ref().map(|gate| gate.lock().unwrap());
         self.answers.remove(0)
     }
 
     fn name(&self) -> &str {
         "fixed"
+    }
+
+    fn detect(&mut self, audio: &[f32], _: f64) -> Option<Result<Vec<std::ops::Range<usize>>>> {
+        self.detects.then(|| Ok(crate::testing::sounding(audio)))
     }
 }
 
@@ -239,6 +374,23 @@ impl Recognizer for Fixed {
 mod tests {
     use super::*;
     use crate::testing::{Reply, Server};
+
+    #[test]
+    fn a_shared_recogniser_can_wait_for_its_other_handles() {
+        let mut shared = Shared::new(Fixed::new(&[]));
+        assert!(shared.wait_alone(Duration::ZERO));
+        let other = shared.share().unwrap();
+        assert!(!shared.wait_alone(Duration::from_millis(10)));
+        let gone = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            drop(other);
+        });
+        assert!(shared.wait_alone(Duration::from_secs(5)));
+        gone.join().unwrap();
+        // A speech server can be asked from anywhere.
+        let mut remote = Remote::new("http://127.0.0.1:9", "", "model");
+        assert_eq!(remote.share().unwrap().name(), "model");
+    }
 
     /// A recogniser whose detector gives these answers in turn, then none.
     struct Detecting(Vec<Option<Result<Vec<std::ops::Range<usize>>>>>);
@@ -310,14 +462,16 @@ mod tests {
         assert_eq!(
             prompt(&Hint {
                 language: "en",
-                vocabulary: &[]
+                vocabulary: &[],
+                previous: "",
             }),
             STYLE_PROMPT
         );
         assert_eq!(
             prompt(&Hint {
                 language: "hi",
-                vocabulary: &[]
+                vocabulary: &[],
+                previous: "",
             }),
             ""
         );
@@ -325,14 +479,16 @@ mod tests {
         assert_eq!(
             prompt(&Hint {
                 language: "",
-                vocabulary: &terms
+                vocabulary: &terms,
+                previous: "",
             }),
             format!("{STYLE_PROMPT} Glossary: Sumedh, kubectl.")
         );
         assert_eq!(
             prompt(&Hint {
                 language: "hi",
-                vocabulary: &terms
+                vocabulary: &terms,
+                previous: "",
             }),
             "Glossary: Sumedh, kubectl."
         );
@@ -340,8 +496,47 @@ mod tests {
         let long = prompt(&Hint {
             language: "hi",
             vocabulary: &many,
+            previous: "",
         });
         assert!(long.ends_with("Term098, Term099.") && !long.contains("Term000") && long.len() < 430);
+        // A later piece also gets the end of what was said before it.
+        let before = prompt(&Hint {
+            language: "en",
+            vocabulary: &[],
+            previous: " We met on Monday. ",
+        });
+        assert_eq!(before, format!("{STYLE_PROMPT} We met on Monday."));
+        let story = (0..100).map(|i| format!("w{i:02}")).collect::<Vec<_>>().join(" ");
+        let tail = prompt(&Hint {
+            language: "hi",
+            vocabulary: &[],
+            previous: &story,
+        });
+        // Whole words only, the newest ones, at most 200 characters.
+        assert!(
+            tail.ends_with("w98 w99") && tail.starts_with('w') && tail.len() <= 200,
+            "{tail}"
+        );
+        assert!(!tail.contains("w49"));
+        // A wide space is still a word boundary, and is cut after whole.
+        let wide = format!("{}\u{3000}{}", "x".repeat(150), "y".repeat(100));
+        assert_eq!(
+            prompt(&Hint {
+                language: "hi",
+                vocabulary: &[],
+                previous: &wide,
+            }),
+            "y".repeat(100)
+        );
+        let unbroken = "x".repeat(300);
+        assert_eq!(
+            prompt(&Hint {
+                language: "hi",
+                vocabulary: &[],
+                previous: &unbroken,
+            }),
+            ""
+        );
     }
 
     #[test]
@@ -375,7 +570,8 @@ mod tests {
                     &[0.0; 160],
                     &Hint {
                         language: "en",
-                        vocabulary: &terms
+                        vocabulary: &terms,
+                        previous: "",
                     }
                 )
                 .unwrap(),
@@ -413,13 +609,14 @@ mod tests {
                     &[0.0; 3],
                     &Hint {
                         language: "en",
-                        vocabulary: &[]
+                        vocabulary: &[],
+                        previous: "",
                     }
                 )
                 .unwrap(),
             "one"
         );
-        assert_eq!(fixed.heard, vec![(3, "en".to_string(), vec![])]);
+        assert_eq!(fixed.heard, vec![(3, "en".to_string(), vec![], String::new())]);
         assert_eq!(fixed.name(), "fixed");
     }
 

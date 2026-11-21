@@ -34,6 +34,27 @@ const REACH: usize = 15;
 /// A weak marker followed by more than this is a new thought, not a fix.
 const WEAK_TAIL: usize = 4;
 
+/// Whether a correction in `text` could reach back into what was said
+/// before it: "scratch that" and the like anywhere (several in a row erase
+/// one sentence each, further and further back), another unambiguous marker
+/// within reach of the start, or any marker as the very first words.
+/// Fillers do not count as words.
+pub(crate) fn reaches_back(text: &str) -> bool {
+    let words: Vec<String> = text
+        .split_whitespace()
+        .map(core)
+        .filter(|word| !word.is_empty() && !matches!(word.as_str(), "um" | "uh" | "so"))
+        .collect();
+    MARKERS.iter().any(|(marker, kind)| {
+        let starts = match kind {
+            Kind::Erase => usize::MAX,
+            Kind::Strong => REACH + 1,
+            Kind::Weak => 1,
+        };
+        words.windows(marker.len()).take(starts).any(|window| window == *marker)
+    })
+}
+
 fn core(word: &str) -> String {
     word.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()
 }
@@ -279,5 +300,23 @@ mod tests {
         let out = apply("At 2 actually 3\nOn Monday, I mean Friday", &mut edits);
         assert_eq!(out, "At 3\nOn Friday");
         assert_eq!(edits.backtracks, 2);
+    }
+
+    #[test]
+    fn corrections_that_could_reach_into_earlier_text_are_noticed() {
+        assert!(reaches_back("Scratch that. Ship on Friday."));
+        assert!(reaches_back("um no wait, Friday"));
+        assert!(reaches_back(
+            "and we ship on the twentieth no actually the twenty first"
+        ));
+        assert!(reaches_back("Actually, Friday."));
+        // An everyday "actually" later on is a new thought, not a fix.
+        assert!(!reaches_back("We should actually ship it on Friday."));
+        assert!(!reaches_back("The rest went well."));
+        let far = format!("{} no wait, the tenth", "word ".repeat(20));
+        assert!(!reaches_back(&far));
+        // Erasing can chain backwards from anywhere.
+        let chained = format!("{} scratch that. scratch that. Send it tomorrow.", "word ".repeat(20));
+        assert!(reaches_back(&chained));
     }
 }

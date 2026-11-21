@@ -11,6 +11,7 @@ use std::ffi::{c_char, c_void, CStr, CString};
 use std::ops::Range;
 use std::path::Path;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 // The structs below mirror transcribe.h 0.4.1. Each ends in spare space:
@@ -182,6 +183,7 @@ api! {
     transcribe_run_params_init: unsafe extern "C" fn(*mut RunParams),
     transcribe_model_supports: unsafe extern "C" fn(*mut c_void, i32) -> bool,
     transcribe_run: unsafe extern "C" fn(*mut c_void, *const f32, i32, *const RunParams) -> i32,
+    transcribe_set_abort_callback: unsafe extern "C" fn(*mut c_void, Option<Stopped>, *mut c_void),
     transcribe_full_text: unsafe extern "C" fn(*mut c_void) -> *const c_char,
     transcribe_session_free: unsafe extern "C" fn(*mut c_void),
     transcribe_model_free: unsafe extern "C" fn(*mut c_void),
@@ -224,9 +226,17 @@ fn explain(status: i32) -> String {
         7 => "Not enough memory for this speech model; pick a smaller one".into(),
         8 => "The graphics driver could not run the speech model; set the device to CPU in Settings".into(),
         10 => "This speech model does not support the chosen language".into(),
+        13 => "Recognition was stopped".into(),
         17 => "That recording is too long for this speech model".into(),
         other => format!("The speech engine failed (code {other})"),
     }
+}
+
+/// The runtime's abort callback: whether the run's stop flag is set.
+type Stopped = unsafe extern "C" fn(*mut c_void) -> bool;
+
+unsafe extern "C" fn stopped(flag: *mut c_void) -> bool {
+    (*(flag as *const AtomicBool)).load(Ordering::SeqCst)
 }
 
 fn check(status: i32) -> Result<()> {
@@ -629,6 +639,10 @@ impl Engine {
 
 impl Recognizer for Engine {
     fn transcribe(&mut self, audio: &[f32], hint: &Hint) -> Result<String> {
+        self.transcribe_until(audio, hint, &AtomicBool::new(false))
+    }
+
+    fn transcribe_until(&mut self, audio: &[f32], hint: &Hint, stop: &AtomicBool) -> Result<String> {
         if !hint.language.is_empty()
             && !self.languages.is_empty()
             && !self.languages.contains(&hint.language.to_string())
@@ -646,6 +660,11 @@ impl Recognizer for Engine {
         let pointers: Vec<*const c_char> = terms.iter().map(|term| term.as_ptr()).collect();
         let mut pieces = Vec::new();
         self.heard.clear();
+        // The runtime checks the flag between decoding steps; the callback
+        // is cleared again before `stop` can go away.
+        let flag = stop as *const AtomicBool as *mut c_void;
+        unsafe { (api.transcribe_set_abort_callback)(self.session, Some(stopped), flag) };
+        let mut finished = Ok(());
         for chunk in audio.chunks(self.max_samples.max(16_000)) {
             unsafe {
                 let mut params: RunParams = std::mem::zeroed();
@@ -661,12 +680,15 @@ impl Recognizer for Engine {
                     params.vocabulary = pointers.as_ptr();
                     params.n_vocabulary = pointers.len() as i32;
                 }
-                check((api.transcribe_run)(
+                finished = check((api.transcribe_run)(
                     self.session,
                     chunk.as_ptr(),
                     chunk.len() as i32,
                     &params,
-                ))?;
+                ));
+                if finished.is_err() {
+                    break;
+                }
                 let text = (api.transcribe_full_text)(self.session);
                 if !text.is_null() {
                     pieces.push(CStr::from_ptr(text).to_string_lossy().trim().to_string());
@@ -675,6 +697,8 @@ impl Recognizer for Engine {
                 self.heard.extend(words);
             }
         }
+        unsafe { (api.transcribe_set_abort_callback)(self.session, None, ptr::null_mut()) };
+        finished?;
         Ok(pieces.join(" ").trim().to_string())
     }
 
@@ -764,6 +788,7 @@ mod tests {
                 &Hint {
                     language: "en",
                     vocabulary: &terms,
+                    previous: "",
                 },
             )
             .unwrap()
@@ -773,6 +798,18 @@ mod tests {
         assert!(engine.heard().is_empty());
         // Silence must not crash, and a second run reuses the session.
         engine.transcribe(&vec![0.0; 16_000], &Hint::default()).unwrap();
+        // A run nobody wants any more stops at its first decoding step,
+        // and the next run is not affected.
+        let stopped = AtomicBool::new(true);
+        assert_eq!(
+            engine.transcribe_until(&audio, &Hint::default(), &stopped).unwrap_err(),
+            "Recognition was stopped"
+        );
+        assert!(engine
+            .transcribe(&audio, &Hint::default())
+            .unwrap()
+            .to_lowercase()
+            .contains("country"));
         // A device that cannot be trusted is swapped for the CPU.
         let fallback = Engine::open_if(&runtime, &model, "cpu", |_| false).unwrap();
         assert!(fallback.device().starts_with("cpu"));
@@ -819,6 +856,7 @@ mod tests {
         let hint = Hint {
             language: "en",
             vocabulary: &[],
+            previous: "",
         };
         let text = engine.transcribe(&found.samples, &hint).unwrap().to_lowercase();
         assert!(text.contains("what your country can do for you"), "{text}");
@@ -879,6 +917,7 @@ mod tests {
                 &Hint {
                     language: "en",
                     vocabulary: &[],
+                    previous: "",
                 },
             )
             .unwrap();
@@ -927,7 +966,8 @@ mod tests {
                 &[0.0; 16000],
                 &Hint {
                     language: "hi",
-                    vocabulary: &[]
+                    vocabulary: &[],
+                    previous: "",
                 }
             )
             .unwrap_err()
@@ -938,7 +978,8 @@ mod tests {
                 &[0.0; 16000],
                 &Hint {
                     language: "en",
-                    vocabulary: &[]
+                    vocabulary: &[],
+                    previous: "",
                 }
             )
             .is_ok());

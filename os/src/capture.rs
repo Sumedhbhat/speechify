@@ -119,7 +119,21 @@ impl Recorder {
         })
     }
 
-    /// Closes the microphone and returns the mono recording with its sample rate.
+    /// The device's sample rate.
+    pub fn rate(&self) -> u32 {
+        self.rate
+    }
+
+    /// Takes the mono samples recorded since the last call, leaving the
+    /// microphone open.
+    pub fn take(&self) -> Vec<f32> {
+        self.samples
+            .lock()
+            .map(|mut all| std::mem::take(&mut *all))
+            .unwrap_or_default()
+    }
+
+    /// Closes the microphone and returns the mono samples not yet taken, with the sample rate.
     pub fn stop(self) -> (Vec<f32>, u32) {
         drop(self.stream);
         let samples = self

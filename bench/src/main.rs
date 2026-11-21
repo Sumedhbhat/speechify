@@ -12,6 +12,7 @@ use speechify_core::{
     store::{Clock, Store},
     teacher, Result,
 };
+mod latency;
 mod quiet;
 
 use std::{
@@ -534,6 +535,7 @@ fn quiet_probe(model: &str, path: &str, output: &Path) -> Result<()> {
         &Hint {
             language: "en",
             vocabulary: &[],
+            previous: "",
         },
     )?;
     let mut results = vec![];
@@ -753,6 +755,21 @@ fn run() -> Result<()> {
             Path::new(args.get(3).ok_or("output required")?),
             args.get(4).ok_or("model required")?,
             args.get(5).is_none_or(|flag| flag != "no-asr"),
+        ),
+        Some("latency") => latency::run(
+            Path::new(args.get(2).ok_or("manifest required")?),
+            Path::new(args.get(3).ok_or("output required")?),
+            args.get(4).ok_or("model required")?,
+            args.get(5).map_or(Ok(60.0), |s| s.parse::<f64>().map_err(|e| e.to_string()))?,
+            args.get(6).map_or(Ok(3), |s| s.parse::<usize>().map_err(|e| e.to_string()))?,
+            &args.get(7).map_or(vec!["whole".to_string(), "live".to_string()], |m| m.split(',').map(String::from).collect()),
+        ),
+        Some("blocks") => latency::blocks(
+            Path::new(args.get(2).ok_or("manifest required")?),
+            Path::new(args.get(3).ok_or("output required")?),
+            args.get(4).ok_or("model required")?,
+            args.get(5).map_or(Ok(60.0), |s| s.parse::<f64>().map_err(|e| e.to_string()))?,
+            args.get(6).map_or(Ok(3), |s| s.parse::<usize>().map_err(|e| e.to_string()))?,
         ),
         Some("format") => formatting(Path::new(args.get(2).ok_or("cases required")?), Path::new(args.get(3).ok_or("output required")?), args.get(4).is_some_and(|s| s == "llm"), args.get(5).map_or(Ok(6), |s| s.parse::<u64>().map_err(|e|e.to_string()))?),
         _ => Err("Usage: speechify-bench download MODEL | student MANIFEST STUDY MODEL baseline|learned | teacher MANIFEST STUDY MODEL [history-only] | format CASES OUTPUT [llm] [timeout-seconds] | cleanup-study MANIFEST NATIVE_STUDY OUTPUT_DIR | quiet MANIFEST OUTPUT MODEL [no-asr] | quiet-examples MANIFEST OUTPUT MODEL ID... | quiet-probe MODEL AUDIO OUTPUT | example-probe STUDY OUTPUT | cleanup-probe MANIFEST NATIVE_STUDY LEARNED_STUDY OUTPUT".into()),

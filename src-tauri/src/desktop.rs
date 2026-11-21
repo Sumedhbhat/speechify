@@ -18,6 +18,9 @@ pub struct Desktop {
     pub app: AppHandle,
     pub audio_dir: PathBuf,
     recorder: Option<Recorder>,
+    /// The recording so far at 16 kHz, and the converter that feeds it.
+    converted: Vec<f32>,
+    resampler: audio::Resampler,
     started: Instant,
     muted: bool,
     quitting: Arc<AtomicBool>,
@@ -38,6 +41,8 @@ impl Desktop {
             app,
             audio_dir,
             recorder: None,
+            converted: Vec::new(),
+            resampler: audio::Resampler::new(audio::RATE),
             started: Instant::now(),
             muted: false,
             quitting,
@@ -70,17 +75,28 @@ impl Platform for Desktop {
                 let _ = app.emit_to("bar", "level", audio::level(chunk));
             }
         });
-        self.recorder = Some(diagnostics::attempt("capture.start", || {
-            Recorder::start(microphone, on_chunk)
-        })?);
+        let recorder = diagnostics::attempt("capture.start", || Recorder::start(microphone, on_chunk))?;
+        self.converted = Vec::new();
+        self.resampler = audio::Resampler::new(recorder.rate());
+        self.recorder = Some(recorder);
         Ok(())
     }
 
     fn stop_capture(&mut self) -> Vec<f32> {
-        match diagnostics::scope("capture.stop", || self.recorder.take().map(Recorder::stop)) {
-            Some((samples, rate)) => audio::to_mono_16k(&samples, 1, rate),
-            None => vec![],
+        if let Some((rest, _)) = diagnostics::scope("capture.stop", || self.recorder.take().map(Recorder::stop)) {
+            let tail = self.resampler.push(&rest);
+            self.converted.extend(tail);
+            self.converted.extend(self.resampler.finish());
         }
+        std::mem::take(&mut self.converted)
+    }
+
+    fn recorded(&mut self, from: usize) -> Vec<f32> {
+        if let Some(recorder) = &self.recorder {
+            let fresh = self.resampler.push(&recorder.take());
+            self.converted.extend(fresh);
+        }
+        self.converted.get(from..).unwrap_or_default().to_vec()
     }
 
     fn target(&mut self) -> Target {

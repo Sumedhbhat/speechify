@@ -223,3 +223,30 @@ back-to-back requests use rules for a minute, then probe again. Standalone
 `compose` remains stateless; the desktop controller uses the persistent circuit.
 Use fresh output JSON paths for the revised `format`, `quiet-probe` and
 `example-probe` commands so the original evaluation stays visible.
+
+## Waiting after a long dictation
+
+`latency` joins consecutive clips (350 ms apart) into recordings of about
+SECONDS each and measures how long the user waits after the recording ends.
+`whole` sleeps for the recording, then recognises it in one go, as the app
+did before `live::Live`. `live` plays it in real time and lets `Live`
+recognise pieces on 100 ms ticks, as the controller does. `pieces` does the
+same without real time, as if recognition always kept up: use it to tune
+where pieces end (`LIVE_PAUSE_MS`, `LIVE_MIN_PIECE_MS`, `LIVE_SETTLED_MS`,
+`LIVE_LOOK_EVERY_MS`, `LIVE_MAX_PIECE_MS`; a huge `LIVE_MIN_PIECE_MS`
+recognises each recording whole). `blocks` compares cleanup in blocks while
+speaking with cleanup of the whole at the end, against an Ollama server at
+`LIVE_LLM_URL` running `LIVE_LLM_MODEL`.
+
+```bash
+speechify-bench latency "$EVAL/manifest.json" "$EVAL/latency/p3-60.json" parakeet-tdt-0.6b-v3 60 6 whole,live
+speechify-bench latency "$EVAL/manifest.json" "$EVAL/latency/p3-30.json" parakeet-tdt-0.6b-v3 30 13 pieces
+LIVE_LLM_URL=http://127.0.0.1:11434 speechify-bench blocks "$EVAL/manifest.json" "$EVAL/latency/blocks.json" parakeet-tdt-0.6b-v3 60 3
+```
+
+The voice detector is used, as in the app. `latency` scores raw recogniser
+output, so fillers and spoken numbers count as errors there; `blocks` scores
+the cleaned-up text of both paths. Each output file holds one set of
+settings (model, device, gap, cuts; for `blocks` also the language model):
+rerunning with the same settings resumes it, and different settings are
+refused, so use a new file per experiment.
