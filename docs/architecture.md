@@ -123,6 +123,31 @@ When the language model is on, `pipeline::Draft` does the same for cleanup: once
 
 The model is asked on a thread of its own too. A cancel forgets the block. A key-up waits for its answer, which it would need anyway. When the worker stops, `Models` waits (up to `RELEASE_WAIT`, and the exit path a little longer) for a piece still under way to release the model, so that the model is freed before the process exits (Metal checks at exit that nothing is left on the GPU).
 
+### Streaming models
+
+Some models are trained to recognise speech as it arrives, rather than a finished recording: Parakeet Unified is the one in the catalog (`streaming: true`). They are a separate setup. On the Models page they have their own section; choosing one sets `speech.streaming` and `speech.streaming_model`, and choosing an ordinary model turns streaming off again. `Speech::active_model` says which model dictation uses, and only that one is loaded. Streaming models are never offered as the teacher.
+
+`Live` notices a streaming recogniser (`Recognizer::streams`) on its first tick and then does not look for pauses at all. Every 480 ms of new audio goes to the model through transcribe.cpp's stream API (`transcribe_stream_begin`, `_feed`, `_finalize`), on a job thread like a piece. The model reports the text it has settled on, which later audio cannot change. Each settled sentence, once the next one has begun, becomes a piece, so `Draft` cleans up blocks exactly as before. On key-up only the audio since the last feed is left: it is fed, the stream is finalised (which flushes the model's one-second lookahead), and the final text is used.
+
+- The finalised text is the model's last word. If it no longer begins with the sentences handed out while recording, the transcript is marked `revised` and the whole dictation is cleaned up again, as after a "scratch that".
+- If feeding fails, or ending the stream does, the whole recording is recognised again at the end with the same model (streaming models also work on a finished recording).
+- A model more than 4 s behind the speaker (`BEHIND_MS`) cannot keep up, as on a laptop CPU. It is given up the same way, so the wait after key-up is one run over the recording rather than however long the model needs to catch up.
+- A cancel drops the feed in flight, and the abort callback stops it at the next decoding step. A stream left unfinished is reset before the model is used again.
+- The voice detector still runs on each fed chunk, only to count the speech (words per minute, the phantom check).
+
+Parakeet Unified re-encodes 5.6 s of left context plus 1.04 s of lookahead for every 1.04 s of new audio, so it does about seven times the work of recognising the recording once. The left context is fixed by the model file, so this cannot be lowered. A graphics card does this faster than real time; a laptop CPU does not, which is why the model is marked `wants_gpu`.
+
+Measured on the development laptop's CPU (Ryzen 5 3500U) with the same Svarah recordings as the pieces work, word error rate pooled over each set:
+
+| | ~60 s (6 recordings) | ~20 s (8 recordings) |
+| --- | --- | --- |
+| Parakeet v3, whole recording | 23.2% | 14.9% |
+| Parakeet v3, pieces | 15.7% | 19.0% |
+| Parakeet Unified, whole recording | 13.0% | 15.4% |
+| Parakeet Unified, streaming | **10.9%** | **9.9%** |
+
+Streaming took 2.6 to 3.5 s of CPU per second of audio, so on this CPU it cannot keep up in real time. Fed as fast as it could go, finishing the stream after the last word took a median of 3 s on the CPU, mostly the final 7.7 s window. GPU timings are not measured yet.
+
 ## Speech recognition
 
 `core/src/native.rs` loads the transcribe.cpp runtime with `libloading`, from the directory `src-tauri/resources/native` (bundled into the installer), or `SPEECHIFY_NATIVE_DIR` when set. It declares the C structs the runtime uses, with spare space at the end of each, and checks the ABI at load time. That way one binary uses the CPU, Vulkan or Metal backend depending on the machine, and the app needs no C++ toolchain. `scripts/fetch-native.py` downloads the pinned wheel (version 0.4.1) for the platform and verifies its SHA-256 before unpacking.
