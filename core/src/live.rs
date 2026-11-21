@@ -172,9 +172,10 @@ impl Live {
     }
 
     /// Whether `advance` can do anything: false once the recogniser turned
-    /// out to have no voice detector, so the caller need not fetch audio.
+    /// out to have no voice detector, or a stream was given up, so the
+    /// caller need not fetch audio.
     pub fn listening(&self) -> bool {
-        !self.blind
+        !self.blind && !self.stream.as_ref().is_some_and(|stream| stream.broken)
     }
 
     /// The words recognised so far, piece by piece.
@@ -908,7 +909,10 @@ mod tests {
         let held = gate.lock().unwrap();
         assert!(!live.advance(&recording[..1000 * MS], &mut asr, &HINT).unwrap());
         // The model is still on the first second when the speaker is five in.
+        assert!(live.listening());
         assert!(!live.advance(&recording[..5000 * MS], &mut asr, &HINT).unwrap());
+        // Given up: the rest of the recording need not be fetched any more.
+        assert!(!live.listening());
         drop(held);
         let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
         assert_eq!((heard.raw.as_str(), heard.revised), ("in one go", false));
