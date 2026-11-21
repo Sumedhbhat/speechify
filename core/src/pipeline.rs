@@ -4,7 +4,7 @@ use crate::asr::{Hint, Recognizer};
 use crate::context::{categorize, Category, Target};
 use crate::format::{self, Edits, Options};
 use crate::live::Live;
-use crate::llm::{cleanup_prompt, command_prompt, vet_cleanup, vet_command, Brief, Rewriter};
+use crate::llm::{cleanup_prompt, command_prompt, vet_cleanup_after, vet_command, Brief, Rewriter};
 use crate::settings::{Cleanup, Settings, Style};
 use crate::store::{Clock, Dictation, Store};
 use crate::{audio, Result};
@@ -48,6 +48,9 @@ pub struct Composed {
     pub rewrite_ms: u32,
     /// Why the language model was not used, if it was meant to be.
     pub fallback: Option<String>,
+    /// For a block: the dictionary and snippet rules it used, counted only
+    /// once the whole dictation is done, so a cancelled one counts nothing.
+    pub fired: Vec<usize>,
 }
 
 /// Back off after two failed rewrites. The controller supplies monotonic time;
@@ -133,8 +136,9 @@ enum Part<'a> {
     /// A block that `before` precedes. Blocks get formal punctuation here;
     /// the real style is applied once to the joined text, so that a style
     /// that drops a closing full stop does not drop one in the middle.
-    /// Only the last block can end in "press enter".
-    Block { before: &'a str, last: bool },
+    /// Only the last block can end in "press enter". `said` counts the
+    /// words spoken before it, for the model's minimum length.
+    Block { before: &'a str, said: usize, last: bool },
 }
 
 fn compose_part(
@@ -150,9 +154,9 @@ fn compose_part(
         store,
         rewriter,
     } = *to;
-    let (before, last) = match part {
-        Part::Whole => ("", true),
-        Part::Block { before, last } => (before, last),
+    let (before, said, last) = match part {
+        Part::Whole => ("", 0, true),
+        Part::Block { before, said, last } => (before, said, last),
     };
     let mut out = Composed::default();
     let mut heard = raw.trim().to_string();
@@ -165,6 +169,14 @@ fn compose_part(
         return out.press_enter.then_some(out);
     }
     let rules = store.replacement_rules();
+    // Hits are recorded now for a whole dictation, at the end for a block.
+    let hits = |out: &mut Composed, fired: &[usize]| {
+        if part == Part::Whole {
+            let _ = store.record_hits(&rules, fired);
+        } else {
+            out.fired = fired.to_vec();
+        }
+    };
     let style = category.style(&settings.styles);
     let options = Options {
         style: if part == Part::Whole { style } else { Style::Formal },
@@ -176,20 +188,22 @@ fn compose_part(
     if settings.rewrite.level == Cleanup::None {
         // Raw mode still honours the user's own dictionary and snippets.
         let (text, fired) = format::apply_replacements(&heard, &rules.replacements);
-        let _ = store.record_hits(&rules, &fired);
+        hits(&mut out, &fired);
         out.fixes = fired.len() as u32;
         out.text = text;
         return Some(out);
     }
     let by_rules = format::format(&heard, &options);
     let mut result = by_rules.clone();
-    let long_enough = heard.split_whitespace().count() >= settings.rewrite.min_words;
+    // A block counts the words before it: the threshold is for the dictation.
+    let spoken = heard.split_whitespace().count() + said;
+    let long_enough = spoken >= settings.rewrite.min_words;
     if let (true, true, Some(rewriter)) = (settings.rewrite.enabled, long_enough, rewriter) {
         if circuit.cooling(now_ms) {
             out.text = by_rules.text;
             out.fixes = by_rules.edits.total();
             out.fallback = Some("Language model temporarily skipped after repeated rewrite failures".into());
-            let _ = store.record_hits(&rules, &by_rules.fired);
+            hits(&mut out, &by_rules.fired);
             return (!out.text.is_empty() || out.press_enter).then_some(out);
         }
         let vocabulary = store.vocabulary();
@@ -209,7 +223,7 @@ fn compose_part(
         let started = Instant::now();
         let answer = rewriter.rewrite(&system, &user);
         out.rewrite_ms = started.elapsed().as_millis() as u32;
-        let vetted = answer.map(|text| vet_cleanup(&heard, &text));
+        let vetted = answer.map(|text| vet_cleanup_after(&heard, &text, before));
         circuit.record(now_ms, matches!(vetted, Ok(Some(_))));
         match vetted {
             Ok(Some(text)) if text.is_empty() => return None,
@@ -236,7 +250,7 @@ fn compose_part(
             Err(error) => out.fallback = Some(error),
         }
     }
-    let _ = store.record_hits(&rules, &result.fired);
+    hits(&mut out, &result.fired);
     out.fixes = result.edits.total();
     out.text = result.text;
     (!out.text.is_empty() || out.press_enter).then_some(out)
@@ -255,32 +269,42 @@ fn paste_form(text: &str, category: Category) -> String {
 /// Cleans up the rest of a dictation after the blocks cleaned up while it
 /// was spoken, and joins them, in the destination's style.
 fn finish_blocks(
-    blocks: Vec<Composed>,
+    blocks: Vec<(String, Composed)>,
     rest: &[String],
     to: &Destination,
     circuit: (&mut RewriteCircuit, u64),
 ) -> Option<Composed> {
-    let before = join_blocks(blocks.iter().map(|block| block.text.as_str()));
+    let before = join_blocks(blocks.iter().map(|(raw, block)| (raw.as_str(), block.text.as_str())));
+    let rest = rest.join(" ");
     let last = compose_part(
-        &rest.join(" "),
+        &rest,
         to,
         circuit,
         Part::Block {
             before: &before,
+            said: blocks.iter().map(|(raw, _)| raw.split_whitespace().count()).sum(),
             last: true,
         },
     );
     let mut out = last.clone().unwrap_or_default();
-    let all: Vec<&Composed> = blocks.iter().chain(last.as_ref()).collect();
-    let joined = join_blocks(all.iter().map(|block| block.text.as_str()));
+    let all: Vec<(&str, &Composed)> = blocks
+        .iter()
+        .map(|(raw, block)| (raw.as_str(), block))
+        .chain(last.as_ref().map(|block| (rest.as_str(), block)))
+        .collect();
+    let joined = join_blocks(all.iter().map(|(raw, block)| (*raw, block.text.as_str())));
+    // The dictation is done: now the dictionary and snippets it used count.
+    let fired: Vec<usize> = all.iter().flat_map(|(_, block)| block.fired.iter().copied()).collect();
+    let _ = to.store.record_hits(&to.store.replacement_rules(), &fired);
+    out.fired.clear();
     out.text = if to.category.literal() {
         joined
     } else {
         format::apply_style(&joined, to.category.style(&to.settings.styles))
     };
-    out.rewritten = all.iter().any(|block| block.rewritten);
-    out.fixes = all.iter().map(|block| block.fixes).sum();
-    out.fallback = all.iter().rev().find_map(|block| block.fallback.clone());
+    out.rewritten = all.iter().any(|(_, block)| block.rewritten);
+    out.fixes = all.iter().map(|(_, block)| block.fixes).sum();
+    out.fallback = all.iter().rev().find_map(|(_, block)| block.fallback.clone());
     (!out.text.is_empty() || out.press_enter).then_some(out)
 }
 
@@ -332,8 +356,8 @@ pub const BLOCK_WORDS: usize = 40;
 #[derive(Debug, Default)]
 pub struct Draft {
     pub live: Live,
-    /// Cleaned-up blocks, in order.
-    blocks: Vec<Composed>,
+    /// Cleaned-up blocks, in order, with the words each was made from.
+    blocks: Vec<(String, Composed)>,
     /// How many of `live`'s pieces the blocks cover.
     used: usize,
     /// A correction may reach into a block already cleaned up, so the whole
@@ -351,7 +375,11 @@ impl Draft {
 
     /// The text cleaned up so far.
     fn written(&self) -> String {
-        join_blocks(self.blocks.iter().map(|block| block.text.as_str()))
+        join_blocks(
+            self.blocks
+                .iter()
+                .map(|(raw, block)| (raw.as_str(), block.text.as_str())),
+        )
     }
 
     /// Cleans up the sentences recognised since the last block, if there are
@@ -363,13 +391,24 @@ impl Draft {
         let modelled = rewrite.enabled && rewrite.level != Cleanup::None && to.rewriter.is_some();
         let pending = self.live.pieces()[self.used..].join(" ");
         let words = pending.split_whitespace().count();
+        // Until the dictation is long enough for the model, the rules would
+        // do the block; better to wait and let the model see it.
+        let said = self.live.pieces()[..self.used].join(" ").split_whitespace().count();
+        let so_far = words + said;
         let finished = pending.trim_end().ends_with(['.', '?', '!']);
         // "Press enter" only counts at the very end, which is not known yet.
         let command = to.settings.press_enter && PRESS_ENTER.is_match(&pending);
         if self.used > 0 && format::reaches_back(&pending) {
             self.whole = true;
         }
-        if !modelled || self.whole || circuit.0.cooling(circuit.1) || words < BLOCK_WORDS || !finished || command {
+        if !modelled
+            || self.whole
+            || circuit.0.cooling(circuit.1)
+            || words < BLOCK_WORDS
+            || so_far < rewrite.min_words
+            || !finished
+            || command
+        {
             return false;
         }
         let before = self.written();
@@ -379,25 +418,38 @@ impl Draft {
             circuit,
             Part::Block {
                 before: &before,
+                said,
                 last: false,
             },
         );
         self.used = self.live.pieces().len();
         // Pure filler comes back as nothing, which leaves nothing to type.
-        self.blocks.extend(composed);
+        self.blocks.extend(composed.map(|block| (pending, block)));
         true
     }
 }
 
-/// Joins blocks of text: a numbered or bulleted line starts on a line of its
-/// own, and so does whatever follows one.
-fn join_blocks<'a>(blocks: impl Iterator<Item = &'a str>) -> String {
+/// Joins blocks of text, each given with the words it was made from. A
+/// numbered or bulleted line starts on a line of its own, and so does
+/// whatever follows one. A block whose words began with "new line" or "new
+/// paragraph" starts on a new line or paragraph: the formatter trims the
+/// break from the start of a block.
+fn join_blocks<'a>(blocks: impl Iterator<Item = (&'a str, &'a str)>) -> String {
     static ITEM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d+\.|-) ").unwrap());
+    static PARAGRAPH: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)^\W*(start a new paragraph|new paragraph|next paragraph)\b").unwrap());
+    static LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^\W*(new line|next line|line break)\b").unwrap());
     let mut out = String::new();
-    for block in blocks.filter(|block| !block.is_empty()) {
+    for (raw, block) in blocks.filter(|(_, block)| !block.is_empty()) {
         if !out.is_empty() {
             let previous = out.lines().last().unwrap_or_default();
-            out.push(if ITEM.is_match(block) || ITEM.is_match(previous) { '\n' } else { ' ' });
+            out.push_str(if PARAGRAPH.is_match(raw) {
+                "\n\n"
+            } else if LINE.is_match(raw) || ITEM.is_match(block) || ITEM.is_match(previous) {
+                "\n"
+            } else {
+                " "
+            });
         }
         out.push_str(block);
     }
@@ -737,12 +789,92 @@ mod tests {
     }
 
     #[test]
+    fn blocks_count_the_whole_dictation_for_the_model_and_the_dictionary() {
+        let store = Store::memory();
+        store.add_word("launch", "Launch", "manual", NOW).unwrap();
+        let mut settings = Settings::default();
+        // Under the threshold, nothing is cleaned up early.
+        settings.rewrite.min_words = 50;
+        let audio = spoken();
+        let mut asr = Fixed::detecting(&[FIRST]);
+        let llm = Scripted::new(vec![]);
+        let mut draft = drafted(&mut asr, &audio);
+        let early = Destination {
+            target: &Target::default(),
+            category: Category::Other,
+            settings: &settings,
+            store: &store,
+            rewriter: Some(&llm),
+        };
+        assert!(!draft.clean(&early, (&mut RewriteCircuit::default(), 0)));
+        // The last block is under the threshold, the dictation is not.
+        settings.rewrite.min_words = 40;
+        let target = Target::default();
+        let llm = Scripted::new(vec![
+            Ok("The plan for the launch is simple.".into()),
+            Ok("And the launch is on.".into()),
+        ]);
+        let to = Destination {
+            target: &target,
+            category: Category::Other,
+            settings: &settings,
+            store: &store,
+            rewriter: Some(&llm),
+        };
+        let mut circuit = RewriteCircuit::default();
+        let audio = spoken();
+        let mut asr = Fixed::detecting(&[FIRST, "and the launch is on for this week"]);
+        let mut draft = drafted(&mut asr, &audio);
+        assert!(draft.clean(&to, (&mut circuit, 0)));
+        // The block was cleaned up by the model, but its dictionary use is not counted yet.
+        assert_eq!(llm.seen.borrow().len(), 1);
+        assert_eq!(store.dictionary().unwrap()[0].hits, 0);
+        let (paste, record, _) = text(run_live(
+            &request(&audio, "A"),
+            draft,
+            &settings,
+            &store,
+            &mut asr,
+            Some(&llm),
+            (&mut circuit, 0),
+        ));
+        // Eight words at the end still reach the model: the dictation is long.
+        assert_eq!(llm.seen.borrow().len(), 2);
+        assert!(
+            record.rewritten && paste.starts_with("The plan for the Launch is simple. "),
+            "{paste}"
+        );
+        // Counted once each, when the dictation was done.
+        assert_eq!(store.dictionary().unwrap()[0].hits, 2);
+    }
+
+    #[test]
     fn blocks_join_lists_on_their_own_lines_and_skip_what_came_to_nothing() {
         assert_eq!(
-            join_blocks(["We need:\n1. A budget", "2. A colour scheme", "", "Thanks."].into_iter()),
+            join_blocks(
+                [
+                    ("", "We need:\n1. A budget"),
+                    ("", "2. A colour scheme"),
+                    ("um", ""),
+                    ("", "Thanks.")
+                ]
+                .into_iter()
+            ),
             "We need:\n1. A budget\n2. A colour scheme\nThanks."
         );
-        assert_eq!(join_blocks(["One.", "Two."].into_iter()), "One. Two.");
+        assert_eq!(join_blocks([("", "One."), ("", "Two.")].into_iter()), "One. Two.");
+        // A spoken break at the start of a block survives the join.
+        assert_eq!(
+            join_blocks(
+                [
+                    ("one", "One."),
+                    ("New paragraph, two", "Two."),
+                    ("new line three", "Three.")
+                ]
+                .into_iter()
+            ),
+            "One.\n\nTwo.\nThree."
+        );
         let store = Store::memory();
         let settings = Settings::default();
         let target = Target::default();

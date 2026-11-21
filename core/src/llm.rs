@@ -287,6 +287,13 @@ fn unwrap_answer(output: &str) -> String {
 /// went off the rails (answered the question, invented text) and the
 /// rule-based result should be used instead. `Some("")` means "nothing said".
 pub fn vet_cleanup(raw: &str, output: &str) -> Option<String> {
+    vet_cleanup_after(raw, output, "")
+}
+
+/// Like `vet_cleanup`, for a block that `before` precedes: a block may
+/// carry on a numbered list that `before` ends in.
+pub fn vet_cleanup_after(raw: &str, output: &str, before: &str) -> Option<String> {
+    let continues_list = before.lines().last().is_some_and(|line| LIST.is_match(line));
     let text = unwrap_answer(output);
     if text == "EMPTY" {
         let source = crate::format::remove_fillers(&crate::asr::strip_tags(raw), &mut crate::format::Edits::default());
@@ -298,7 +305,7 @@ pub fn vet_cleanup(raw: &str, output: &str) -> Option<String> {
     if PREAMBLE.is_match(&text) && !PREAMBLE.is_match(raw.trim()) {
         return None;
     }
-    if LIST.is_match(&text) && !LIST.is_match(raw) && !crate::format::enumerated(raw) {
+    if LIST.is_match(&text) && !continues_list && !LIST.is_match(raw) && !crate::format::enumerated(raw) {
         return None;
     }
     let (heard, written) = (content_words(raw), content_words(&text));
@@ -590,6 +597,17 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn a_block_may_carry_on_the_list_before_it() {
+        let raw = "three pay the bills";
+        assert_eq!(vet_cleanup(raw, "3. Pay the bills"), None);
+        assert_eq!(
+            vet_cleanup_after(raw, "3. Pay the bills", "My plan:\n1. Buy milk\n2. Call mom").as_deref(),
+            Some("3. Pay the bills")
+        );
+        assert_eq!(vet_cleanup_after(raw, "3. Pay the bills", "We met."), None);
     }
 
     #[test]
