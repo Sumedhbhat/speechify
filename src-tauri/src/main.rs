@@ -149,7 +149,9 @@ fn main() {
             // quit, an update's restart) passes here before the process exits.
             if let RunEvent::Exit = event {
                 if let Some(shared) = app.try_state::<Arc<worker::Shared>>() {
-                    shared.release_for_exit(std::time::Duration::from_secs(5));
+                    // Usually the worker is already idle and this returns at
+                    // once; a piece mid-recognition can hold the model longer.
+                    shared.release_for_exit(models::RELEASE_WAIT + std::time::Duration::from_secs(5));
                 }
                 return;
             }

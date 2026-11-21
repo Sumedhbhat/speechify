@@ -2,7 +2,7 @@
 
 use crate::diagnostics;
 use speechify_core::app::Engines;
-use speechify_core::asr::{Recognizer, Remote};
+use speechify_core::asr::{Recognizer, Remote, Shared};
 use speechify_core::llm::{Chat, Rewriter};
 use speechify_core::native::{Detector, Engine, DETECTOR_FILE};
 use speechify_core::settings::Settings;
@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Delegates every recognizer operation without logging audio, hints or text.
-struct Diagnosed(Box<dyn Recognizer>);
+struct Diagnosed(Box<dyn Recognizer + Send>);
 
 impl Recognizer for Diagnosed {
     fn name(&self) -> &str {
@@ -20,6 +20,14 @@ impl Recognizer for Diagnosed {
     }
     fn transcribe(&mut self, audio: &[f32], hint: &speechify_core::asr::Hint) -> Result<String> {
         diagnostics::attempt("speech.transcribe", || self.0.transcribe(audio, hint))
+    }
+    fn transcribe_until(
+        &mut self,
+        audio: &[f32],
+        hint: &speechify_core::asr::Hint,
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<String> {
+        diagnostics::attempt("speech.transcribe", || self.0.transcribe_until(audio, hint, stop))
     }
     fn detect(&mut self, audio: &[f32], threshold: f64) -> Option<Result<Vec<std::ops::Range<usize>>>> {
         diagnostics::scope("speech.detect", || {
@@ -38,6 +46,22 @@ impl Recognizer for Diagnosed {
     fn heard(&self) -> Vec<speechify_core::asr::Heard> {
         self.0.heard()
     }
+    fn streams(&self) -> bool {
+        self.0.streams()
+    }
+    fn stream_start(&mut self, hint: &speechify_core::asr::Hint, stop: &std::sync::atomic::AtomicBool) -> Result<()> {
+        diagnostics::attempt("speech.stream_start", || self.0.stream_start(hint, stop))
+    }
+    fn stream_feed(
+        &mut self,
+        audio: &[f32],
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<speechify_core::asr::Streamed> {
+        diagnostics::attempt("speech.stream_feed", || self.0.stream_feed(audio, stop))
+    }
+    fn stream_end(&mut self, stop: &std::sync::atomic::AtomicBool) -> Result<speechify_core::asr::Streamed> {
+        diagnostics::attempt("speech.stream_end", || self.0.stream_end(stop))
+    }
 }
 
 struct DiagnosedChat(Chat);
@@ -48,6 +72,9 @@ impl Rewriter for DiagnosedChat {
     }
     fn model(&self) -> &str {
         self.0.model()
+    }
+    fn share(&self) -> Option<Box<dyn Rewriter + Send>> {
+        Some(Box::new(DiagnosedChat(self.0.clone())))
     }
 }
 
@@ -64,9 +91,10 @@ pub struct Models {
     pub models_dir: PathBuf,
     pub status: Arc<Mutex<SpeechStatus>>,
     /// The loaded everyday recogniser and the settings it was loaded for.
-    everyday: Option<(String, Box<dyn Recognizer>)>,
+    /// Pieces of a recording are recognised with it on threads of their own.
+    everyday: Option<(String, Shared<Diagnosed>)>,
     chat: Option<(String, DiagnosedChat)>,
-    teacher: Option<Box<dyn Recognizer>>,
+    teacher: Option<Diagnosed>,
     teacher_chat: Option<DiagnosedChat>,
     warmed: Option<Instant>,
 }
@@ -85,7 +113,7 @@ impl Models {
         }
     }
 
-    fn open(&self, model_id: &str, device: &str) -> Result<(Box<dyn Recognizer>, String)> {
+    fn open(&self, model_id: &str, device: &str) -> Result<(Diagnosed, String)> {
         let model = catalog::find(model_id)?;
         if !catalog::installed(&self.models_dir, &model) {
             return Err(format!(
@@ -105,14 +133,18 @@ impl Models {
             engine = engine.with_detector(found);
         }
         let device = engine.device().to_string();
-        Ok((Box::new(Diagnosed(Box::new(engine))), device))
+        Ok((Diagnosed(Box::new(engine)), device))
     }
 
     fn load_everyday(&mut self, settings: &Settings) -> Result<()> {
         let speech = &settings.speech;
         let key = format!(
             "{}|{}|{}|{}|{}",
-            speech.model, speech.device, speech.remote_url, speech.remote_model, speech.remote_key
+            speech.active_model(),
+            speech.device,
+            speech.remote_url,
+            speech.remote_model,
+            speech.remote_key
         );
         if self.everyday.as_ref().is_some_and(|(loaded, _)| *loaded == key) {
             return Ok(());
@@ -120,14 +152,14 @@ impl Models {
         // Free the old model before loading the new one.
         self.everyday = None;
         let loaded = if speech.remote_url.trim().is_empty() {
-            self.open(&speech.model, &speech.device)
+            self.open(speech.active_model(), &speech.device)
         } else {
             Ok((
-                Box::new(Diagnosed(Box::new(Remote::new(
+                Diagnosed(Box::new(Remote::new(
                     &speech.remote_url,
                     &speech.remote_key,
                     &speech.remote_model,
-                )))) as Box<dyn Recognizer>,
+                ))),
                 format!("server {}", speech.remote_url),
             ))
         };
@@ -139,7 +171,7 @@ impl Models {
                     device,
                     error: String::new(),
                 };
-                self.everyday = Some((key, recognizer));
+                self.everyday = Some((key, Shared::new(recognizer)));
                 Ok(())
             }
             Err(error) => {
@@ -169,6 +201,27 @@ fn chat(settings: &Settings, model: &str, timeout: Duration) -> DiagnosedChat {
     DiagnosedChat(Chat::new(&settings.rewrite.url, &settings.rewrite.key, model, timeout))
 }
 
+/// How long dropping the models waits for a piece still being recognised
+/// to let go of the model. The exit path waits a little longer than this
+/// for the worker, so the process never ends with the model still loaded.
+pub const RELEASE_WAIT: Duration = Duration::from_secs(60);
+
+impl Drop for Models {
+    /// A piece still being recognised elsewhere holds the model too. The
+    /// model must be gone once the worker stops (Metal asserts at exit that
+    /// nothing is left on the GPU), so wait for it to let go. The piece was
+    /// told to stop, but the runtime cannot stop inside the encoder, so this
+    /// can take as long as one piece. The bound only guards against a
+    /// runtime that never returns.
+    fn drop(&mut self) {
+        if let Some((_, recognizer)) = &self.everyday {
+            if !recognizer.wait_alone(RELEASE_WAIT) {
+                diagnostics::event("model.release", "still in use");
+            }
+        }
+    }
+}
+
 impl Engines for Models {
     fn everyday(&mut self, settings: &Settings) -> Result<(&mut dyn Recognizer, Option<&dyn Rewriter>)> {
         self.load_everyday(settings)?;
@@ -192,7 +245,7 @@ impl Engines for Models {
         let recognizer = self
             .everyday
             .as_mut()
-            .map(|(_, recognizer)| recognizer.as_mut())
+            .map(|(_, recognizer)| recognizer as &mut dyn Recognizer)
             .ok_or("The speech model is not loaded")?;
         Ok((recognizer, self.chat.as_ref().map(|(_, chat)| chat as &dyn Rewriter)))
     }
@@ -213,7 +266,7 @@ impl Engines for Models {
         let recognizer = self
             .teacher
             .as_mut()
-            .map(|recognizer| recognizer.as_mut())
+            .map(|recognizer| recognizer as &mut dyn Recognizer)
             .ok_or("The teacher model is not loaded")?;
         Ok((recognizer, self.teacher_chat.as_ref().map(|chat| chat as &dyn Rewriter)))
     }

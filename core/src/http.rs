@@ -6,6 +6,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
+#[derive(Clone)]
 pub struct Http {
     agent: ureq::Agent,
 }

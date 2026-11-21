@@ -116,6 +116,22 @@ pub struct Speech {
     pub remote_url: String,
     pub remote_key: String,
     pub remote_model: String,
+    /// Dictate with a model made to recognise speech as it is spoken,
+    /// instead of `model`.
+    pub streaming: bool,
+    /// Catalog id of that streaming model.
+    pub streaming_model: String,
+}
+
+impl Speech {
+    /// The catalog id of the model dictation uses.
+    pub fn active_model(&self) -> &str {
+        if self.streaming {
+            &self.streaming_model
+        } else {
+            &self.model
+        }
+    }
 }
 
 impl Default for Speech {
@@ -127,6 +143,8 @@ impl Default for Speech {
             remote_url: String::new(),
             remote_key: String::new(),
             remote_model: "whisper-large-v3-turbo".into(),
+            streaming: false,
+            streaming_model: "parakeet-unified-en-0.6b".into(),
         }
     }
 }

@@ -19,6 +19,8 @@ pub struct Model {
     pub notes: String,
     /// Too slow to enjoy without a graphics card.
     pub wants_gpu: bool,
+    /// Made to recognise speech as it is spoken, for the streaming setup.
+    pub streaming: bool,
 }
 
 /// One catalog row: a model in the handy-computer GGUF collection.
@@ -30,6 +32,7 @@ struct Pin {
     sha256: &'static str,
     bytes: u64,
     wants_gpu: bool,
+    streaming: bool,
     notes: &'static str,
 }
 
@@ -41,6 +44,7 @@ const PINS: &[Pin] = &[
         sha256: "257aa7ec9121c22c167d5e2c49e3e76b4ba0e6e27ebc13074eba0a80f8190220",
         bytes: 886_381_728,
         wants_gpu: true,
+        streaming: false,
         notes: "Most accurate on Indian English, names and numbers. Fast on a graphics card.",
     },
     Pin {
@@ -50,6 +54,7 @@ const PINS: &[Pin] = &[
         sha256: "5859f77944efcd8eafa23a6350731960b2b55b2203df51f319665c807d802cc7",
         bytes: 739_508_576,
         wants_gpu: false,
+        streaming: false,
         notes: "Fastest. The best choice without a graphics card; a little weaker on names.",
     },
     Pin {
@@ -59,6 +64,7 @@ const PINS: &[Pin] = &[
         sha256: "f0d0e99cebb6d3b83f1f7069b82b5d3c2e39a54545b0da039cb4bafd9c4e5caa",
         bytes: 729_574_912,
         wants_gpu: false,
+        streaming: false,
         notes: "English-only Parakeet; slightly better than v3 on plain English.",
     },
     Pin {
@@ -68,6 +74,7 @@ const PINS: &[Pin] = &[
         sha256: "2fa1a5f179f8a511a53e2108db270aa4af3ce08cd976af4180e2854666bb4ba3",
         bytes: 1_668_741_440,
         wants_gpu: true,
+        streaming: false,
         notes: "The full-size model. Used as the nightly teacher; slow for live dictation.",
     },
     Pin {
@@ -77,7 +84,18 @@ const PINS: &[Pin] = &[
         sha256: "9b9c8811bbcc82a7766f0fb0925614bdacb0923b2cc630daeac17108b655b860",
         bytes: 269_751_136,
         wants_gpu: false,
+        streaming: false,
         notes: "Small download for weak hardware. Noticeably less accurate.",
+    },
+    Pin {
+        id: "parakeet-unified-en-0.6b",
+        name: "Parakeet Unified 0.6B (English)",
+        revision: "843b1b175ace04f5a89d379c79e2518c0d065b25",
+        sha256: "4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795",
+        bytes: 731_357_568,
+        wants_gpu: true,
+        streaming: true,
+        notes: "Recognises you as you speak, so the text is ready almost as soon as you stop. English only.",
     },
 ];
 
@@ -98,6 +116,7 @@ pub fn models() -> Vec<Model> {
                 bytes: pin.bytes,
                 notes: pin.notes.into(),
                 wants_gpu: pin.wants_gpu,
+                streaming: pin.streaming,
             }
         })
         .collect()
@@ -255,7 +274,7 @@ mod tests {
     #[test]
     fn catalog_is_consistent() {
         let all = models();
-        assert_eq!(all.len(), 5);
+        assert_eq!(all.len(), 6);
         for model in &all {
             assert_eq!(model.sha256.len(), 64);
             assert!(
@@ -275,6 +294,9 @@ mod tests {
         let settings = crate::settings::Settings::default();
         find(&settings.speech.model).unwrap();
         find(&settings.teacher.speech_model).unwrap();
+        // The streaming setup has a model of its own, made for it.
+        assert!(find(&settings.speech.streaming_model).unwrap().streaming);
+        assert!(!find(&settings.speech.model).unwrap().streaming);
     }
 
     fn device(class: DeviceClass, memory_mb: u64, name: &str) -> Device {
@@ -366,6 +388,7 @@ mod tests {
             bytes: 5,
             notes: String::new(),
             wants_gpu: false,
+            streaming: false,
         }
     }
 

@@ -164,3 +164,21 @@ pub fn hiss(length: usize, amplitude: f32) -> Vec<f32> {
         })
         .collect()
 }
+
+/// Where `audio` is not silent, in 20 ms frames: a perfect voice detector
+/// for recordings made of tones and digital silence.
+pub fn sounding(audio: &[f32]) -> Vec<std::ops::Range<usize>> {
+    let mut regions: Vec<std::ops::Range<usize>> = Vec::new();
+    for (index, frame) in audio.chunks(320).enumerate() {
+        if frame.iter().all(|sample| sample.abs() < 1e-3) {
+            continue;
+        }
+        let start = index * 320;
+        let end = start + frame.len();
+        match regions.last_mut() {
+            Some(last) if last.end == start => last.end = end,
+            _ => regions.push(start..end),
+        }
+    }
+    regions
+}

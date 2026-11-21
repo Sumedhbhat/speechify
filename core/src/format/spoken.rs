@@ -16,6 +16,33 @@ const DETERMINERS: &[&str] = &[
     "the", "a", "an", "this", "that", "your", "my", "each", "every", "no", "extra", "missing", "of",
 ];
 
+/// Noun phrases ("a new paragraph about…", "the next line") are content.
+/// A following preposition also attaches content to the noun.
+fn noun(previous: &str, following: &str) -> bool {
+    DETERMINERS.contains(&previous) || ["of", "about", "in", "for", "from", "with", "on"].contains(&following)
+}
+
+/// The break that a spoken "new line" or "new paragraph" at the very start
+/// of `text` asks for, judged as `apply` judges it in the middle of text.
+pub(crate) fn leading_break(text: &str) -> Option<&'static str> {
+    let text = &super::fillers::remove(text, &mut super::Edits::default());
+    let caps = BREAKS.captures(text).filter(|caps| caps.get(0).unwrap().start() == 0)?;
+    let command = caps.get(1).unwrap();
+    let following = text[command.end()..]
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase();
+    if noun("", &following) {
+        None
+    } else if command.as_str().to_lowercase().contains("paragraph") {
+        Some("\n\n")
+    } else {
+        Some("\n")
+    }
+}
+
 pub fn apply(text: &str) -> String {
     let text = MARKS.replace_all(text, |caps: &regex::Captures| {
         let previous = caps.get(1).map_or("", |m| m.as_str());
@@ -46,11 +73,7 @@ pub fn apply(text: &str) -> String {
             .unwrap_or("")
             .trim_matches(|c: char| !c.is_alphanumeric())
             .to_lowercase();
-        // Noun phrases ("a new paragraph about…", "the next line") are
-        // content. A following preposition also attaches content to the noun.
-        let noun = DETERMINERS.contains(&previous.as_str())
-            || ["of", "about", "in", "for", "from", "with", "on"].contains(&following.as_str());
-        if noun {
+        if noun(&previous, &following) {
             caps[0].to_string()
         } else if command.as_str().to_lowercase().contains("paragraph") {
             "\n\n".into()
@@ -92,6 +115,11 @@ mod tests {
             assert_eq!(apply(text), text);
         }
         assert_eq!(apply("milk new line eggs"), "Milk\nEggs");
+        assert_eq!(leading_break("New paragraph, the results"), Some("\n\n"));
+        assert_eq!(leading_break("um new line eggs"), Some("\n"));
+        assert_eq!(leading_break(" next line. Eggs"), Some("\n"));
+        assert_eq!(leading_break("New paragraph on the economy"), None);
+        assert_eq!(leading_break("Eggs, new line"), None);
         assert_eq!(apply("new line."), "");
         assert_eq!(apply("milk new paragraph eggs"), "Milk\n\nEggs");
         assert_eq!(apply("new paragraph."), "");

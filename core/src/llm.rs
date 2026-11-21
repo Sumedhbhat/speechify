@@ -14,9 +14,15 @@ use std::time::Duration;
 pub trait Rewriter {
     fn rewrite(&self, system: &str, user: &str) -> Result<String>;
     fn model(&self) -> &str;
+    /// Another handle on this model, for a thread of its own, if it can be
+    /// used from one. `None` means it works only where it is.
+    fn share(&self) -> Option<Box<dyn Rewriter + Send>> {
+        None
+    }
 }
 
 /// A chat model behind Ollama or any OpenAI-compatible server.
+#[derive(Clone)]
 pub struct Chat {
     http: Http,
     url: String,
@@ -127,6 +133,10 @@ impl Rewriter for Chat {
     fn model(&self) -> &str {
         &self.model
     }
+
+    fn share(&self) -> Option<Box<dyn Rewriter + Send>> {
+        Some(Box::new(self.clone()))
+    }
 }
 
 /// Everything the cleanup prompt depends on.
@@ -141,7 +151,13 @@ pub struct Brief<'a> {
     pub vocabulary: &'a [String],
     /// Worked examples from the nightly teacher: (heard, ideal).
     pub examples: &'a [(String, String)],
+    /// The cleaned-up text that comes before RAW in the same dictation,
+    /// when a long one is cleaned up in blocks while it is being spoken.
+    pub before: &'a str,
 }
+
+/// How much of the earlier text a block's prompt carries.
+const BEFORE_CHARS: usize = 400;
 
 /// Returns (system, user) messages asking a model to clean `raw`.
 pub fn cleanup_prompt(raw: &str, brief: &Brief) -> (String, String) {
@@ -209,6 +225,15 @@ pub fn cleanup_prompt(raw: &str, brief: &Brief) -> (String, String) {
         }
         user.push_str("\n\n");
     }
+    let before = brief.before.trim();
+    if !before.is_empty() {
+        let skip = before.chars().count().saturating_sub(BEFORE_CHARS);
+        let tail: String = before.chars().skip(skip).collect();
+        let ellipsis = if skip > 0 { "…" } else { "" };
+        user.push_str(&format!(
+            "EARLIER (already typed; context only, do not repeat it):\n<<<\n{ellipsis}{tail}\n>>>\n\nClean up only what follows. Continue a numbered list if RAW continues it.\n\n"
+        ));
+    }
     user.push_str(&format!("RAW:\n<<<\n{raw}\n>>>"));
     (system.trim_end().to_string(), user)
 }
@@ -272,6 +297,13 @@ fn unwrap_answer(output: &str) -> String {
 /// went off the rails (answered the question, invented text) and the
 /// rule-based result should be used instead. `Some("")` means "nothing said".
 pub fn vet_cleanup(raw: &str, output: &str) -> Option<String> {
+    vet_cleanup_after(raw, output, "")
+}
+
+/// Like `vet_cleanup`, for a block that `before` precedes: a block may
+/// carry on a numbered list that `before` ends in.
+pub fn vet_cleanup_after(raw: &str, output: &str, before: &str) -> Option<String> {
+    let continues_list = before.lines().last().is_some_and(|line| LIST.is_match(line));
     let text = unwrap_answer(output);
     if text == "EMPTY" {
         let source = crate::format::remove_fillers(&crate::asr::strip_tags(raw), &mut crate::format::Edits::default());
@@ -283,7 +315,7 @@ pub fn vet_cleanup(raw: &str, output: &str) -> Option<String> {
     if PREAMBLE.is_match(&text) && !PREAMBLE.is_match(raw.trim()) {
         return None;
     }
-    if LIST.is_match(&text) && !LIST.is_match(raw) && !crate::format::enumerated(raw) {
+    if LIST.is_match(&text) && !continues_list && !LIST.is_match(raw) && !crate::format::enumerated(raw) {
         return None;
     }
     let (heard, written) = (content_words(raw), content_words(&text));
@@ -328,6 +360,38 @@ impl Rewriter for Scripted {
 
     fn model(&self) -> &str {
         "scripted"
+    }
+}
+
+/// A `Scripted` that other threads can use too.
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct Sharing(pub std::sync::Arc<std::sync::Mutex<Scripted>>);
+
+#[cfg(test)]
+impl Sharing {
+    pub fn new(answers: Vec<Result<String>>) -> Sharing {
+        Sharing(std::sync::Arc::new(std::sync::Mutex::new(Scripted::new(answers))))
+    }
+
+    /// What it was asked so far.
+    pub fn seen(&self) -> Vec<(String, String)> {
+        self.0.lock().unwrap().seen.borrow().clone()
+    }
+}
+
+#[cfg(test)]
+impl Rewriter for Sharing {
+    fn rewrite(&self, system: &str, user: &str) -> Result<String> {
+        self.0.lock().unwrap().rewrite(system, user)
+    }
+
+    fn model(&self) -> &str {
+        "scripted"
+    }
+
+    fn share(&self) -> Option<Box<dyn Rewriter + Send>> {
+        Some(Box::new(self.clone()))
     }
 }
 
@@ -435,6 +499,7 @@ mod tests {
             target,
             vocabulary,
             examples,
+            before: "",
         }
     }
 
@@ -490,6 +555,22 @@ mod tests {
         assert!(cleanup_prompt("x", &brief(&app_only, &[], &[]))
             .1
             .starts_with("CONTEXT: typing into Notes\n\n"));
+    }
+
+    #[test]
+    fn a_later_block_sees_the_end_of_what_came_before() {
+        let target = Target::default();
+        let mut b = brief(&target, &[], &[]);
+        b.before = "We need two things:\n1. A budget";
+        let (_, user) = cleanup_prompt("two a colour scheme", &b);
+        assert_eq!(
+            user,
+            "EARLIER (already typed; context only, do not repeat it):\n<<<\nWe need two things:\n1. A budget\n>>>\n\nClean up only what follows. Continue a numbered list if RAW continues it.\n\nRAW:\n<<<\ntwo a colour scheme\n>>>"
+        );
+        let long = "word ".repeat(200);
+        b.before = &long;
+        let (_, user) = cleanup_prompt("x", &b);
+        assert!(user.contains("<<<\n…") && user.len() < 600, "{user}");
     }
 
     #[test]
@@ -561,6 +642,17 @@ mod tests {
     }
 
     #[test]
+    fn a_block_may_carry_on_the_list_before_it() {
+        let raw = "three pay the bills";
+        assert_eq!(vet_cleanup(raw, "3. Pay the bills"), None);
+        assert_eq!(
+            vet_cleanup_after(raw, "3. Pay the bills", "My plan:\n1. Buy milk\n2. Call mom").as_deref(),
+            Some("3. Pay the bills")
+        );
+        assert_eq!(vet_cleanup_after(raw, "3. Pay the bills", "We met."), None);
+    }
+
+    #[test]
     fn invented_lists_are_rejected_even_when_the_words_overlap() {
         assert_eq!(
             vet_cleanup(
@@ -594,6 +686,8 @@ mod tests {
     fn scripted_rewriter_replays_answers() {
         let scripted = Scripted::new(vec![Ok("a".into()), Err("down".into())]);
         assert_eq!(scripted.rewrite("s", "u").unwrap(), "a");
+        let chat = Chat::new("http://127.0.0.1:9", "", "gemma3:4b", Duration::from_secs(1));
+        assert_eq!(chat.share().unwrap().model(), "gemma3:4b");
         assert_eq!(scripted.rewrite("s2", "u2").unwrap_err(), "down");
         assert_eq!(scripted.seen.borrow().len(), 2);
         assert_eq!(scripted.model(), "scripted");

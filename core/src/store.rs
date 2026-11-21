@@ -221,6 +221,17 @@ pub struct Rules {
     origins: Vec<(bool, i64)>,
 }
 
+impl Rules {
+    /// The rows behind the rules at `fired`: (is a snippet, row id). Rows
+    /// stay the same when the dictionary changes; indexes do not.
+    pub fn origins_of(&self, fired: &[usize]) -> Vec<(bool, i64)> {
+        fired
+            .iter()
+            .filter_map(|index| self.origins.get(*index).copied())
+            .collect()
+    }
+}
+
 pub const MAX_TERM: usize = 60;
 pub const MAX_EXPANSION: usize = 4000;
 
@@ -617,13 +628,16 @@ impl Store {
 
     /// Counts a use of each rule that fired (indexes into `rules.replacements`).
     pub fn record_hits(&self, rules: &Rules, fired: &[usize]) -> Result<()> {
-        for index in fired {
-            if let Some((snippet, id)) = rules.origins.get(*index) {
-                let table = if *snippet { "snippets" } else { "dictionary" };
-                self.conn
-                    .execute(&format!("UPDATE {table} SET hits = hits + 1 WHERE id = ?1"), [id])
-                    .map_err(err)?;
-            }
+        self.record_origin_hits(&rules.origins_of(fired))
+    }
+
+    /// Counts a use of each dictionary entry or snippet, by its row.
+    pub fn record_origin_hits(&self, origins: &[(bool, i64)]) -> Result<()> {
+        for (snippet, id) in origins {
+            let table = if *snippet { "snippets" } else { "dictionary" };
+            self.conn
+                .execute(&format!("UPDATE {table} SET hits = hits + 1 WHERE id = ?1"), [id])
+                .map_err(err)?;
         }
         Ok(())
     }
