@@ -33,6 +33,8 @@ export function settings(): Settings {
       remote_url: "",
       remote_key: "",
       remote_model: "",
+      streaming: false,
+      streaming_model: "unified",
     },
     rewrite: {
       level: "light",
@@ -159,6 +161,7 @@ export function model(over: Partial<SpeechModel> = {}): SpeechModel {
     bytes: 1_600_000_000,
     notes: "Fast and accurate on a graphics card.",
     wants_gpu: true,
+    streaming: false,
     installed: true,
     active: true,
     teacher: false,

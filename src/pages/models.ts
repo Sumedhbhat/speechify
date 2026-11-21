@@ -64,6 +64,7 @@ export function createModelsPage(deps: Deps): Page {
   let modelInput: HTMLInputElement | undefined;
 
   const cards = h("div", { className: "model-grid" });
+  const streamCards = h("div", { className: "model-grid" });
   const device = h("div");
   const language = h("div");
   const pullMeter = h("div", { className: "pull" });
@@ -157,15 +158,23 @@ export function createModelsPage(deps: Deps): Page {
           className: "btn primary",
           textContent: model.active ? "In use" : "Use for dictation",
           disabled: model.active,
-          onclick: () => void choose((s) => (s.speech.model = model.id)),
+          onclick: () =>
+            void choose((s) => {
+              // Picking a model from either list sets which setup dictation uses.
+              s.speech.streaming = model.streaming;
+              if (model.streaming) s.speech.streaming_model = model.id;
+              else s.speech.model = model.id;
+            }),
         }),
-        h("button", {
-          type: "button",
-          className: "btn",
-          textContent: model.teacher ? "Teacher" : "Use as teacher",
-          disabled: model.teacher,
-          onclick: () => void choose((s) => (s.teacher.speech_model = model.id)),
-        }),
+        // The nightly teacher wants the most accurate model, not a streaming one.
+        !model.streaming &&
+          h("button", {
+            type: "button",
+            className: "btn",
+            textContent: model.teacher ? "Teacher" : "Use as teacher",
+            disabled: model.teacher,
+            onclick: () => void choose((s) => (s.teacher.speech_model = model.id)),
+          }),
         confirmButton(
           "Delete",
           "Delete it?",
@@ -183,7 +192,8 @@ export function createModelsPage(deps: Deps): Page {
 
   function renderCards(): void {
     meters.clear();
-    cards.replaceChildren(...models.map(card));
+    cards.replaceChildren(...models.filter((model) => !model.streaming).map(card));
+    streamCards.replaceChildren(...models.filter((model) => model.streaming).map(card));
   }
 
   async function download(model: SpeechModel): Promise<void> {
@@ -418,6 +428,12 @@ export function createModelsPage(deps: Deps): Page {
       "Speech models",
       "Bigger models are more accurate but slower. Without a graphics card, pick a small one.",
       [cards, device],
+    ),
+    section(
+      "Recognise as you speak",
+      "A streaming model hears your words while you talk, so the text is ready almost as soon as you stop. " +
+        "It needs a graphics card to keep up. Pick a model above to go back.",
+      [streamCards],
     ),
     section("Language model", "", [language]),
   ]);

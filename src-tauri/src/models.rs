@@ -46,6 +46,22 @@ impl Recognizer for Diagnosed {
     fn heard(&self) -> Vec<speechify_core::asr::Heard> {
         self.0.heard()
     }
+    fn streams(&self) -> bool {
+        self.0.streams()
+    }
+    fn stream_start(&mut self, hint: &speechify_core::asr::Hint) -> Result<()> {
+        diagnostics::attempt("speech.stream_start", || self.0.stream_start(hint))
+    }
+    fn stream_feed(
+        &mut self,
+        audio: &[f32],
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<speechify_core::asr::Streamed> {
+        diagnostics::attempt("speech.stream_feed", || self.0.stream_feed(audio, stop))
+    }
+    fn stream_end(&mut self, stop: &std::sync::atomic::AtomicBool) -> Result<speechify_core::asr::Streamed> {
+        diagnostics::attempt("speech.stream_end", || self.0.stream_end(stop))
+    }
 }
 
 struct DiagnosedChat(Chat);
@@ -124,7 +140,11 @@ impl Models {
         let speech = &settings.speech;
         let key = format!(
             "{}|{}|{}|{}|{}",
-            speech.model, speech.device, speech.remote_url, speech.remote_model, speech.remote_key
+            speech.active_model(),
+            speech.device,
+            speech.remote_url,
+            speech.remote_model,
+            speech.remote_key
         );
         if self.everyday.as_ref().is_some_and(|(loaded, _)| *loaded == key) {
             return Ok(());
@@ -132,7 +152,7 @@ impl Models {
         // Free the old model before loading the new one.
         self.everyday = None;
         let loaded = if speech.remote_url.trim().is_empty() {
-            self.open(&speech.model, &speech.device)
+            self.open(speech.active_model(), &speech.device)
         } else {
             Ok((
                 Diagnosed(Box::new(Remote::new(

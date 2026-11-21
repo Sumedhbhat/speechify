@@ -74,6 +74,46 @@ describe("models page", () => {
     expect(ctx.onError).toHaveBeenCalledWith("That model is not installed.");
   });
 
+  it("keeps streaming models apart and switches between the two setups", async () => {
+    ctx.api.models.mockResolvedValue([
+      model(),
+      model({ id: "unified", name: "Parakeet Unified", streaming: true, active: false }),
+    ]);
+    await setup();
+    const streaming = byText(document, "h2", "Recognise as you speak").closest("section")!;
+    const unified = card("Parakeet Unified");
+    expect(streaming.contains(unified)).toBe(true);
+    expect(streaming.contains(card("Whisper turbo"))).toBe(false);
+    // The teacher should be the most accurate model, never a streaming one.
+    expect(unified.textContent).not.toContain("Use as teacher");
+
+    // Once chosen, the list comes back with the streaming model in use.
+    ctx.api.models.mockResolvedValue([
+      model({ active: false }),
+      model({ id: "unified", name: "Parakeet Unified", streaming: true, active: true }),
+    ]);
+    button(unified, "Use for dictation").click();
+    await settle();
+    expect(ctx.api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        speech: expect.objectContaining({
+          streaming: true,
+          streaming_model: "unified",
+          model: "turbo",
+        }),
+      }),
+    );
+
+    expect(button(card("Parakeet Unified"), "In use").disabled).toBe(true);
+    button(card("Whisper turbo"), "Use for dictation").click();
+    await settle();
+    expect(ctx.api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        speech: expect.objectContaining({ streaming: false, model: "turbo" }),
+      }),
+    );
+  });
+
   it("downloads with live progress and can cancel", async () => {
     await setup();
     button(card("Whisper large"), "Download").click();

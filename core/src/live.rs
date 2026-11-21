@@ -13,8 +13,12 @@
 //! A recogniser that can work on a thread of its own recognises each piece
 //! there, so a key release or a cancel never waits for a piece to finish:
 //! a cancel drops it, and a release waits only for the words it needs.
+//!
+//! A model made to stream (Parakeet Unified, say) needs no pauses: it is
+//! given the audio as it arrives and settles the text as it goes. When the
+//! speaker stops, only the last second or so is left for it.
 
-use crate::asr::{is_phantom, isolate, strip_tags, Heard, Hint, Recognizer};
+use crate::asr::{is_phantom, isolate, strip_tags, Heard, Hint, Recognizer, Streamed};
 use crate::audio::{self, Trimmed, RATE};
 use crate::job::Job;
 use crate::Result;
@@ -32,6 +36,12 @@ pub const SETTLED_MS: usize = 700;
 pub const LOOK_EVERY_MS: usize = 400;
 /// A piece longer than this ends at its longest silence, however short.
 pub const MAX_PIECE_MS: usize = 20_000;
+/// A streaming model is given new audio once this much has arrived.
+pub const FEED_MS: usize = 480;
+/// A streaming model this far behind the speaker cannot keep up (a laptop
+/// CPU, say): it is given up, and the recording recognised in one go at the
+/// end, rather than make the user wait for it to catch up.
+pub const BEHIND_MS: usize = 4_000;
 
 /// Where a piece may end.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -66,6 +76,10 @@ pub struct Transcript {
     pub pieces: usize,
     /// The words of each piece that had any, in order; `raw` joins them.
     pub parts: Vec<String>,
+    /// The pieces handed out while recording are not the start of `raw`:
+    /// a streaming model changed its mind about them, or failed and the
+    /// whole recording was recognised again.
+    pub revised: bool,
 }
 
 /// A piece being recognised on a thread of its own: its words, what the
@@ -102,6 +116,27 @@ pub struct Live {
     /// The piece being recognised elsewhere, if any. Dropping it, as a
     /// cancel does, tells the recogniser to stop.
     flight: Option<Flight>,
+    /// Set when the recogniser is a model made to stream.
+    stream: Option<Stream>,
+}
+
+/// What a streaming model gives back for some audio: its text, and how
+/// much of that audio was speech.
+type Fed = (Streamed, u64);
+
+/// A recording given to a model made to stream, as it is made.
+#[derive(Debug, Default)]
+struct Stream {
+    /// The model accepted the start of the stream.
+    started: bool,
+    /// Something went wrong: the whole recording is recognised at the end.
+    broken: bool,
+    /// The text the model has settled on so far.
+    settled: String,
+    /// How much of `settled` has been handed out as pieces.
+    handed: usize,
+    /// Audio being fed on a thread of its own, and how long it is.
+    feeding: Option<(Job<Fed>, usize)>,
 }
 
 impl Live {
@@ -137,9 +172,10 @@ impl Live {
     }
 
     /// Whether `advance` can do anything: false once the recogniser turned
-    /// out to have no voice detector, so the caller need not fetch audio.
+    /// out to have no voice detector, or a stream was given up, so the
+    /// caller need not fetch audio.
     pub fn listening(&self) -> bool {
-        !self.blind
+        !self.blind && !self.stream.as_ref().is_some_and(|stream| stream.broken)
     }
 
     /// The words recognised so far, piece by piece.
@@ -156,6 +192,12 @@ impl Live {
     /// thread of its own and this returns at once; a later call collects
     /// the words and returns true then.
     pub fn advance(&mut self, pending: &[f32], recognizer: &mut dyn Recognizer, hint: &Hint) -> Result<bool> {
+        if self.stream.is_none() && self.done == 0 && recognizer.streams() {
+            self.stream = Some(Stream::default());
+        }
+        if self.stream.is_some() {
+            return self.flow(pending, recognizer, hint);
+        }
         if let Some(flight) = &self.flight {
             let Some(answer) = flight.job.poll() else { return Ok(false) };
             let Flight { cut, speech_ms, .. } = self.flight.take().expect("a piece in flight");
@@ -193,6 +235,9 @@ impl Live {
         recognizer: &mut dyn Recognizer,
         hint: &Hint,
     ) -> Result<Option<Transcript>> {
+        if self.stream.as_ref().is_some_and(|stream| stream.started) {
+            return self.end_stream(recording, recognizer, hint);
+        }
         if let Some(Flight { job, cut, speech_ms }) = self.flight.take() {
             // A piece that failed is simply recognised again with the rest.
             let _ = self.land(cut, speech_ms, job.wait());
@@ -206,6 +251,140 @@ impl Live {
             heard: std::mem::take(&mut self.heard),
             pieces: self.taken,
             parts: std::mem::take(&mut self.pieces),
+            revised: false,
+        }))
+    }
+
+    /// Gives a streaming model the audio recorded since it was last fed.
+    /// Returns whether new sentences were settled.
+    fn flow(&mut self, pending: &[f32], recognizer: &mut dyn Recognizer, hint: &Hint) -> Result<bool> {
+        let stream = self.stream.as_mut().expect("a stream");
+        stream.keep_up(pending.len());
+        if let Some((job, length)) = &stream.feeding {
+            let Some(answer) = job.poll() else { return Ok(false) };
+            let length = *length;
+            stream.feeding = None;
+            return self.fed(length, answer);
+        }
+        if stream.broken || pending.len() < FEED_MS * MS || recognizer.busy() {
+            return Ok(false);
+        }
+        let begin = !stream.started;
+        stream.started = true;
+        let length = pending.len();
+        match recognizer.share() {
+            Some(mut shared) => {
+                let samples = pending.to_vec();
+                let language = hint.language.to_string();
+                let job = Job::start(move |stop| {
+                    if begin {
+                        shared.stream_start(&Hint {
+                            language: &language,
+                            ..Hint::default()
+                        })?;
+                    }
+                    feed(shared.as_mut(), &samples, stop)
+                });
+                self.stream.as_mut().expect("a stream").feeding = Some((job, length));
+                Ok(false)
+            }
+            None => {
+                let answer = if begin { recognizer.stream_start(hint) } else { Ok(()) }
+                    .and_then(|()| feed(recognizer, pending, &std::sync::atomic::AtomicBool::new(false)));
+                self.fed(length, answer)
+            }
+        }
+    }
+
+    /// Takes in what the model made of `length` more samples, and hands out
+    /// any sentences it has settled. On an error the stream is given up,
+    /// and the whole recording is recognised when it ends.
+    fn fed(&mut self, length: usize, answer: Result<Fed>) -> Result<bool> {
+        let stream = self.stream.as_mut().expect("a stream");
+        let (streamed, speech_ms) = match answer {
+            Ok(answer) => answer,
+            Err(error) => {
+                stream.broken = true;
+                return Err(error);
+            }
+        };
+        self.done += length;
+        self.speech_ms += speech_ms;
+        stream.settled = streamed.settled;
+        let Some(end) = sentences_end(&stream.settled, stream.handed) else { return Ok(false) };
+        let piece = stream.settled[stream.handed..end].trim().to_string();
+        stream.handed = end;
+        self.pieces.push(piece);
+        Ok(true)
+    }
+
+    /// Ends the stream with the rest of `recording` and returns all of its
+    /// text. When the stream broke, the whole recording is recognised again
+    /// from the start instead.
+    fn end_stream(
+        &mut self,
+        recording: &[f32],
+        recognizer: &mut dyn Recognizer,
+        hint: &Hint,
+    ) -> Result<Option<Transcript>> {
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let mut stream = self.stream.take().expect("a stream");
+        stream.keep_up(recording.len().saturating_sub(self.done));
+        if let Some((job, length)) = stream.feeding.take() {
+            self.stream = Some(stream);
+            let _ = self.fed(length, job.wait());
+            stream = self.stream.take().expect("a stream");
+        }
+        let rest = &recording[self.done.min(recording.len())..];
+        let ended = if stream.broken {
+            Err(String::new())
+        } else {
+            feed(recognizer, rest, &stop).and_then(|(_, speech_ms)| {
+                self.speech_ms += speech_ms;
+                recognizer.stream_end(&stop)
+            })
+        };
+        let Ok(ended) = ended else {
+            // Start again, as if nothing had been streamed.
+            let handed = !self.pieces.is_empty();
+            *self = Live::costing(self.cost_ms);
+            let trimmed = isolate(recognizer, recording)?;
+            self.take(trimmed, recognizer, hint)?;
+            return Ok(self.spoke.then(|| Transcript {
+                raw: self.pieces.join(" "),
+                speech_ms: self.speech_ms,
+                heard: std::mem::take(&mut self.heard),
+                pieces: 1,
+                parts: std::mem::take(&mut self.pieces),
+                revised: handed,
+            }));
+        };
+        self.done = recording.len();
+        let raw = strip_tags(ended.full.trim());
+        if self.speech_ms == 0 && raw.is_empty() {
+            return Ok(None);
+        }
+        let raw = if is_phantom(&raw, self.speech_ms) { String::new() } else { raw };
+        let handed = stream.settled[..stream.handed.min(stream.settled.len())].trim();
+        // The sentences handed out must still be whole sentences of the final
+        // text: "Hello." does not begin "Hello... there".
+        let revised = !raw
+            .strip_prefix(handed)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace));
+        let mut parts = std::mem::take(&mut self.pieces);
+        if revised {
+            parts = vec![raw.clone()];
+        } else if !raw[handed.len()..].trim().is_empty() {
+            parts.push(raw[handed.len()..].trim().to_string());
+        }
+        parts.retain(|part| !part.is_empty());
+        Ok(Some(Transcript {
+            raw,
+            speech_ms: self.speech_ms,
+            heard: recognizer.heard(),
+            pieces: 1,
+            parts,
+            revised,
         }))
     }
 
@@ -297,10 +476,46 @@ impl Live {
     }
 }
 
+impl Stream {
+    /// Gives up on a stream that has fallen `behind` samples behind the
+    /// speaker. The audio being fed is told to stop.
+    fn keep_up(&mut self, behind: usize) {
+        if behind > BEHIND_MS * MS {
+            self.broken = true;
+            self.feeding = None;
+        }
+    }
+}
+
+/// Gives a stream more audio, and finds how much of it was speech.
+fn feed(recognizer: &mut dyn Recognizer, audio: &[f32], stop: &std::sync::atomic::AtomicBool) -> Result<Fed> {
+    let speech = match audio::normalize(audio) {
+        None => 0,
+        Some(loud) => match recognizer.detect(&loud, audio::DETECTION.threshold) {
+            Some(found) => found?.iter().map(Range::len).sum::<usize>(),
+            None => audio.len(),
+        },
+    };
+    let streamed = recognizer.stream_feed(audio, stop)?;
+    Ok((streamed, (speech / MS) as u64))
+}
+
+/// Where the last whole sentence in `text` after byte `from` ends: just
+/// after its full stop, question or exclamation mark, once the next word
+/// has begun, so the sentence cannot still be going on.
+fn sentences_end(text: &str, from: usize) -> Option<usize> {
+    let tail = text.get(from..)?;
+    let bytes = tail.as_bytes();
+    (1..bytes.len())
+        .rev()
+        .find(|&i| matches!(bytes[i - 1], b'.' | b'?' | b'!') && bytes[i].is_ascii_whitespace())
+        .map(|i| from + i)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::asr::{Fixed, Shared};
+    use crate::asr::{Fixed, Shared, Talker};
     use crate::audio::tone;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -568,5 +783,167 @@ mod tests {
         );
         assert_eq!(Broken.transcribe(&[], &HINT).unwrap(), "");
         assert_eq!(Broken.name(), "broken");
+    }
+
+    #[test]
+    fn a_streaming_model_is_given_the_audio_as_it_comes() {
+        let recording = tone(3500, 0.3);
+        let mut asr = Talker::new(
+            &["", "Hello there. How", "Hello there. How are you? I"],
+            "Hello there. How are you? I am fine.",
+        );
+        let mut live = Live::default();
+        // Too little to be worth feeding yet.
+        assert!(!live.advance(&recording[..200 * MS], &mut asr, &HINT).unwrap());
+        assert_eq!(asr.started, 0);
+        // Nothing settled yet.
+        assert!(!live.advance(&recording[..1000 * MS], &mut asr, &HINT).unwrap());
+        assert_eq!((asr.started, live.done()), (1, 1000 * MS));
+        // Each settled sentence becomes a piece, once the next one has begun.
+        assert!(live.advance(&recording[1000 * MS..2000 * MS], &mut asr, &HINT).unwrap());
+        assert!(live.advance(&recording[2000 * MS..3000 * MS], &mut asr, &HINT).unwrap());
+        assert_eq!(live.pieces(), ["Hello there.", "How are you?"]);
+        let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
+        assert_eq!(heard.raw, "Hello there. How are you? I am fine.");
+        assert_eq!(heard.parts, ["Hello there.", "How are you?", "I am fine."]);
+        assert!(!heard.revised);
+        assert_eq!((heard.speech_ms, heard.pieces), (3500, 1));
+        // The stream was started once and given every sample once.
+        assert_eq!((asr.started, asr.fed), (1, recording.len()));
+        assert_eq!(asr.transcribe(&[], &HINT).unwrap(), "");
+        assert_eq!(asr.name(), "talker");
+    }
+
+    #[test]
+    fn a_stream_that_changes_its_mind_or_breaks_is_taken_from_the_start() {
+        let recording = tone(2500, 0.3);
+        // The model hears the start differently once it has heard the end.
+        let mut asr = Talker::new(&["One. Two"], "Won. Two too.");
+        let mut live = Live::default();
+        assert!(live.advance(&recording[..1000 * MS], &mut asr, &HINT).unwrap());
+        let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
+        assert!(heard.revised);
+        assert_eq!(heard.parts, ["Won. Two too."]);
+        // The same words, but the handed sentence no longer ends there.
+        let mut asr = Talker::new(&["Hello. And"], "Hello... and then.");
+        let mut live = Live::default();
+        assert!(live.advance(&recording[..1000 * MS], &mut asr, &HINT).unwrap());
+        let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
+        assert_eq!(
+            (heard.revised, heard.parts),
+            (true, vec!["Hello... and then.".to_string()])
+        );
+
+        // A failed feed gives the stream up; the whole recording is
+        // recognised at the end instead.
+        let mut asr = Talker::new(&[], "never");
+        asr.settles = vec![Err("The graphics card was lost".into())];
+        asr.whole = "from the start".into();
+        let mut live = Live::default();
+        let failed = live.advance(&recording[..1000 * MS], &mut asr, &HINT).unwrap_err();
+        assert_eq!(failed, "The graphics card was lost");
+        assert!(!live.advance(&recording[..2000 * MS], &mut asr, &HINT).unwrap());
+        let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
+        assert_eq!((heard.raw.as_str(), heard.revised), ("from the start", false));
+
+        // So does a failure at the very end, after pieces were handed out.
+        let mut asr = Talker::new(&["Done. And"], "");
+        asr.ending = Err("The graphics card was lost".into());
+        asr.whole = "Done and more.".into();
+        let mut live = Live::default();
+        assert!(live.advance(&recording[..1000 * MS], &mut asr, &HINT).unwrap());
+        let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
+        assert_eq!((heard.raw.as_str(), heard.revised), ("Done and more.", true));
+    }
+
+    #[test]
+    fn silence_streams_to_nothing_and_a_phantom_is_dropped() {
+        let quiet = silence(1500);
+        let mut asr = Talker::new(&[""], "");
+        let mut live = Live::default();
+        assert!(!live.advance(&quiet, &mut asr, &HINT).unwrap());
+        assert_eq!(live.finish(&quiet, &mut asr, &HINT).unwrap(), None);
+        // Without a detector, all the audio counts as speech: not enough
+        // for "Thank you." said in earnest.
+        let short = tone(600, 0.3);
+        let mut asr = Talker::new(&[""], "Thank you.");
+        asr.detects = false;
+        let mut live = Live::default();
+        assert!(!live.advance(&short, &mut asr, &HINT).unwrap());
+        let heard = live.finish(&short, &mut asr, &HINT).unwrap().unwrap();
+        assert_eq!((heard.raw.as_str(), heard.speech_ms), ("", 600));
+        assert!(heard.parts.is_empty());
+    }
+
+    #[test]
+    fn a_shared_streaming_model_is_fed_on_its_own_thread() {
+        let recording = tone(2000, 0.3);
+        let gate = Arc::new(Mutex::new(()));
+        let mut talker = Talker::new(
+            &["Fed elsewhere. Then", "Fed elsewhere. Then more"],
+            "Fed elsewhere. Then more.",
+        );
+        talker.gate = Some(gate.clone());
+        let mut asr = Shared::new(talker);
+        let mut live = Live::default();
+        let held = gate.lock().unwrap();
+        assert!(!live.advance(&recording[..1000 * MS], &mut asr, &HINT).unwrap());
+        // Still being fed: nothing to collect yet, and nothing new is sent.
+        assert!(!live.advance(&recording[..1000 * MS], &mut asr, &HINT).unwrap());
+        assert_eq!(live.done(), 0);
+        drop(held);
+        let mut settled = false;
+        eventually(|| {
+            settled = live
+                .advance(&recording[live.done()..1000 * MS], &mut asr, &HINT)
+                .unwrap();
+            settled
+        });
+        assert_eq!(
+            (live.done(), live.pieces()),
+            (1000 * MS, &["Fed elsewhere.".to_string()][..])
+        );
+        // A release while audio is still being fed waits for it.
+        assert!(!live.advance(&recording[1000 * MS..], &mut asr, &HINT).unwrap());
+        let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
+        assert_eq!(heard.parts, ["Fed elsewhere.", "Then more."]);
+        assert_eq!(asr.lock().fed, recording.len());
+    }
+
+    #[test]
+    fn a_stream_that_falls_behind_is_given_up() {
+        let recording = tone(6000, 0.3);
+        let gate = Arc::new(Mutex::new(()));
+        let mut talker = Talker::new(&["Too slow. To"], "never");
+        talker.whole = "in one go".into();
+        talker.gate = Some(gate.clone());
+        let mut asr = Shared::new(talker);
+        let mut live = Live::default();
+        let held = gate.lock().unwrap();
+        assert!(!live.advance(&recording[..1000 * MS], &mut asr, &HINT).unwrap());
+        // The model is still on the first second when the speaker is five in.
+        assert!(live.listening());
+        assert!(!live.advance(&recording[..5000 * MS], &mut asr, &HINT).unwrap());
+        // Given up: the rest of the recording need not be fetched any more.
+        assert!(!live.listening());
+        drop(held);
+        let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
+        assert_eq!((heard.raw.as_str(), heard.revised), ("in one go", false));
+        // Falling behind is noticed at the end too.
+        let mut asr = Talker::new(&["Slow."], "never");
+        asr.whole = "at the end".into();
+        let mut live = Live::default();
+        assert!(!live.advance(&recording[..1000 * MS], &mut asr, &HINT).unwrap());
+        let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
+        assert_eq!(heard.raw, "at the end");
+    }
+
+    #[test]
+    fn a_sentence_ends_only_once_the_next_word_has_begun() {
+        assert_eq!(sentences_end("Hi. There", 0), Some(3));
+        assert_eq!(sentences_end("Hi. There", 3), None);
+        assert_eq!(sentences_end("Hi.", 0), None);
+        assert_eq!(sentences_end("3.5 kg", 0), None);
+        assert_eq!(sentences_end("Hi", 9), None);
     }
 }

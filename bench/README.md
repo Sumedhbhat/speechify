@@ -244,6 +244,11 @@ speechify-bench latency "$EVAL/manifest.json" "$EVAL/latency/p3-30.json" parakee
 LIVE_LLM_URL=http://127.0.0.1:11434 speechify-bench blocks "$EVAL/manifest.json" "$EVAL/latency/blocks.json" parakeet-tdt-0.6b-v3 60 3
 ```
 
+With a streaming model (`parakeet-unified-en-0.6b`), `live` and `pieces` feed
+it the audio as it comes instead of cutting pieces; `pieces` then measures
+accuracy and the time to finish the stream as if the machine kept up. Modes are
+one comma-separated argument, as in `pieces,whole`.
+
 The voice detector is used, as in the app. `latency` scores raw recogniser
 output, so fillers and spoken numbers count as errors there; `blocks` scores
 the cleaned-up text of both paths. Each output file holds one set of

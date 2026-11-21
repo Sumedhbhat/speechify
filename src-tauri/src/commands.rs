@@ -33,6 +33,9 @@ pub fn save_settings(app: AppHandle, shared: App, settings: Settings) -> Result<
     // Reject unusable shortcuts before anything is stored.
     Tracker::new(&settings.hotkeys)?;
     catalog::find(&settings.speech.model)?;
+    if settings.speech.streaming && !catalog::find(&settings.speech.streaming_model)?.streaming {
+        return Err("That model cannot recognise speech as you speak".into());
+    }
     catalog::find(&settings.teacher.speech_model)?;
     let launcher = app.autolaunch();
     let launch_result = if settings.launch_at_login { launcher.enable() } else { launcher.disable() };
@@ -275,6 +278,8 @@ pub struct SpeechModel {
     bytes: u64,
     notes: String,
     wants_gpu: bool,
+    /// Made for the streaming setup.
+    streaming: bool,
     installed: bool,
     active: bool,
     teacher: bool,
@@ -288,13 +293,14 @@ pub fn models(shared: App) -> Vec<SpeechModel> {
         .into_iter()
         .map(|model| SpeechModel {
             installed: catalog::installed(&dir, &model),
-            active: settings.speech.model == model.id,
+            active: settings.speech.active_model() == model.id,
             teacher: settings.teacher.speech_model == model.id,
             id: model.id,
             name: model.name,
             bytes: model.bytes,
             notes: model.notes,
             wants_gpu: model.wants_gpu,
+            streaming: model.streaming,
         })
         .collect()
 }

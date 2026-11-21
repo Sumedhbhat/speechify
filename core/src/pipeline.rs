@@ -667,8 +667,9 @@ pub fn run_live(
         let (used, whole) = (draft.used, draft.whole);
         let rest = &heard.parts[used.min(heard.parts.len())..];
         // Blocks that came to nothing still used their words. A correction
-        // that may undo part of a cleaned-up block means starting over.
-        let composed = if used == 0 || whole || format::reaches_back(&rest.join(" ")) {
+        // that may undo part of a cleaned-up block means starting over, and
+        // so do blocks whose words the recogniser later heard differently.
+        let composed = if used == 0 || whole || heard.revised || format::reaches_back(&rest.join(" ")) {
             compose_part(&raw, &to, (circuit, now_ms), Part::Whole)
         } else {
             finish_blocks(blocks, rest, &to, (circuit, now_ms))
@@ -1008,6 +1009,56 @@ mod tests {
             (&mut circuit, 0),
         ));
         assert_eq!(paste, "The plan for the launch is simple. ");
+    }
+
+    #[test]
+    fn blocks_a_streaming_model_heard_differently_in_the_end_are_cleaned_up_again() {
+        let store = Store::memory();
+        let settings = Settings::default();
+        let target = Target::default();
+        let llm = Scripted::new(vec![
+            Ok("The plan for the launch is simple.".into()),
+            Ok("The plan for the lunch is simple, and that is all.".into()),
+        ]);
+        let to = Destination {
+            target: &target,
+            category: Category::Other,
+            settings: &settings,
+            store: &store,
+            rewriter: Some(&llm),
+        };
+        let mut circuit = RewriteCircuit::default();
+        let audio = tone(3000, 0.3);
+        let mut asr = crate::asr::Talker::new(
+            &[&format!("{FIRST} And")],
+            &format!("{} And that is all.", FIRST.replace("launch", "lunch")),
+        );
+        let mut live = Live::default();
+        assert!(live
+            .advance(
+                &audio,
+                &mut asr,
+                &Hint {
+                    language: "en",
+                    ..Hint::default()
+                }
+            )
+            .unwrap());
+        let mut draft = Draft::new(live);
+        assert!(draft.clean(&to, (&mut circuit, 0)));
+        let (paste, record, _) = text(run_live(
+            &request(&audio, "A"),
+            &mut draft,
+            &settings,
+            &store,
+            &mut asr,
+            Some(&llm),
+            (&mut circuit, 0),
+        ));
+        assert_eq!(paste, "The plan for the lunch is simple, and that is all. ");
+        assert!(record.raw.contains("lunch"));
+        let seen = llm.seen.borrow();
+        assert!(seen[1].1.contains("lunch") && !seen[1].1.contains("EARLIER"));
     }
 
     #[test]
