@@ -96,7 +96,11 @@ describe("models page", () => {
     await settle();
     expect(ctx.api.saveSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        speech: expect.objectContaining({ streaming: true, streaming_model: "unified", model: "turbo" }),
+        speech: expect.objectContaining({
+          streaming: true,
+          streaming_model: "unified",
+          model: "turbo",
+        }),
       }),
     );
 
@@ -104,7 +108,9 @@ describe("models page", () => {
     button(card("Whisper turbo"), "Use for dictation").click();
     await settle();
     expect(ctx.api.saveSettings).toHaveBeenLastCalledWith(
-      expect.objectContaining({ speech: expect.objectContaining({ streaming: false, model: "turbo" }) }),
+      expect.objectContaining({
+        speech: expect.objectContaining({ streaming: false, model: "turbo" }),
+      }),
     );
   });
 
