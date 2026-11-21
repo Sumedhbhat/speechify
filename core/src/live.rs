@@ -129,6 +129,9 @@ type Fed = (Streamed, u64);
 struct Stream {
     /// The model accepted the start of the stream.
     started: bool,
+    /// The model has answered a feed, so how far behind it is means something
+    /// (the first feed also warms the model up).
+    answered: bool,
     /// Something went wrong: the whole recording is recognised at the end.
     broken: bool,
     /// The text the model has settled on so far.
@@ -277,7 +280,8 @@ impl Live {
                 let samples = pending.to_vec();
                 let language = hint.language.to_string();
                 let job = Job::start(move |stop| {
-                    if begin {
+                    // A feed cancelled before it began starts no stream.
+                    if begin && !stop.load(std::sync::atomic::Ordering::SeqCst) {
                         shared.stream_start(&Hint {
                             language: &language,
                             ..Hint::default()
@@ -310,6 +314,7 @@ impl Live {
         };
         self.done += length;
         self.speech_ms += speech_ms;
+        stream.answered = true;
         stream.settled = streamed.settled;
         let Some(end) = sentences_end(&stream.settled, stream.handed) else { return Ok(false) };
         let piece = stream.settled[stream.handed..end].trim().to_string();
@@ -334,6 +339,8 @@ impl Live {
             self.stream = Some(stream);
             let _ = self.fed(length, job.wait());
             stream = self.stream.take().expect("a stream");
+            // Now that it has answered, see whether the model kept up.
+            stream.keep_up(recording.len().saturating_sub(self.done));
         }
         let rest = &recording[self.done.min(recording.len())..];
         let ended = if stream.broken {
@@ -368,9 +375,10 @@ impl Live {
         let handed = stream.settled[..stream.handed.min(stream.settled.len())].trim();
         // The sentences handed out must still be whole sentences of the final
         // text: "Hello." does not begin "Hello... there".
-        let revised = !raw
-            .strip_prefix(handed)
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace));
+        let revised = !handed.is_empty()
+            && !raw
+                .strip_prefix(handed)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace));
         let mut parts = std::mem::take(&mut self.pieces);
         if revised {
             parts = vec![raw.clone()];
@@ -480,7 +488,7 @@ impl Stream {
     /// Gives up on a stream that has fallen `behind` samples behind the
     /// speaker. The audio being fed is told to stop.
     fn keep_up(&mut self, behind: usize) {
-        if behind > BEHIND_MS * MS {
+        if self.answered && behind > BEHIND_MS * MS {
             self.broken = true;
             self.feeding = None;
         }
@@ -873,6 +881,12 @@ mod tests {
         let heard = live.finish(&short, &mut asr, &HINT).unwrap().unwrap();
         assert_eq!((heard.raw.as_str(), heard.speech_ms), ("", 600));
         assert!(heard.parts.is_empty());
+        // Words with nothing handed out before them were not revised.
+        let mut asr = Talker::new(&[""], "Hi there.");
+        let mut live = Live::default();
+        assert!(!live.advance(&short, &mut asr, &HINT).unwrap());
+        let heard = live.finish(&short, &mut asr, &HINT).unwrap().unwrap();
+        assert_eq!((heard.raw.as_str(), heard.revised), ("Hi there.", false));
     }
 
     #[test]
@@ -919,16 +933,21 @@ mod tests {
         talker.gate = Some(gate.clone());
         let mut asr = Shared::new(talker);
         let mut live = Live::default();
+        // The first feed, which also warms the model up, answers in time.
+        eventually(|| {
+            live.advance(&recording[live.done()..1000 * MS], &mut asr, &HINT)
+                .unwrap()
+        });
         let held = gate.lock().unwrap();
-        assert!(!live.advance(&recording[..1000 * MS], &mut asr, &HINT).unwrap());
-        // The model is still on the first second when the speaker is five in.
+        assert!(!live.advance(&recording[1000 * MS..1500 * MS], &mut asr, &HINT).unwrap());
+        // The model is still on that half second when the speaker is six in.
         assert!(live.listening());
-        assert!(!live.advance(&recording[..5000 * MS], &mut asr, &HINT).unwrap());
+        assert!(!live.advance(&recording[1000 * MS..], &mut asr, &HINT).unwrap());
         // Given up: the rest of the recording need not be fetched any more.
         assert!(!live.listening());
         drop(held);
         let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
-        assert_eq!((heard.raw.as_str(), heard.revised), ("in one go", false));
+        assert_eq!((heard.raw.as_str(), heard.revised), ("in one go", true));
         // Falling behind is noticed at the end too.
         let mut asr = Talker::new(&["Slow."], "never");
         asr.whole = "at the end".into();

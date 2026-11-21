@@ -231,6 +231,7 @@ api! {
     transcribe_stream_reset: unsafe extern "C" fn(*mut c_void),
     transcribe_stream_text_init: unsafe extern "C" fn(*mut StreamText),
     transcribe_stream_get_text: unsafe extern "C" fn(*mut c_void, *mut StreamText) -> i32,
+    transcribe_was_truncated: unsafe extern "C" fn(*mut c_void) -> bool,
     transcribe_device_get: unsafe extern "C" fn(i32) -> *mut c_void,
 }
 
@@ -697,6 +698,11 @@ impl Engine {
         if !self.streaming {
             return Err("No speech is being recognised as it comes".into());
         }
+        // Work nobody wants any more, such as a cancelled feed that only now
+        // got the model, must not touch a stream a newer dictation started.
+        if stop.load(Ordering::SeqCst) {
+            return Err(explain(13));
+        }
         let api = &self.runtime.api;
         let flag = stop as *const AtomicBool as *mut c_void;
         let status = unsafe {
@@ -846,6 +852,10 @@ impl Recognizer for Engine {
         })?;
         self.streaming = false;
         self.heard = unsafe { self.words() };
+        // A stream that reached the model's limit still ends "fine"; this is
+        // the only sign that its text is cut short.
+        let truncated = unsafe { (self.runtime.api.transcribe_was_truncated)(self.session) };
+        check(if truncated { 17 } else { 0 })?;
         Ok(ended)
     }
 
@@ -1115,6 +1125,8 @@ mod tests {
         let cancelled = AtomicBool::new(true);
         let stopped = engine.stream_feed(&speech[32_000..], &cancelled).unwrap_err();
         assert_eq!(stopped, "Recognition was stopped");
+        // A step that fails ends the stream.
+        assert!(engine.stream_feed(&[f32::NAN; 160], &stop).is_err());
         assert!(engine.stream_end(&stop).is_err());
         // ...and one simply left behind does not get in the way of the next run.
         engine.stream_start(&english).unwrap();

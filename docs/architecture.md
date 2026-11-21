@@ -135,7 +135,7 @@ Some models are trained to recognise speech as it arrives, rather than a finishe
 - A cancel drops the feed in flight, and the abort callback stops it at the next decoding step. A stream left unfinished is reset before the model is used again.
 - The voice detector still runs on each fed chunk, only to count the speech (words per minute, the phantom check).
 
-Parakeet Unified re-encodes 5.6 s of left context plus 1.04 s of lookahead for every 1.04 s of new audio, so it does about seven times the work of recognising the recording once. The left context is fixed by the model file, so this cannot be lowered. A graphics card does this faster than real time; a laptop CPU does not, which is why the model is marked `wants_gpu`.
+Parakeet Unified re-encodes 5.6 s of left context plus 1.04 s of lookahead for every 1.04 s of new audio, so it does about seven times the work of recognising the recording once. The stream API lets the caller choose the left context, but this model file offers only 5.6 s, so it cannot be lowered. A graphics card does this faster than real time; a laptop CPU does not, which is why the model is marked `wants_gpu`.
 
 Measured on the development laptop's CPU (Ryzen 5 3500U) with the same Svarah recordings as the pieces work, word error rate pooled over each set:
 
