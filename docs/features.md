@@ -5,7 +5,7 @@ This page describes what Speechify does to your words between the microphone and
 ## The two cleanup layers
 
 1. **The rule-based formatter** always runs. It is deterministic, fast and needs nothing installed.
-2. **An optional language model** (Ollama by default, or any OpenAI-compatible server) rewrites the text first when it is enabled, reachable, and the dictation has at least 6 words (`rewrite.min_words`).
+2. **An optional language model** (llama-server by default, Ollama or another OpenAI-compatible server) rewrites the text first when it is enabled, reachable, and the dictation has at least 6 words (`rewrite.min_words`).
 
 The model's answer is checked before it is used. It is thrown away, and the rule-based result is pasted, when:
 
@@ -193,7 +193,7 @@ Retention in Settings is Keep (default), Day (delete dictations older than a day
 
 ## The nightly teacher
 
-After the set hour (2 am by default) and once a day, when the app is idle, the teacher reviews dictations that have a recording and have not been reviewed. It loads the larger speech model (Whisper large-v3) and, if Ollama has it, the larger language model (`qwen3.5:9b-q4_K_M`), then for up to 200 dictations:
+After the set hour (2 am by default) and once a day, when the app is idle, the teacher reviews dictations that have a recording and have not been reviewed. It loads the larger speech model (Whisper large-v3) and, if the configured server has it, the larger language model (`qwen3.5:9b-q4_K_M`), then for up to 200 dictations:
 
 1. Transcribes the recording again with the larger speech model.
 2. Scores the everyday model's transcript against it as a word error rate.

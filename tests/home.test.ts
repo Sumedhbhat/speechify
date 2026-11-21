@@ -7,6 +7,7 @@ import {
   dictation,
   insights,
   makeDeps,
+  settings,
   settle,
   status,
   toasts,
@@ -74,6 +75,16 @@ describe("home header", () => {
     expect(document.querySelectorAll(".step.done").length).toBe(2);
     ctx.api.getStatus.mockResolvedValue(status({ platform: "macos" }));
     await page.show();
+    expect(document.querySelector(".checklist")).toBeNull();
+  });
+
+  it("hides the checklist when speech and shortcuts are ready with built-in cleanup", async () => {
+    ctx.api.getSettings.mockResolvedValue({
+      ...settings(),
+      rewrite: { ...settings().rewrite, enabled: false },
+    });
+    ctx.api.getStatus.mockResolvedValue(status({ rewrite_reachable: false }));
+    await setup([]);
     expect(document.querySelector(".checklist")).toBeNull();
   });
 

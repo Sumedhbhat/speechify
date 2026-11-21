@@ -102,6 +102,34 @@ export function createModelsPage(deps: Deps): Page {
   );
   const pulled = h("p", { className: "status-note ok", hidden: true });
 
+  const pullControls = h("div", {}, [
+    h("div", { className: "row" }, [pullButton, pulled]),
+    pullMeter,
+  ]);
+  const setup = h("details", { className: "advanced" }, [
+    h("summary", { textContent: "Set up llama-server" }),
+    h("p", { className: "hint" }, [
+      "Install llama.cpp from ",
+      h("code", { textContent: "github.com/ggml-org/llama.cpp/releases" }),
+      ". Download Llama-3.2-3B-Instruct-Q4_K_M.gguf from bartowski/Llama-3.2-3B-Instruct-GGUF on Hugging Face. Put it beside the server executable and run the command from that folder.",
+    ]),
+    h("p", {}, [
+      h("code", {
+        textContent:
+          "./llama-server -m Llama-3.2-3B-Instruct-Q4_K_M.gguf --alias llama3.2:3b -c 4096 --host 127.0.0.1 --port 18080 --log-disable",
+      }),
+    ]),
+    h("p", {
+      className: "hint",
+      textContent:
+        "On Windows, replace ./llama-server with .\\llama-server.exe in PowerShell. Keep the server open. Set Server to http://127.0.0.1:18080/v1 and Model to llama3.2:3b, click Refresh, then turn on language-model cleanup.",
+    }),
+  ]);
+
+  function updatePullControls(url: string): void {
+    pullControls.hidden = url.trim().replace(/\/+$/, "").endsWith("/v1");
+  }
+
   async function guard(run: () => Promise<unknown>): Promise<void> {
     try {
       await run();
@@ -253,7 +281,9 @@ export function createModelsPage(deps: Deps): Page {
     reachNote.className = `status-note${ok ? " ok" : " error"}`;
     reachNote.replaceChildren(
       h("span", { className: "status-dot", "data-state": ok ? "ready" : "error" }),
-      ok ? "Connected" : "Can't reach the server. If you use Ollama, check that it is running.",
+      ok
+        ? "Connected"
+        : "Can't reach the server. Start it and click Refresh. Dictation can use the built-in rules.",
     );
     modelList.replaceChildren(...answer.models.map((name) => h("option", { value: name })));
     pullButton.disabled = !ok;
@@ -261,9 +291,11 @@ export function createModelsPage(deps: Deps): Page {
 
   /** Asks the server; only the newest answer is shown, so a slow one cannot undo a later one. */
   async function checkReach(): Promise<void> {
+    const { rewrite } = await store.settled();
     const ticket = ++latest;
-    const answer = await api.rewriteStatus();
-    if (ticket === latest) renderReach(answer);
+    const reach = await api.rewriteStatus();
+    const accepted = await store.settled();
+    if (ticket === latest && rewrite.url === accepted.rewrite.url) renderReach(reach);
   }
 
   /** Asks the server again, e.g. after starting Ollama with the page open. */
@@ -271,8 +303,6 @@ export function createModelsPage(deps: Deps): Page {
     const focused = document.activeElement === refreshButton;
     refreshButton.disabled = true;
     await guard(async () => {
-      // A server address typed just before clicking may still be saving.
-      await store.settled();
       await checkReach();
     });
     refreshButton.disabled = false;
@@ -298,7 +328,7 @@ export function createModelsPage(deps: Deps): Page {
   function renderLanguage(settings: Settings, status: Status, current: boolean): void {
     const modelField = text(store, settings, {
       label: "Model",
-      placeholder: "gemma3:4b",
+      placeholder: "llama3.2:3b",
       list: modelList.id,
       get: (s) => s.rewrite.model,
       set: (s, v) => (s.rewrite.model = v),
@@ -309,6 +339,7 @@ export function createModelsPage(deps: Deps): Page {
     server = settings.rewrite.url;
     if (current)
       renderReach({ reachable: status.rewrite_reachable, models: status.rewrite_models });
+    updatePullControls(settings.rewrite.url);
     language.replaceChildren(
       toggle(store, settings, {
         label: "Tidy text with a language model",
@@ -318,8 +349,8 @@ export function createModelsPage(deps: Deps): Page {
       }),
       text(store, settings, {
         label: "Server",
-        hint: "Ollama (the default) or any OpenAI-compatible server, with an address ending in /v1.",
-        placeholder: "http://127.0.0.1:11434",
+        hint: "Use the llama-server address below, another OpenAI-compatible address ending in /v1, or the address of an Ollama server.",
+        placeholder: "http://127.0.0.1:18080/v1",
         type: "url",
         get: (s) => s.rewrite.url,
         set: (s, v) => (s.rewrite.url = v),
@@ -327,8 +358,8 @@ export function createModelsPage(deps: Deps): Page {
       reachRow,
       modelField,
       modelList,
-      h("div", { className: "row" }, [pullButton, pulled]),
-      pullMeter,
+      pullControls,
+      setup,
       number(store, settings, {
         label: "Give up after",
         hint: "If the model is slower than this, the text from the built-in rules is typed instead.",
@@ -402,6 +433,7 @@ export function createModelsPage(deps: Deps): Page {
   });
 
   store.subscribe((next) => {
+    updatePullControls(next.rewrite.url);
     if (next.rewrite.url !== server) {
       server = next.rewrite.url;
       // The old server's list says nothing about the new one: offer the
@@ -427,15 +459,19 @@ export function createModelsPage(deps: Deps): Page {
     async show() {
       // Opening the page asks the server too, so a check still in flight is now older.
       const ticket = ++latest;
-      const [list, status, settings] = await Promise.all([
+      const openingSettings = store.load();
+      const [list, status, opening] = await Promise.all([
         api.models(),
         api.getStatus(),
-        store.load(),
+        openingSettings,
       ]);
+      const settings = await store.settled();
+      const currentServer = opening.rewrite.url === settings.rewrite.url;
       models = list;
       renderCards();
       renderDevice(settings, status);
-      renderLanguage(settings, status, ticket === latest);
+      renderLanguage(settings, status, ticket === latest && currentServer);
+      if (ticket === latest && !currentServer) await guard(checkReach);
       startHeartbeat();
     },
   };
