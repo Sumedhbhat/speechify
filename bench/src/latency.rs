@@ -185,7 +185,7 @@ pub fn run(manifest: &Path, output: &Path, model: &str, seconds: f64, limit: usi
             let finish_started = Instant::now();
             let outcome = pipeline::run_live(
                 &request(&pcm),
-                pipeline::Draft::new(live),
+                &mut pipeline::Draft::new(live),
                 &s,
                 &store,
                 &mut engine,
@@ -278,7 +278,7 @@ pub fn blocks(manifest: &Path, output: &Path, model: &str, seconds: f64, limit: 
         }
         let outcome = pipeline::run_live(
             &request(&pcm),
-            draft,
+            &mut draft,
             &s,
             &store,
             &mut engine,

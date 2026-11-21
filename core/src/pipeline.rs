@@ -341,7 +341,7 @@ pub fn run_guarded(
 ) -> Result<Outcome> {
     run_live(
         request,
-        Draft::default(),
+        &mut Draft::default(),
         settings,
         store,
         recognizer,
@@ -456,10 +456,11 @@ fn join_blocks<'a>(blocks: impl Iterator<Item = (&'a str, &'a str)>, literal: bo
 }
 
 /// Finishes a dictation whose start `draft` may already have recognised,
-/// and partly cleaned up, while it was being recorded.
+/// and partly cleaned up, while it was being recorded. The draft is used up,
+/// but its recogniser timing can still be read afterwards.
 pub fn run_live(
     request: &Request,
-    draft: Draft,
+    draft: &mut Draft,
     settings: &Settings,
     store: &Store,
     recognizer: &mut dyn Recognizer,
@@ -473,13 +474,9 @@ pub fn run_live(
         vocabulary: &vocabulary,
         previous: "",
     };
-    let Draft {
-        live,
-        blocks,
-        used,
-        whole,
-    } = draft;
-    let Some(heard) = live.finish(request.audio, recognizer, &hint)? else { return Ok(Outcome::Silent) };
+    let blocks = std::mem::take(&mut draft.blocks);
+    let (used, whole) = (draft.used, draft.whole);
+    let Some(heard) = draft.live.finish(request.audio, recognizer, &hint)? else { return Ok(Outcome::Silent) };
     let raw = heard.raw;
     let asr_ms = started.elapsed().as_millis() as u32;
     if raw.is_empty() {
@@ -639,7 +636,7 @@ mod tests {
         assert!(!draft.clean(&to, (&mut circuit, 0)));
         let outcome = run_live(
             &request(&audio, "WhatsApp"),
-            draft,
+            &mut draft,
             &settings,
             &store,
             &mut asr,
@@ -723,7 +720,7 @@ mod tests {
         assert!(!draft.clean(&to, (&mut circuit, 0)));
         let (paste, _, enter) = text(run_live(
             &request(&audio[..5000 * 16], "A"),
-            draft,
+            &mut draft,
             &settings,
             &store,
             &mut asr,
@@ -746,7 +743,7 @@ mod tests {
         assert!(draft.clean(&to, (&mut circuit, 0)));
         let (paste, _, _) = text(run_live(
             &request(&audio, "A"),
-            draft,
+            &mut draft,
             &settings,
             &store,
             &mut asr,
@@ -777,7 +774,7 @@ mod tests {
         assert!(draft.whole);
         let (paste, _, _) = text(run_live(
             &request(&longer, "A"),
-            draft,
+            &mut draft,
             &settings,
             &store,
             &mut asr,
@@ -830,7 +827,7 @@ mod tests {
         assert_eq!(store.dictionary().unwrap()[0].hits, 0);
         let (paste, record, _) = text(run_live(
             &request(&audio, "A"),
-            draft,
+            &mut draft,
             &settings,
             &store,
             &mut asr,
@@ -905,7 +902,7 @@ mod tests {
         assert!(draft.clean(&to, (&mut circuit, 0)));
         let (paste, record, _) = text(run_live(
             &request(&audio, "Windows Terminal"),
-            draft,
+            &mut draft,
             &settings,
             &store,
             &mut asr,
@@ -926,7 +923,7 @@ mod tests {
         assert!(draft.clean(&to, (&mut circuit, 0)));
         let outcome = run_live(
             &request(&audio, "A"),
-            draft,
+            &mut draft,
             &settings,
             &store,
             &mut asr,

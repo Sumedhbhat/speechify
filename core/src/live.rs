@@ -103,7 +103,8 @@ impl Live {
         }
     }
 
-    /// How long the last piece took to recognise.
+    /// How long the last piece with speech took to recognise. A piece of
+    /// silence is not recognised and leaves this as it was.
     pub fn cost_ms(&self) -> u64 {
         self.cost_ms
     }
@@ -144,8 +145,9 @@ impl Live {
 
     /// Recognises what is left of `recording`, the whole of it, and returns
     /// the transcript, or `None` when there was no speech in it at all.
+    /// The recording is left behind, so `cost_ms` can still be read.
     pub fn finish(
-        mut self,
+        &mut self,
         recording: &[f32],
         recognizer: &mut dyn Recognizer,
         hint: &Hint,
@@ -155,9 +157,9 @@ impl Live {
         Ok(self.spoke.then(|| Transcript {
             raw: self.pieces.join(" "),
             speech_ms: self.speech_ms,
-            heard: self.heard,
+            heard: std::mem::take(&mut self.heard),
             pieces: self.taken,
-            parts: self.pieces,
+            parts: std::mem::take(&mut self.pieces),
         }))
     }
 
@@ -275,6 +277,10 @@ mod tests {
         assert_eq!(live.done(), 8500 * MS);
         // Recognising "first" took no time at all.
         assert!(live.cost_ms() < 1000);
+        // An ending with no speech is not recognised, and says nothing about speed.
+        let mut quiet = Live::costing(4000);
+        assert_eq!(quiet.finish(&silence(2000), &mut asr, &HINT).unwrap(), None);
+        assert_eq!(quiet.cost_ms(), 4000);
     }
 
     #[test]

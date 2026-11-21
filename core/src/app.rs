@@ -226,7 +226,6 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                     let target = self.target.clone();
                     let selection = if command { self.platform.selection() } else { String::new() };
                     let draft = std::mem::take(&mut self.draft);
-                    self.piece_cost_ms = draft.live.cost_ms();
                     self.process(&settings, audio, draft, target, command, selection);
                     self.session.handle(Event::Finished, self.platform.now_ms());
                 }
@@ -329,7 +328,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
         &mut self,
         settings: &Settings,
         audio: Vec<f32>,
-        draft: Draft,
+        mut draft: Draft,
         target: Target,
         command: bool,
         selection: String,
@@ -350,7 +349,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
         let outcome = self.engines.everyday(&active).and_then(|(recognizer, rewriter)| {
             pipeline::run_live(
                 &request,
-                draft,
+                &mut draft,
                 &active,
                 &self.store,
                 recognizer,
@@ -358,6 +357,9 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                 (&mut self.rewrite_circuit, now_ms),
             )
         });
+        // The last speech actually recognised says how slow the recogniser
+        // is; a silent ending says nothing and leaves the measure as it was.
+        self.piece_cost_ms = draft.live.cost_ms();
         match outcome {
             Ok(Outcome::Silent) => self.notice("No speech heard. Is your microphone muted?", true, false),
             Ok(Outcome::Nothing) => self.notice("Didn't catch that", false, false),
@@ -366,9 +368,6 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                 mut record,
                 press_enter,
             }) => {
-                // Recognising what was left at the end is the latest measure
-                // of how slow the recogniser is.
-                self.piece_cost_ms = record.asr_ms as u64;
                 let pasted = self.deliver(&paste, &target, press_enter);
                 record.outcome = if pasted { store::Outcome::Pasted } else { store::Outcome::Copied };
                 // A bare "press enter" typed nothing, so there is nothing to keep.
@@ -832,9 +831,8 @@ mod tests {
         app.platform.now += 2000;
         app.handle(Event::Up(Bind::PushToTalk));
         assert_eq!(app.engines.asr.heard.len(), 2);
-        // The final recognition's time is what the next recording goes by,
+        // The last recognition's time is what the next recording goes by,
         // so a faster recogniser brings it down again.
-        assert_eq!(app.piece_cost_ms, app.store.last().unwrap().asr_ms as u64);
         assert!(app.piece_cost_ms < 30_000);
         // A different model starts unmeasured.
         app.piece_cost_ms = 30_000;
