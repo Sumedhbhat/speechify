@@ -121,7 +121,7 @@ Waiting for the whole recording before recognising any of it made the wait after
 
 When the language model is on, `pipeline::Draft` does the same for cleanup: once at least 40 words ending in a full sentence have been recognised, they are cleaned up as a block while the user goes on speaking. The model sees the end of the text cleaned up so far, so it can carry on a numbered list. Blocks are joined (list items on their own lines) and the destination's style is applied once to the whole, so a style that drops the closing full stop does not drop one in the middle. Command Mode is never cleaned up early: the instruction only means something whole.
 
-The model is asked on a thread of its own too. A cancel forgets the block. A key-up waits for its answer, which it would need anyway. When the worker stops, `Models` waits for a piece still under way to release the model, so that the model is freed before the process exits (Metal checks at exit that nothing is left on the GPU).
+The model is asked on a thread of its own too. A cancel forgets the block. A key-up waits for its answer, which it would need anyway. When the worker stops, `Models` waits (up to `RELEASE_WAIT`, and the exit path a little longer) for a piece still under way to release the model, so that the model is freed before the process exits (Metal checks at exit that nothing is left on the GPU).
 
 ## Speech recognition
 

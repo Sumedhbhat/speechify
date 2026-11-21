@@ -181,6 +181,11 @@ fn chat(settings: &Settings, model: &str, timeout: Duration) -> DiagnosedChat {
     DiagnosedChat(Chat::new(&settings.rewrite.url, &settings.rewrite.key, model, timeout))
 }
 
+/// How long dropping the models waits for a piece still being recognised
+/// to let go of the model. The exit path waits a little longer than this
+/// for the worker, so the process never ends with the model still loaded.
+pub const RELEASE_WAIT: Duration = Duration::from_secs(60);
+
 impl Drop for Models {
     /// A piece still being recognised elsewhere holds the model too. The
     /// model must be gone once the worker stops (Metal asserts at exit that
@@ -190,7 +195,7 @@ impl Drop for Models {
     /// runtime that never returns.
     fn drop(&mut self) {
         if let Some((_, recognizer)) = &self.everyday {
-            if !recognizer.wait_alone(Duration::from_secs(60)) {
+            if !recognizer.wait_alone(RELEASE_WAIT) {
                 diagnostics::event("model.release", "still in use");
             }
         }
