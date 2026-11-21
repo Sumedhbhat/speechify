@@ -518,6 +518,7 @@ mod tests {
     fn short_dictations_and_disabled_models_skip_the_rewrite() {
         let store = Store::memory();
         let mut settings = Settings::default();
+        settings.rewrite.enabled = true;
         let llm = Scripted::new(vec![]);
         let target = Target::default();
         let short = compose(
