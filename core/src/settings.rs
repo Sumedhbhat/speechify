@@ -132,12 +132,12 @@ impl Default for Speech {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default = "Rewrite::legacy")]
 pub struct Rewrite {
     pub level: Cleanup,
     /// Use a local language model for cleanup; the rules still run without it.
     pub enabled: bool,
-    /// Ollama by default; any OpenAI-compatible server works.
+    /// llama-server by default; Ollama and other OpenAI-compatible servers work too.
     pub url: String,
     pub key: String,
     pub model: String,
@@ -147,14 +147,26 @@ pub struct Rewrite {
     pub min_words: usize,
 }
 
+impl Rewrite {
+    // Partial settings saved before the server change still imply Ollama.
+    fn legacy() -> Self {
+        Self {
+            enabled: true,
+            url: "http://127.0.0.1:11434".into(),
+            model: "gemma3:4b".into(),
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for Rewrite {
     fn default() -> Self {
         Self {
             level: Cleanup::Light,
-            enabled: true,
-            url: "http://127.0.0.1:11434".into(),
+            enabled: false,
+            url: "http://127.0.0.1:18080/v1".into(),
             key: String::new(),
-            model: "gemma3:4b".into(),
+            model: "llama3.2:3b".into(),
             timeout_ms: 6000,
             min_words: 6,
         }
@@ -194,6 +206,7 @@ pub struct Settings {
     pub hotkeys: Hotkeys,
     pub styles: Styles,
     pub speech: Speech,
+    #[serde(default = "Rewrite::legacy")]
     pub rewrite: Rewrite,
     pub teacher: Teacher,
     pub spelling: Spelling,
@@ -245,6 +258,12 @@ mod tests {
     fn partial_files_fill_in_defaults() {
         let settings: Settings = serde_json::from_str(r#"{"rewrite":{"model":"qwen3:4b"},"sounds":false}"#).unwrap();
         assert_eq!(settings.rewrite.model, "qwen3:4b");
+        assert_eq!(settings.rewrite.url, "http://127.0.0.1:11434");
+        assert!(settings.rewrite.enabled);
+        let without_rewrite: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(without_rewrite.rewrite, Rewrite::legacy());
+        assert!(!Settings::default().rewrite.enabled);
+        assert_eq!(Settings::default().rewrite.url, "http://127.0.0.1:18080/v1");
         assert_eq!(settings.rewrite.timeout_ms, 6000);
         assert!(!settings.sounds);
         assert_eq!(settings.hotkeys, Hotkeys::default());

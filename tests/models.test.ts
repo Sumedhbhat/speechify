@@ -209,6 +209,77 @@ describe("models page", () => {
     expect(byLabel<HTMLInputElement>(document, "Key").type).toBe("password");
   });
 
+  it("shows llama-server setup and hides Ollama downloads for a /v1 server", async () => {
+    const initial = await ctx.api.getSettings();
+    ctx.api.getSettings.mockResolvedValue({
+      ...initial,
+      rewrite: { ...initial.rewrite, url: "http://127.0.0.1:18080/v1/" },
+    });
+    await setup();
+    const download = button(document, "Download with Ollama");
+    expect(download.closest("[hidden]")).toBeTruthy();
+    expect(document.querySelector("details")?.textContent).toContain("Set up llama-server");
+    const server = byLabel<HTMLInputElement>(document, "Server");
+    ctx.api.saveSettings.mockRejectedValueOnce("Could not save settings.");
+    change(server, "http://127.0.0.1:11434");
+    await settle();
+    expect(download.closest("[hidden]")).toBeTruthy();
+    expect(server.value).toBe("http://127.0.0.1:18080/v1/");
+    change(server, "http://127.0.0.1:11434");
+    await settle();
+    expect(download.parentElement!.closest("[hidden]")).toBeNull();
+  });
+
+  it("keeps the saved server when Models reopens during a pending save", async () => {
+    await setup();
+    let save!: () => void;
+    let respond!: (value: Status) => void;
+    ctx.api.saveSettings.mockReturnValueOnce(new Promise((resolve) => (save = resolve)));
+    ctx.api.getStatus.mockReturnValueOnce(new Promise((resolve) => (respond = resolve)));
+    const url = "http://127.0.0.1:18080/v1";
+    change(byLabel<HTMLInputElement>(document, "Server"), url);
+    page.el.remove();
+    const showing = page.show();
+    await settle();
+    ctx.api.rewriteStatus.mockResolvedValueOnce(DOWN);
+    save();
+    await settle();
+    respond(status({ rewrite_reachable: true }));
+    await showing;
+    document.body.append(page.el);
+    expect(byLabel<HTMLInputElement>(document, "Server").value).toBe(url);
+    expect(button(document, "Download with Ollama").closest("[hidden]")).toBeTruthy();
+    expect(ctx.api.rewriteStatus).toHaveBeenCalledOnce();
+    expect(document.querySelector(".status-note.error")!.textContent).toContain("Can't reach");
+    expect(document.querySelectorAll("#rewrite-models option")).toHaveLength(0);
+  });
+
+  it("waits for a pending server save before a heartbeat probes during reopening", async () => {
+    vi.useFakeTimers();
+    try {
+      await setup();
+      let save!: () => void;
+      let respond!: (value: Status) => void;
+      ctx.api.saveSettings.mockReturnValueOnce(new Promise((resolve) => (save = resolve)));
+      ctx.api.getStatus.mockReturnValueOnce(new Promise((resolve) => (respond = resolve)));
+      ctx.api.rewriteStatus.mockResolvedValue(DOWN);
+      const url = "http://127.0.0.1:18080/v1";
+      change(byLabel<HTMLInputElement>(document, "Server"), url);
+      const showing = page.show();
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
+      expect(ctx.api.rewriteStatus).not.toHaveBeenCalled();
+      save();
+      await settle();
+      respond(status({ rewrite_reachable: true }));
+      await showing;
+      expect(byLabel<HTMLInputElement>(document, "Server").value).toBe(url);
+      expect(document.querySelector(".status-note.error")).not.toBeNull();
+      expect(document.querySelectorAll("#rewrite-models option")).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("downloads a language model through Ollama", async () => {
     ctx.api.getStatus.mockResolvedValue(status({ rewrite_models: ["llama3.2:3b"] }));
     await setup();
@@ -238,8 +309,8 @@ describe("models page", () => {
     expect(document.querySelector(".pull")!.textContent).toBe("");
     expect(toasts()).toContain("qwen2.5:1.5b is ready");
     // The server is asked again at once, so the button goes without waiting for the heartbeat.
-    expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(asked + 1);
     await settle();
+    expect(ctx.api.rewriteStatus).toHaveBeenCalledTimes(asked + 1);
     expect(button(document, "Download with Ollama").hidden).toBe(true);
     ctx.api.rewriteStatus.mockResolvedValue({ reachable: true, models: ["llama3.2:3b"] });
 

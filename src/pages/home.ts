@@ -81,22 +81,26 @@ function checklist(
           ["Download one to start dictating. It stays on this computer."],
           go("models", "Choose a model"),
         ),
-    status.rewrite_reachable
-      ? step(true, "Language model connected", [
-          "Longer dictations are tidied by the model before they are typed.",
-        ])
-      : step(
-          false,
-          "Connect a language model (optional)",
-          [
-            "A local model, through Ollama or any OpenAI-compatible server, tidies longer dictations more naturally than rules alone.",
-          ],
-          go("models", "Set up"),
-        ),
+    ...(settings.rewrite.enabled
+      ? [
+          status.rewrite_reachable
+            ? step(true, "Language model connected", [
+                "Longer dictations are tidied by the model before they are typed.",
+              ])
+            : step(
+                false,
+                "Connect a language model (optional)",
+                [
+                  "Set up llama-server or connect a server you already use. Speechify can dictate with built-in cleanup while you set it up.",
+                ],
+                go("models", "Set up"),
+              ),
+        ]
+      : []),
     shortcut,
   ];
   if (items.every((item) => item.classList.contains("done"))) return null;
-  const ready = status.speech_ready && status.rewrite_reachable;
+  const ready = status.speech_ready && (!settings.rewrite.enabled || status.rewrite_reachable);
   return h("section", { className: "section checklist" }, [
     h("h2", { textContent: ready ? "Ready when you are" : "Getting started" }),
     h("ol", { className: "steps" }, items),

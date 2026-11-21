@@ -149,13 +149,11 @@ pub struct Device {
 pub struct Plan {
     pub speech_model: &'static str,
     pub teacher_model: &'static str,
-    /// Language-model cleanup: only worth its delay on a graphics card.
-    pub rewrite: bool,
     /// One sentence for the user on why these were picked.
     pub reason: String,
 }
 
-/// Enough graphics memory for Whisper turbo plus a 4B language model.
+/// Minimum graphics memory for choosing Whisper turbo for dictation.
 const GPU_MEMORY_MB: u64 = 4000;
 
 /// Picks models so that everyday dictation is always fast. A graphics card
@@ -172,7 +170,6 @@ pub fn plan(devices: &[Device]) -> Plan {
         Some(card) => Plan {
             speech_model: "whisper-large-v3-turbo",
             teacher_model: "whisper-large-v3",
-            rewrite: true,
             reason: format!(
                 "Found {} with {} GB: using Whisper turbo on it",
                 card.name,
@@ -182,7 +179,6 @@ pub fn plan(devices: &[Device]) -> Plan {
         None => Plan {
             speech_model: "parakeet-tdt-0.6b-v3",
             teacher_model: "whisper-large-v3-turbo",
-            rewrite: false,
             reason: "No graphics card with enough memory: using Parakeet, the fastest model on a CPU".into(),
         },
     }
@@ -198,7 +194,6 @@ pub fn first_run(store: &crate::store::Store, devices: &[Device]) -> Result<Opti
     let mut settings = crate::settings::Settings::default();
     settings.speech.model = chosen.speech_model.into();
     settings.teacher.speech_model = chosen.teacher_model.into();
-    settings.rewrite.enabled = chosen.rewrite;
     store.save_settings(&settings)?;
     Ok(Some(chosen))
 }
@@ -295,20 +290,20 @@ mod tests {
         let bigger = device(DeviceClass::Gpu, 12_288, "NVIDIA GeForce RTX 4070");
         let laptop = plan(&[cpu.clone(), rtx.clone()]);
         assert_eq!(
-            (laptop.speech_model, laptop.teacher_model, laptop.rewrite),
-            ("whisper-large-v3-turbo", "whisper-large-v3", true)
+            (laptop.speech_model, laptop.teacher_model),
+            ("whisper-large-v3-turbo", "whisper-large-v3")
         );
         assert_eq!(
             laptop.reason,
             "Found NVIDIA GeForce RTX 4060 Laptop GPU with 8 GB: using Whisper turbo on it"
         );
         assert!(plan(&[rtx, bigger]).reason.contains("RTX 4070"));
-        // Integrated graphics, a small card or no card at all: Parakeet, no cleanup model.
+        // Integrated graphics, a small card or no card at all: Parakeet.
         for machine in [vec![cpu.clone()], vec![cpu.clone(), igpu], vec![cpu, small], vec![]] {
             let chosen = plan(&machine);
             assert_eq!(
-                (chosen.speech_model, chosen.teacher_model, chosen.rewrite),
-                ("parakeet-tdt-0.6b-v3", "whisper-large-v3-turbo", false)
+                (chosen.speech_model, chosen.teacher_model),
+                ("parakeet-tdt-0.6b-v3", "whisper-large-v3-turbo")
             );
             assert!(chosen.reason.starts_with("No graphics card"));
         }
@@ -345,15 +340,23 @@ mod tests {
             (chosen.speech_model, false)
         );
         assert_eq!(settings.teacher.speech_model, "whisper-large-v3-turbo");
+        assert_eq!(settings.rewrite.url, "http://127.0.0.1:18080/v1");
+        assert_eq!(settings.rewrite.model, "llama3.2:3b");
+        let gpu_store = crate::store::Store::memory();
+        first_run(&gpu_store, &[device(DeviceClass::Gpu, 8000, "RTX")]).unwrap();
+        assert!(!gpu_store.settings().rewrite.enabled);
         // The user changes their mind; a later start must not undo that.
         let mut changed = settings;
         changed.speech.model = "whisper-small".into();
+        changed.rewrite.url = "http://127.0.0.1:11434".into();
+        changed.rewrite.model = "gemma3:4b".into();
+        changed.rewrite.enabled = true;
         store.save_settings(&changed).unwrap();
         assert_eq!(
             first_run(&store, &[device(DeviceClass::Gpu, 8000, "RTX")]).unwrap(),
             None
         );
-        assert_eq!(store.settings().speech.model, "whisper-small");
+        assert_eq!(store.settings(), changed);
     }
 
     fn tiny(server: &Server, sha256: &str) -> Model {

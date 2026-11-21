@@ -70,6 +70,9 @@ impl Chat {
 
     /// Downloads the model through Ollama, reporting (done, total) bytes.
     pub fn pull(&self, progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
+        if self.openai() {
+            return Err("Load the model in your language-model server first.".into());
+        }
         let mut failure = None;
         Http::new(None).post_lines(
             &format!("{}/api/pull", self.url),
@@ -397,6 +400,7 @@ mod tests {
         assert!(chat.rewrite("s", "u").is_err());
         assert_eq!(chat.models().unwrap(), vec!["a", "b"]);
         chat.warm().unwrap();
+        assert!(chat.pull(&mut |_, _| {}).unwrap_err().contains("Load the model"));
         assert_eq!(server.requests().len(), 3);
     }
 

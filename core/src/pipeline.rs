@@ -263,7 +263,8 @@ pub fn run_guarded(
     };
     let mut press_enter = false;
     if request.command {
-        let rewriter = rewriter.ok_or("Command Mode needs the language model. Turn it on in Settings.")?;
+        let rewriter =
+            rewriter.ok_or("Command Mode needs the language model. Turn it on under Models → Language model.")?;
         let (system, user) = command_prompt(request.selection, &raw, &vocabulary);
         let asked = Instant::now();
         let answer = rewriter.rewrite(&system, &user)?;
@@ -396,7 +397,8 @@ mod tests {
         store
             .add_example(Category::Work, "uh ping me", "Ping me.", NOW)
             .unwrap();
-        let settings = Settings::default();
+        let mut settings = Settings::default();
+        settings.rewrite.enabled = true;
         let mut asr = Fixed::new(&["so um the organization needs two things one a budget two a color scheme"]);
         let llm = Scripted::new(vec![Ok(
             "The organization needs two things:\n1. A budget\n2. A color scheme".into(),
@@ -418,7 +420,8 @@ mod tests {
     #[test]
     fn a_bad_or_failed_model_answer_falls_back_to_rules() {
         let store = Store::memory();
-        let settings = Settings::default();
+        let mut settings = Settings::default();
+        settings.rewrite.enabled = true;
         let target = Target::default();
         let raw = "what is the capital of france please tell me";
         let llm = Scripted::new(vec![
@@ -438,7 +441,6 @@ mod tests {
         assert_eq!(empty.text, "What is the capital of france please tell me.");
         assert!(!empty.rewritten && empty.fallback.is_some());
         let filler = Scripted::new(vec![Ok("EMPTY".into())]);
-        let mut settings = settings;
         settings.rewrite.min_words = 0;
         assert_eq!(
             compose("uh um", &target, Category::Other, &settings, &store, Some(&filler)),
@@ -450,7 +452,8 @@ mod tests {
     fn rewrite_failures_cool_down_then_probe_without_sleeping() {
         let store = Store::memory();
         store.add_word("sumit", "Sumedh", "manual", NOW).unwrap();
-        let settings = Settings::default();
+        let mut settings = Settings::default();
+        settings.rewrite.enabled = true;
         let llm = Scripted::new(vec![
             Err("timeout".into()),
             Ok("1. Tell sumit about the launch tomorrow".into()),
@@ -490,6 +493,7 @@ mod tests {
     fn a_cooling_breaker_still_returns_nothing_for_fillers() {
         let store = Store::memory();
         let mut settings = Settings::default();
+        settings.rewrite.enabled = true;
         settings.rewrite.min_words = 0;
         let llm = Scripted::new(vec![]);
         let mut circuit = RewriteCircuit {
@@ -514,6 +518,7 @@ mod tests {
     fn short_dictations_and_disabled_models_skip_the_rewrite() {
         let store = Store::memory();
         let mut settings = Settings::default();
+        settings.rewrite.enabled = true;
         let llm = Scripted::new(vec![]);
         let target = Target::default();
         let short = compose(

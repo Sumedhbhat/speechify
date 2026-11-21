@@ -10,7 +10,7 @@ Known gaps:
 
 - **Wayland.** The app cannot watch global shortcuts or type into other apps there. Click the bar, or bind `speechify --toggle` to a system shortcut. The text is put on the clipboard and shown on a copy card.
 - **No field watching.** The app does not watch a text field after pasting. It learns from corrections when you edit a dictation in History, and from the nightly review.
-- **Language model is separate.** The optional cleanup model needs Ollama (or another server) installed on its own. The app can ask Ollama to download a model, but it cannot install Ollama.
+- **Language model is separate.** The optional cleanup model runs in a separate server. Fresh installs start with built-in cleanup and have llama-server preselected for optional model cleanup.
 - **Command Mode needs the language model.** Without it, a command shows an error.
 - **Clipboard restore covers text only.** If you had an image or files on the clipboard, they are not put back after a paste.
 - **Mac Fn key.** It cannot be used as a shortcut. The Mac default is Ctrl+Alt.
@@ -27,7 +27,7 @@ Known gaps:
 
 **Cleanup**
 - Rule-based formatter that always runs: fillers, self-corrections, spoken punctuation and line breaks, numbers, lists, spelling, tone.
-- Optional local language model (Ollama or any OpenAI-compatible server) for natural rewriting. Its answer is checked, and the rule-based text is used if the answer looks wrong or late.
+- Optional local language model (llama-server, Ollama or another OpenAI-compatible server) for natural rewriting. Its answer is checked, and the rule-based text is used if the answer looks wrong or late.
 - Indian English by default: colour/organise spelling, lakh and crore grouping, the rupee sign. All of it is switchable.
 - Tone per destination: casual in WhatsApp, formal in email, literal in terminals and code editors.
 - Dictionary, snippets, and "press enter" to send.
@@ -75,11 +75,10 @@ If no text field has focus, or the paste fails, the bar shows a **copy card** ab
 
 ## First-run setup
 
-1. Open the Models page and download a speech model. Whisper large-v3 turbo (about 0.9 GB) is the default and needs a graphics card to feel fast. Parakeet TDT 0.6B v3 is the recommended choice without one.
-2. Optional: install [Ollama](https://ollama.com), then on the Models page pull the cleanup model (`gemma3:4b` by default). Without it, the rule-based formatter does the cleanup.
-3. Optional: pull a larger model for the nightly teacher (`qwen3.5:9b-q4_K_M` by default) and download Whisper large-v3 for it.
-4. On macOS, allow the microphone when asked. Accessibility access is needed to type into other apps. You allow it once: Speechify updates itself from Settings or the menu bar, and updates keep the permission.
-5. Hold the shortcut and talk.
+1. Open **Models** and download the speech model marked **Used for dictation**. Speechify selects it based on the machine. Parakeet TDT 0.6B v3 is the faster choice on CPU.
+2. On macOS, allow microphone access when prompted and enable Accessibility for the shortcut and text insertion. On Wayland, use the floating bar to dictate and copy from the result card.
+3. Hold the shortcut and talk. Built-in cleanup handles fillers, spoken corrections, lists and numbers immediately. You can stop setup here.
+4. For optional model cleanup, [set up llama-server for model cleanup](docs/cleanup-setup.md), or connect an existing Ollama or OpenAI-compatible server. Command Mode requires an enabled language model.
 
 ## How it works
 
@@ -98,7 +97,7 @@ The logic lives in `core/`, which never touches a device. `os/` talks to the mic
 
 ## Privacy
 
-Everything stays on the machine unless you point Speechify at a server on another computer: one SQLite database plus WAV recordings in the app data folder. There is no telemetry and there are no accounts. The app only uses the network to download speech models from Hugging Face, to ask Ollama to pull a model, and to reach servers you set up yourself. Ollama on this machine keeps everything local. A remote speech server receives the recording of each dictation. A remote language-model server receives the words you dictated, the name and window title of the app you are typing into, and your dictionary terms and worked examples. In Settings you can keep history forever, for a day, or not at all, and choose whether recordings are kept.
+Everything stays on the machine unless you point Speechify at a server on another computer: one SQLite database plus WAV recordings in the app data folder. There is no telemetry and there are no accounts. The app only uses the network to download speech models from Hugging Face, to ask Ollama to pull a model, and to reach servers you set up yourself. A language-model server on this machine keeps the cleanup local. A remote speech server receives the recording of each dictation. A remote language-model server receives the words you dictated, the name and window title of the app you are typing into, and your dictionary terms and worked examples. In Settings you can keep history forever, for a day, or not at all, and choose whether recordings are kept.
 
 ## Building and testing
 
