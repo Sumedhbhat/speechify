@@ -807,12 +807,15 @@ impl Recognizer for Engine {
         self.streams
     }
 
-    fn stream_start(&mut self, hint: &Hint) -> Result<()> {
+    fn stream_start(&mut self, hint: &Hint, stop: &AtomicBool) -> Result<()> {
         if !self.streams {
             return Err(NOT_STREAMING.into());
         }
         if !self.knows(hint.language) {
             return Err(explain(10));
+        }
+        if stop.load(Ordering::SeqCst) {
+            return Err(explain(13));
         }
         let api = &self.runtime.api;
         unsafe { (api.transcribe_stream_reset)(self.session) };
@@ -1089,7 +1092,7 @@ mod tests {
         // An ordinary model cannot stream.
         let mut whisper = Engine::open(&runtime, &model, "cpu").unwrap();
         assert!(!whisper.streams());
-        assert_eq!(whisper.stream_start(&english).unwrap_err(), NOT_STREAMING);
+        assert_eq!(whisper.stream_start(&english, &stop).unwrap_err(), NOT_STREAMING);
 
         let path = std::env::var_os("SPEECHIFY_TEST_STREAM_MODEL")
             .map(PathBuf::from)
@@ -1104,10 +1107,10 @@ mod tests {
             language: "hi",
             ..Hint::default()
         };
-        assert!(engine.stream_start(&hindi).unwrap_err().contains("language"));
+        assert!(engine.stream_start(&hindi, &stop).unwrap_err().contains("language"));
 
         let speech = crate::audio::decode_wav(include_bytes!("../tests/fixtures/jfk.wav")).unwrap();
-        engine.stream_start(&english).unwrap();
+        engine.stream_start(&english, &stop).unwrap();
         let mut seen = Streamed::default();
         for chunk in speech.chunks(8000) {
             seen = engine.stream_feed(chunk, &stop).unwrap();
@@ -1120,16 +1123,19 @@ mod tests {
         assert!(ended.full.starts_with(seen.settled.trim()), "{ended:?} {seen:?}");
 
         // A stream given up halfway, as a cancel does, is told to stop...
-        engine.stream_start(&english).unwrap();
+        engine.stream_start(&english, &stop).unwrap();
         engine.stream_feed(&speech[..32_000], &stop).unwrap();
         let cancelled = AtomicBool::new(true);
         let stopped = engine.stream_feed(&speech[32_000..], &cancelled).unwrap_err();
+        assert_eq!(stopped, "Recognition was stopped");
+        // A start that was cancelled leaves the stream alone.
+        let stopped = engine.stream_start(&english, &cancelled).unwrap_err();
         assert_eq!(stopped, "Recognition was stopped");
         // A step that fails ends the stream.
         assert!(engine.stream_feed(&[f32::NAN; 160], &stop).is_err());
         assert!(engine.stream_end(&stop).is_err());
         // ...and one simply left behind does not get in the way of the next run.
-        engine.stream_start(&english).unwrap();
+        engine.stream_start(&english, &stop).unwrap();
         engine.stream_feed(&speech[..32_000], &stop).unwrap();
         let again = engine.transcribe(&speech, &english).unwrap().to_lowercase();
         assert!(again.contains("ask not"), "{again}");

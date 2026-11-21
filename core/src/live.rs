@@ -262,13 +262,20 @@ impl Live {
     /// Returns whether new sentences were settled.
     fn flow(&mut self, pending: &[f32], recognizer: &mut dyn Recognizer, hint: &Hint) -> Result<bool> {
         let stream = self.stream.as_mut().expect("a stream");
-        stream.keep_up(pending.len());
         if let Some((job, length)) = &stream.feeding {
-            let Some(answer) = job.poll() else { return Ok(false) };
+            let Some(answer) = job.poll() else {
+                stream.keep_up(pending.len());
+                return Ok(false);
+            };
+            // Lag is judged only once what the model has finished is counted.
             let length = *length;
             stream.feeding = None;
-            return self.fed(length, answer);
+            let settled = self.fed(length, answer);
+            let stream = self.stream.as_mut().expect("a stream");
+            stream.keep_up(pending.len().saturating_sub(length));
+            return settled;
         }
+        stream.keep_up(pending.len());
         if stream.broken || pending.len() < FEED_MS * MS || recognizer.busy() {
             return Ok(false);
         }
@@ -281,11 +288,12 @@ impl Live {
                 let language = hint.language.to_string();
                 let job = Job::start(move |stop| {
                     // A feed cancelled before it began starts no stream.
-                    if begin && !stop.load(std::sync::atomic::Ordering::SeqCst) {
-                        shared.stream_start(&Hint {
+                    if begin {
+                        let hint = Hint {
                             language: &language,
                             ..Hint::default()
-                        })?;
+                        };
+                        shared.stream_start(&hint, stop)?;
                     }
                     feed(shared.as_mut(), &samples, stop)
                 });
@@ -293,8 +301,9 @@ impl Live {
                 Ok(false)
             }
             None => {
-                let answer = if begin { recognizer.stream_start(hint) } else { Ok(()) }
-                    .and_then(|()| feed(recognizer, pending, &std::sync::atomic::AtomicBool::new(false)));
+                let stop = std::sync::atomic::AtomicBool::new(false);
+                let answer = if begin { recognizer.stream_start(hint, &stop) } else { Ok(()) }
+                    .and_then(|()| feed(recognizer, pending, &stop));
                 self.fed(length, answer)
             }
         }
@@ -334,10 +343,14 @@ impl Live {
     ) -> Result<Option<Transcript>> {
         let stop = std::sync::atomic::AtomicBool::new(false);
         let mut stream = self.stream.take().expect("a stream");
-        stream.keep_up(recording.len().saturating_sub(self.done));
+        // A feed that has finished is counted before the lag is judged.
+        let finished = stream.feeding.as_ref().and_then(|(job, _)| job.poll());
+        if finished.is_none() {
+            stream.keep_up(recording.len().saturating_sub(self.done));
+        }
         if let Some((job, length)) = stream.feeding.take() {
             self.stream = Some(stream);
-            let _ = self.fed(length, job.wait());
+            let _ = self.fed(length, finished.unwrap_or_else(|| job.wait()));
             stream = self.stream.take().expect("a stream");
             // Now that it has answered, see whether the model kept up.
             stream.keep_up(recording.len().saturating_sub(self.done));
@@ -955,6 +968,34 @@ mod tests {
         assert!(!live.advance(&recording[..1000 * MS], &mut asr, &HINT).unwrap());
         let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
         assert_eq!(heard.raw, "at the end");
+    }
+
+    #[test]
+    fn a_feed_that_has_finished_counts_before_the_lag_is_judged() {
+        let recording = tone(6000, 0.3);
+        // Feeds the first second, then three and a half more, and lets the
+        // second feed finish without looking at it yet.
+        let start = |asr: &mut Shared<Talker>| {
+            let mut live = Live::default();
+            eventually(|| live.advance(&recording[live.done()..1000 * MS], asr, &HINT).unwrap());
+            assert!(!live.advance(&recording[1000 * MS..4500 * MS], asr, &HINT).unwrap());
+            eventually(|| !asr.busy());
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            live
+        };
+        let talker = || Talker::new(&["Kept up. To", "Kept up. Too. Then"], "Kept up. Too. Then done.");
+        // Counted, the model is one second behind, not four and a half.
+        let mut asr = Shared::new(talker());
+        let mut live = start(&mut asr);
+        assert!(live.advance(&recording[1000 * MS..5500 * MS], &mut asr, &HINT).unwrap());
+        assert!(live.listening());
+        let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
+        assert_eq!((heard.raw.as_str(), heard.revised), ("Kept up. Too. Then done.", false));
+        // The same holds when the key goes up before it is looked at.
+        let mut asr = Shared::new(talker());
+        let mut live = start(&mut asr);
+        let heard = live.finish(&recording[..5500 * MS], &mut asr, &HINT).unwrap().unwrap();
+        assert_eq!((heard.raw.as_str(), heard.revised), ("Kept up. Too. Then done.", false));
     }
 
     #[test]

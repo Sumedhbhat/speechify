@@ -55,8 +55,9 @@ pub trait Recognizer {
     fn streams(&self) -> bool {
         false
     }
-    /// Starts a stream, abandoning whatever one came before.
-    fn stream_start(&mut self, _hint: &Hint) -> Result<()> {
+    /// Starts a stream, abandoning whatever one came before, unless `stop`
+    /// is already set: a cancelled start must not reset a newer stream.
+    fn stream_start(&mut self, _hint: &Hint, _stop: &AtomicBool) -> Result<()> {
         Err(NOT_STREAMING.into())
     }
     /// Gives the stream more audio, and says what it has made of it all so
@@ -154,8 +155,10 @@ impl<R: Recognizer + Send + 'static> Recognizer for Shared<R> {
     fn streams(&self) -> bool {
         self.streams
     }
-    fn stream_start(&mut self, hint: &Hint) -> Result<()> {
-        self.lock().stream_start(hint)
+    fn stream_start(&mut self, hint: &Hint, stop: &AtomicBool) -> Result<()> {
+        // `stop` is read under the lock, so a cancelled job cannot start
+        // after a newer recording has begun its own stream.
+        self.lock().stream_start(hint, stop)
     }
     fn stream_feed(&mut self, audio: &[f32], stop: &AtomicBool) -> Result<Streamed> {
         self.lock().stream_feed(audio, stop)
@@ -458,7 +461,7 @@ impl Recognizer for Talker {
     fn streams(&self) -> bool {
         true
     }
-    fn stream_start(&mut self, hint: &Hint) -> Result<()> {
+    fn stream_start(&mut self, hint: &Hint, _: &AtomicBool) -> Result<()> {
         assert_eq!(hint.language, "en");
         self.started += 1;
         Ok(())
@@ -490,7 +493,12 @@ mod tests {
         let mut fixed = Fixed::new(&[]);
         let stop = AtomicBool::new(false);
         assert!(!fixed.streams() && !Shared::new(Fixed::new(&[])).streams());
-        assert_eq!(fixed.stream_start(&Hint::default()).unwrap_err(), NOT_STREAMING);
+        assert_eq!(
+            fixed
+                .stream_start(&Hint::default(), &AtomicBool::new(false))
+                .unwrap_err(),
+            NOT_STREAMING
+        );
         assert_eq!(fixed.stream_feed(&[0.0], &stop).unwrap_err(), NOT_STREAMING);
         assert_eq!(fixed.stream_end(&stop).unwrap_err(), NOT_STREAMING);
     }

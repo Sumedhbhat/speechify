@@ -49,8 +49,8 @@ impl Recognizer for Diagnosed {
     fn streams(&self) -> bool {
         self.0.streams()
     }
-    fn stream_start(&mut self, hint: &speechify_core::asr::Hint) -> Result<()> {
-        diagnostics::attempt("speech.stream_start", || self.0.stream_start(hint))
+    fn stream_start(&mut self, hint: &speechify_core::asr::Hint, stop: &std::sync::atomic::AtomicBool) -> Result<()> {
+        diagnostics::attempt("speech.stream_start", || self.0.stream_start(hint, stop))
     }
     fn stream_feed(
         &mut self,
