@@ -9,11 +9,17 @@
 //! Pieces end only in pauses the voice detector found, never inside a word.
 //! A recogniser without a detector gets the whole recording at the end, as
 //! before.
+//!
+//! A recogniser that can work on a thread of its own recognises each piece
+//! there, so a key release or a cancel never waits for a piece to finish:
+//! a cancel drops it, and a release waits only for the words it needs.
 
 use crate::asr::{is_phantom, isolate, strip_tags, Heard, Hint, Recognizer};
-use crate::audio::{self, RATE};
+use crate::audio::{self, Trimmed, RATE};
+use crate::job::Job;
 use crate::Result;
 use std::ops::Range;
+use std::time::Instant;
 
 const MS: usize = RATE as usize / 1000;
 /// Pieces are at least this long: the recogniser does better with some context.
@@ -62,6 +68,18 @@ pub struct Transcript {
     pub parts: Vec<String>,
 }
 
+/// A piece being recognised on a thread of its own: its words, what the
+/// recogniser made of each, and how long it took.
+type Answer = (String, Vec<Heard>, u64);
+
+#[derive(Debug)]
+struct Flight {
+    job: Job<Answer>,
+    /// Where the piece ends, counted from `done`.
+    cut: usize,
+    speech_ms: u64,
+}
+
 /// A recording being recognised piece by piece.
 #[derive(Debug, Default)]
 pub struct Live {
@@ -81,6 +99,9 @@ pub struct Live {
     blind: bool,
     /// How long the last piece took to recognise, in milliseconds.
     cost_ms: u64,
+    /// The piece being recognised elsewhere, if any. Dropping it, as a
+    /// cancel does, tells the recogniser to stop.
+    flight: Option<Flight>,
 }
 
 impl Live {
@@ -130,15 +151,35 @@ impl Live {
     /// pause ends it. `pending` is the recording from `done()` on. Returns
     /// whether a piece was recognised. On an error nothing is lost: the same
     /// audio is tried again later, at the latest when the recording ends.
+    ///
+    /// When the recogniser can be shared, the piece is recognised on a
+    /// thread of its own and this returns at once; a later call collects
+    /// the words and returns true then.
     pub fn advance(&mut self, pending: &[f32], recognizer: &mut dyn Recognizer, hint: &Hint) -> Result<bool> {
+        if let Some(flight) = &self.flight {
+            let Some(answer) = flight.job.poll() else { return Ok(false) };
+            let Flight { cut, speech_ms, .. } = self.flight.take().expect("a piece in flight");
+            return self.land(cut, speech_ms, answer).map(|()| true);
+        }
         let length = self.done + pending.len();
         let shortest = self.cuts.min_piece.max(self.cost_ms as usize * 2 * MS);
-        if self.blind || length < self.looked + self.cuts.look_every || pending.len() < shortest {
+        // A piece a cancelled recording left behind may still be finishing:
+        // looking now would wait for it.
+        if self.blind || length < self.looked + self.cuts.look_every || pending.len() < shortest || recognizer.busy() {
             return Ok(false);
         }
         self.looked = length;
         let Some(cut) = self.find_cut(pending, recognizer)? else { return Ok(false) };
-        self.take(&pending[..cut], recognizer, hint)?;
+        let trimmed = isolate(recognizer, &pending[..cut])?;
+        // Silence needs no recogniser.
+        let shared = if trimmed.samples.is_empty() { None } else { recognizer.share() };
+        if let Some(shared) = shared {
+            let job = self.launch(shared, trimmed.samples, hint);
+            let speech_ms = trimmed.speech_ms;
+            self.flight = Some(Flight { job, cut, speech_ms });
+            return Ok(false);
+        }
+        self.take(trimmed, recognizer, hint)?;
         self.done += cut;
         Ok(true)
     }
@@ -152,8 +193,13 @@ impl Live {
         recognizer: &mut dyn Recognizer,
         hint: &Hint,
     ) -> Result<Option<Transcript>> {
+        if let Some(Flight { job, cut, speech_ms }) = self.flight.take() {
+            // A piece that failed is simply recognised again with the rest.
+            let _ = self.land(cut, speech_ms, job.wait());
+        }
         let rest = &recording[self.done.min(recording.len())..];
-        self.take(rest, recognizer, hint)?;
+        let trimmed = isolate(recognizer, rest)?;
+        self.take(trimmed, recognizer, hint)?;
         Ok(self.spoke.then(|| Transcript {
             raw: self.pieces.join(" "),
             speech_ms: self.speech_ms,
@@ -194,37 +240,70 @@ impl Live {
         Ok(None)
     }
 
-    fn take(&mut self, piece: &[f32], recognizer: &mut dyn Recognizer, hint: &Hint) -> Result<()> {
-        let trimmed = isolate(recognizer, piece)?;
+    fn take(&mut self, trimmed: Trimmed, recognizer: &mut dyn Recognizer, hint: &Hint) -> Result<()> {
         if trimmed.samples.is_empty() {
             return Ok(());
         }
         let previous = self.pieces.join(" ");
-        let started = std::time::Instant::now();
-        let raw = strip_tags(&recognizer.transcribe(
+        let started = Instant::now();
+        let raw = recognizer.transcribe(
             &trimmed.samples,
             &Hint {
                 previous: &previous,
                 ..*hint
             },
-        )?);
-        self.cost_ms = started.elapsed().as_millis() as u64;
+        )?;
+        let cost_ms = started.elapsed().as_millis() as u64;
+        self.record(&raw, recognizer.heard(), trimmed.speech_ms, cost_ms);
+        Ok(())
+    }
+
+    /// Recognises a piece on a thread of its own.
+    fn launch(&self, mut recognizer: Box<dyn Recognizer + Send>, samples: Vec<f32>, hint: &Hint) -> Job<Answer> {
+        let language = hint.language.to_string();
+        let vocabulary = hint.vocabulary.to_vec();
+        let previous = self.pieces.join(" ");
+        Job::start(move |stop| {
+            let hint = Hint {
+                language: &language,
+                vocabulary: &vocabulary,
+                previous: &previous,
+            };
+            let started = Instant::now();
+            let raw = recognizer.transcribe_until(&samples, &hint, stop)?;
+            Ok((raw, recognizer.heard(), started.elapsed().as_millis() as u64))
+        })
+    }
+
+    /// Takes in a piece recognised elsewhere. On an error nothing moves on,
+    /// so the piece is tried again.
+    fn land(&mut self, cut: usize, speech_ms: u64, answer: Result<Answer>) -> Result<()> {
+        let (raw, heard, cost_ms) = answer?;
+        self.record(&raw, heard, speech_ms, cost_ms);
+        self.done += cut;
+        Ok(())
+    }
+
+    fn record(&mut self, raw: &str, heard: Vec<Heard>, speech_ms: u64, cost_ms: u64) {
+        let raw = strip_tags(raw);
+        self.cost_ms = cost_ms;
         self.spoke = true;
         self.taken += 1;
-        self.speech_ms += trimmed.speech_ms;
-        if !raw.is_empty() && !is_phantom(&raw, trimmed.speech_ms) {
-            self.heard.extend(recognizer.heard());
+        self.speech_ms += speech_ms;
+        if !raw.is_empty() && !is_phantom(&raw, speech_ms) {
+            self.heard.extend(heard);
             self.pieces.push(raw);
         }
-        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::asr::Fixed;
+    use crate::asr::{Fixed, Shared};
     use crate::audio::tone;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
 
     const HINT: Hint = Hint {
         language: "en",
@@ -345,6 +424,118 @@ mod tests {
         let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
         // Speech was there, so this is "nothing", not "silent".
         assert_eq!((heard.raw.as_str(), heard.pieces), ("", 2));
+    }
+
+    /// Waits for `ready`, for up to five seconds.
+    fn eventually(mut ready: impl FnMut() -> bool) {
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        while !ready() {
+            assert!(Instant::now() < deadline, "timed out");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn a_shared_recogniser_works_on_its_own_thread() {
+        let recording = join(&[
+            tone(4000, 0.3),
+            silence(1000),
+            tone(3500, 0.3),
+            silence(1000),
+            tone(2500, 0.3),
+        ]);
+        let gate = Arc::new(Mutex::new(()));
+        let mut fixed = Fixed::detecting(&["first part.", "second part.", "the rest."]);
+        fixed.gate = Some(gate.clone());
+        let mut asr = Shared::new(fixed);
+        assert_eq!(asr.name(), "fixed");
+        let mut live = Live::default();
+        let held = gate.lock().unwrap();
+        // The piece is sent off, and the caller carries on at once.
+        assert!(!live.advance(&recording[..4800 * MS], &mut asr, &HINT).unwrap());
+        eventually(|| asr.busy());
+        // While it is out, nothing more is looked at.
+        assert!(!live.advance(&recording[..8800 * MS], &mut asr, &HINT).unwrap());
+        assert_eq!(live.done(), 0);
+        drop(held);
+        let mut landed = false;
+        eventually(|| {
+            landed = live.advance(&recording[..8800 * MS], &mut asr, &HINT).unwrap();
+            landed
+        });
+        assert_eq!(
+            (live.done(), live.pieces()),
+            (4400 * MS, &["first part.".to_string()][..])
+        );
+        // The next piece is still out when the recording ends: the end waits
+        // for it, then recognises the rest.
+        let pending = &recording[live.done()..9300 * MS];
+        assert!(!live.advance(pending, &mut asr, &HINT).unwrap());
+        let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
+        assert_eq!(heard.raw, "first part. second part. the rest.");
+        assert_eq!(heard.pieces, 3);
+        let calls = asr.lock().heard.clone();
+        assert_eq!(calls[1].3, "first part.");
+        assert_eq!(calls[2].3, "first part. second part.");
+        assert!(asr.heard().is_empty());
+    }
+
+    #[test]
+    fn a_piece_that_fails_on_its_own_thread_is_tried_again() {
+        let recording = join(&[tone(3500, 0.3), silence(1000)]);
+        let mut fixed = Fixed::detecting(&[]);
+        fixed.answers = vec![Err("busy".into()), Err("busy".into()), Ok("again".into())];
+        let mut asr = Shared::new(fixed);
+        let mut live = Live::default();
+        assert!(!live.advance(&recording, &mut asr, &HINT).unwrap());
+        let mut failed = None;
+        eventually(|| {
+            failed = live.advance(&recording, &mut asr, &HINT).err();
+            failed.is_some()
+        });
+        assert_eq!((failed.unwrap().as_str(), live.done()), ("busy", 0));
+        // Out again, and failing again, when the recording ends.
+        live.looked = 0;
+        assert!(!live.advance(&recording, &mut asr, &HINT).unwrap());
+        assert_eq!(live.finish(&recording, &mut asr, &HINT).unwrap().unwrap().raw, "again");
+    }
+
+    /// Takes forever, unless told to stop.
+    struct Patient;
+
+    impl Recognizer for Patient {
+        fn transcribe(&mut self, _: &[f32], _: &Hint) -> Result<String> {
+            Ok("never".into())
+        }
+        fn transcribe_until(&mut self, _: &[f32], _: &Hint, stop: &AtomicBool) -> Result<String> {
+            eventually(|| stop.load(Ordering::SeqCst));
+            Err("stopped".into())
+        }
+        fn name(&self) -> &str {
+            "patient"
+        }
+        fn detect(&mut self, audio: &[f32], _: f64) -> Option<Result<Vec<Range<usize>>>> {
+            Some(Ok(crate::testing::sounding(audio)))
+        }
+    }
+
+    #[test]
+    fn a_cancelled_piece_is_told_to_stop_and_holds_nothing_up() {
+        let recording = join(&[tone(4000, 0.3), silence(1000)]);
+        let mut asr = Shared::new(Patient);
+        assert_eq!(asr.lock().transcribe(&[], &HINT).unwrap(), "never");
+        let mut live = Live::default();
+        assert!(!live.advance(&recording, &mut asr, &HINT).unwrap());
+        eventually(|| asr.busy());
+        // A new recording meanwhile does not wait for the recogniser.
+        let mut next = Live::default();
+        assert!(!next.advance(&recording, &mut asr, &HINT).unwrap());
+        assert_eq!(next.looked, 0);
+        // Cancelling the first lets it go.
+        drop(live);
+        eventually(|| !asr.busy());
+        assert!(!next.advance(&recording, &mut asr, &HINT).unwrap());
+        assert!(next.flight.is_some());
     }
 
     #[test]

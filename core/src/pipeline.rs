@@ -3,6 +3,7 @@
 use crate::asr::{Hint, Recognizer};
 use crate::context::{categorize, Category, Target};
 use crate::format::{self, Edits, Options};
+use crate::job::Job;
 use crate::live::Live;
 use crate::llm::{cleanup_prompt, command_prompt, vet_cleanup_after, vet_command, Brief, Rewriter};
 use crate::settings::{Cleanup, Settings, Style};
@@ -142,12 +143,65 @@ enum Part<'a> {
     Block { before: &'a str, said: usize, last: bool },
 }
 
-fn compose_part(
-    raw: &str,
-    to: &Destination,
-    (circuit, now_ms): (&mut RewriteCircuit, u64),
-    part: Part,
-) -> Option<Composed> {
+fn compose_part(raw: &str, to: &Destination, circuit: (&mut RewriteCircuit, u64), part: Part) -> Option<Composed> {
+    match prepare(raw, to, (&*circuit.0, circuit.1), part) {
+        Ok(asking) => ask_now(asking, to, circuit),
+        Err(done) => done,
+    }
+}
+
+/// Asks the model and waits for its answer.
+fn ask_now(asking: Asking, to: &Destination, circuit: (&mut RewriteCircuit, u64)) -> Option<Composed> {
+    let rewriter = to.rewriter.expect("only a model is asked");
+    let started = Instant::now();
+    let answer = rewriter.rewrite(&asking.system, &asking.user);
+    let rewrite_ms = started.elapsed().as_millis() as u32;
+    conclude(asking, answer, rewrite_ms, to, circuit)
+}
+
+/// How far `prepare` got: a question for the model, or, as the error, the
+/// text finished without it.
+type Step = std::result::Result<Asking, Option<Composed>>;
+
+/// A cleanup waiting for the language model's answer.
+#[derive(Debug)]
+struct Asking {
+    out: Composed,
+    heard: String,
+    whole: bool,
+    before: String,
+    by_rules: format::Formatted,
+    /// The rules `by_rules` was made with: the dictionary may change
+    /// while the model thinks, and its hits are counted by position.
+    rules: crate::store::Rules,
+    system: String,
+    user: String,
+}
+
+/// The formatter's options for a part of a dictation.
+fn options<'a>(to: &Destination, rules: &'a crate::store::Rules, whole: bool) -> Options<'a> {
+    let settings = to.settings;
+    Options {
+        style: if whole { to.category.style(&settings.styles) } else { Style::Formal },
+        spelling: settings.spelling,
+        numbers: settings.numbers,
+        replacements: &rules.replacements,
+        literal: to.category.literal(),
+    }
+}
+
+/// Hits are recorded now for a whole dictation, at the end for a block.
+fn hits(out: &mut Composed, to: &Destination, rules: &crate::store::Rules, fired: &[usize], whole: bool) {
+    if whole {
+        let _ = to.store.record_hits(rules, fired);
+    } else {
+        out.fired = rules.origins_of(fired);
+    }
+}
+
+/// Does everything the language model is not needed for, and says what to
+/// ask it if it is.
+fn prepare(raw: &str, to: &Destination, (circuit, now_ms): (&RewriteCircuit, u64), part: Part) -> Step {
     let Destination {
         target,
         category,
@@ -159,6 +213,7 @@ fn compose_part(
         Part::Whole => ("", 0, true),
         Part::Block { before, said, last } => (before, said, last),
     };
+    let whole = part == Part::Whole;
     let mut out = Composed::default();
     let mut heard = raw.trim().to_string();
     if last && settings.press_enter && PRESS_ENTER.is_match(&heard) {
@@ -167,51 +222,34 @@ fn compose_part(
     }
     if heard.is_empty() {
         // "Press enter" alone still presses Enter.
-        return out.press_enter.then_some(out);
+        return Err(out.press_enter.then_some(out));
     }
     let rules = store.replacement_rules();
-    // Hits are recorded now for a whole dictation, at the end for a block.
-    let hits = |out: &mut Composed, fired: &[usize]| {
-        if part == Part::Whole {
-            let _ = store.record_hits(&rules, fired);
-        } else {
-            out.fired = rules.origins_of(fired);
-        }
-    };
-    let style = category.style(&settings.styles);
-    let options = Options {
-        style: if part == Part::Whole { style } else { Style::Formal },
-        spelling: settings.spelling,
-        numbers: settings.numbers,
-        replacements: &rules.replacements,
-        literal: category.literal(),
-    };
     if settings.rewrite.level == Cleanup::None {
         // Raw mode still honours the user's own dictionary and snippets.
         let (text, fired) = format::apply_replacements(&heard, &rules.replacements);
-        hits(&mut out, &fired);
+        hits(&mut out, to, &rules, &fired, whole);
         out.fixes = fired.len() as u32;
         out.text = text;
-        return Some(out);
+        return Err(Some(out));
     }
-    let by_rules = format::format(&heard, &options);
-    let mut result = by_rules.clone();
+    let by_rules = format::format(&heard, &options(to, &rules, whole));
     // A block counts the words before it: the threshold is for the dictation.
     let spoken = heard.split_whitespace().count() + said;
     let long_enough = spoken >= settings.rewrite.min_words;
-    if let (true, true, Some(rewriter)) = (settings.rewrite.enabled, long_enough, rewriter) {
+    if settings.rewrite.enabled && long_enough && rewriter.is_some() {
         if circuit.cooling(now_ms) {
             out.text = by_rules.text;
             out.fixes = by_rules.edits.total();
             out.fallback = Some("Language model temporarily skipped after repeated rewrite failures".into());
-            hits(&mut out, &by_rules.fired);
-            return (!out.text.is_empty() || out.press_enter).then_some(out);
+            hits(&mut out, to, &rules, &by_rules.fired, whole);
+            return Err((!out.text.is_empty() || out.press_enter).then_some(out));
         }
         let vocabulary = store.vocabulary();
         let examples = store.examples(category, 3);
         let brief = Brief {
             level: settings.rewrite.level,
-            style,
+            style: category.style(&settings.styles),
             category,
             spelling: settings.spelling,
             numbers: settings.numbers,
@@ -221,37 +259,69 @@ fn compose_part(
             before,
         };
         let (system, user) = cleanup_prompt(&heard, &brief);
-        let started = Instant::now();
-        let answer = rewriter.rewrite(&system, &user);
-        out.rewrite_ms = started.elapsed().as_millis() as u32;
-        let vetted = answer.map(|text| vet_cleanup_after(&heard, &text, before));
-        circuit.record(now_ms, matches!(vetted, Ok(Some(_))));
-        match vetted {
-            Ok(Some(text)) if text.is_empty() => return None,
-            Ok(Some(text)) => {
-                // The model did the rewriting; the rule pass's count is the best
-                // estimate of how much it fixed.
-                result = format::finish(
-                    &text,
-                    &options,
-                    Edits {
-                        replacements: 0,
-                        spellings: 0,
-                        ..by_rules.edits
-                    },
-                );
-                out.rewritten = true;
-            }
-            Ok(None) => {
-                out.fallback = Some(
-                    "The language model's answer did not look like a cleanup, so the built-in formatter was used"
-                        .into(),
-                )
-            }
-            Err(error) => out.fallback = Some(error),
-        }
+        return Ok(Asking {
+            out,
+            heard,
+            whole,
+            before: before.to_string(),
+            by_rules,
+            rules,
+            system,
+            user,
+        });
     }
-    hits(&mut out, &result.fired);
+    hits(&mut out, to, &rules, &by_rules.fired, whole);
+    out.fixes = by_rules.edits.total();
+    out.text = by_rules.text;
+    Err((!out.text.is_empty() || out.press_enter).then_some(out))
+}
+
+/// Finishes a cleanup with the language model's answer.
+fn conclude(
+    asking: Asking,
+    answer: Result<String>,
+    rewrite_ms: u32,
+    to: &Destination,
+    (circuit, now_ms): (&mut RewriteCircuit, u64),
+) -> Option<Composed> {
+    let Asking {
+        mut out,
+        heard,
+        whole,
+        before,
+        by_rules,
+        rules,
+        ..
+    } = asking;
+    let options = options(to, &rules, whole);
+    out.rewrite_ms = rewrite_ms;
+    let vetted = answer.map(|text| vet_cleanup_after(&heard, &text, &before));
+    circuit.record(now_ms, matches!(vetted, Ok(Some(_))));
+    let mut result = by_rules.clone();
+    match vetted {
+        Ok(Some(text)) if text.is_empty() => return None,
+        Ok(Some(text)) => {
+            // The model did the rewriting; the rule pass's count is the best
+            // estimate of how much it fixed.
+            result = format::finish(
+                &text,
+                &options,
+                Edits {
+                    replacements: 0,
+                    spellings: 0,
+                    ..by_rules.edits
+                },
+            );
+            out.rewritten = true;
+        }
+        Ok(None) => {
+            out.fallback = Some(
+                "The language model's answer did not look like a cleanup, so the built-in formatter was used".into(),
+            )
+        }
+        Err(error) => out.fallback = Some(error),
+    }
+    hits(&mut out, to, &rules, &result.fired, whole);
     out.fixes = result.edits.total();
     out.text = result.text;
     (!out.text.is_empty() || out.press_enter).then_some(out)
@@ -361,6 +431,9 @@ pub const BLOCK_WORDS: usize = 40;
 #[derive(Debug, Default)]
 pub struct Draft {
     pub live: Live,
+    /// A block the model is cleaning up on a thread of its own. Dropping
+    /// it, as a cancel does, forgets it.
+    cleaning: Option<Cleaning>,
     /// Cleaned-up blocks, in order, with the words each was made from.
     blocks: Vec<(String, Composed)>,
     /// How many of `live`'s pieces the blocks cover.
@@ -368,6 +441,25 @@ pub struct Draft {
     /// A correction may reach into a block already cleaned up, so the whole
     /// dictation is cleaned up at the end after all.
     whole: bool,
+}
+
+/// The model's answer for a block and how long it took.
+type Answered = (Result<String>, u32);
+
+#[derive(Debug)]
+struct Cleaning {
+    job: Job<Answered>,
+    block: Waiting,
+}
+
+/// A block waiting for the model.
+#[derive(Debug)]
+struct Waiting {
+    asking: Asking,
+    /// The words the block was made from.
+    raw: String,
+    /// How many of the pieces the blocks cover once this one is done.
+    upto: usize,
 }
 
 impl Draft {
@@ -392,7 +484,18 @@ impl Draft {
     /// enough of them and they end a sentence. Only worth doing when the
     /// language model would be used: the rules alone take no time at the end.
     /// Returns whether a block was cleaned up.
+    ///
+    /// A model that can be shared cleans the block up on a thread of its
+    /// own; a later call collects it, and returns true then.
     pub fn clean(&mut self, to: &Destination, circuit: (&mut RewriteCircuit, u64)) -> bool {
+        let (circuit, now_ms) = circuit;
+        let mut landed = false;
+        if let Some(cleaning) = &self.cleaning {
+            let Some(answer) = cleaning.job.poll() else { return false };
+            let cleaning = self.cleaning.take().expect("a block being cleaned up");
+            self.land(cleaning.block, answer, to, (&mut *circuit, now_ms));
+            landed = true;
+        }
         let rewrite = &to.settings.rewrite;
         let modelled = rewrite.enabled && rewrite.level != Cleanup::None && to.rewriter.is_some();
         let pending = self.live.pieces()[self.used..].join(" ");
@@ -409,29 +512,72 @@ impl Draft {
         }
         if !modelled
             || self.whole
-            || circuit.0.cooling(circuit.1)
+            || circuit.cooling(now_ms)
             || words < BLOCK_WORDS
             || so_far < rewrite.min_words
             || !finished
             || command
         {
-            return false;
+            return landed;
         }
         let before = self.written(to.category.literal());
-        let composed = compose_part(
-            &pending,
-            to,
-            circuit,
-            Part::Block {
-                before: &before,
-                said,
-                last: false,
-            },
-        );
-        self.used = self.live.pieces().len();
+        let part = Part::Block {
+            before: &before,
+            said,
+            last: false,
+        };
+        let upto = self.live.pieces().len();
+        // The model is on, so a block always has a question for it.
+        let asking = prepare(&pending, to, (&*circuit, now_ms), part).expect("a question for the model");
+        let composed = match to.rewriter.and_then(|rewriter| rewriter.share()) {
+            Some(rewriter) => {
+                let (system, user) = (asking.system.clone(), asking.user.clone());
+                let job = Job::start(move |_| {
+                    let started = Instant::now();
+                    let answer = rewriter.rewrite(&system, &user);
+                    Ok((answer, started.elapsed().as_millis() as u32))
+                });
+                self.cleaning = Some(Cleaning {
+                    job,
+                    block: Waiting {
+                        asking,
+                        raw: pending,
+                        upto,
+                    },
+                });
+                return landed;
+            }
+            None => ask_now(asking, to, (circuit, now_ms)),
+        };
+        self.used = upto;
         // Pure filler comes back as nothing, which leaves nothing to type.
         self.blocks.extend(composed.map(|block| (pending, block)));
         true
+    }
+
+    /// Whether a block is with the model.
+    pub fn cleaning(&self) -> bool {
+        self.cleaning.is_some()
+    }
+
+    /// Waits for the block being cleaned up, if there is one.
+    fn settle(&mut self, to: &Destination, circuit: (&mut RewriteCircuit, u64)) {
+        if let Some(Cleaning { job, block }) = self.cleaning.take() {
+            self.land(block, job.wait(), to, circuit);
+        }
+    }
+
+    fn land(
+        &mut self,
+        block: Waiting,
+        answer: Result<Answered>,
+        to: &Destination,
+        circuit: (&mut RewriteCircuit, u64),
+    ) {
+        let (answer, rewrite_ms) = answer.unwrap_or_else(|lost| (Err(lost), 0));
+        let composed = conclude(block.asking, answer, rewrite_ms, to, circuit);
+        self.used = block.upto;
+        self.blocks.extend(composed.map(|cleaned| (block.raw, cleaned)));
     }
 }
 
@@ -474,8 +620,7 @@ pub fn run_live(
         vocabulary: &vocabulary,
         previous: "",
     };
-    let blocks = std::mem::take(&mut draft.blocks);
-    let (used, whole) = (draft.used, draft.whole);
+    let (circuit, now_ms) = circuit;
     let Some(heard) = draft.live.finish(request.audio, recognizer, &hint)? else { return Ok(Outcome::Silent) };
     let raw = heard.raw;
     let asr_ms = started.elapsed().as_millis() as u32;
@@ -516,13 +661,17 @@ pub fn run_live(
             store,
             rewriter,
         };
+        // A block still with the model was started while the user spoke.
+        draft.settle(&to, (&mut *circuit, now_ms));
+        let blocks = std::mem::take(&mut draft.blocks);
+        let (used, whole) = (draft.used, draft.whole);
         let rest = &heard.parts[used.min(heard.parts.len())..];
         // Blocks that came to nothing still used their words. A correction
         // that may undo part of a cleaned-up block means starting over.
         let composed = if used == 0 || whole || format::reaches_back(&rest.join(" ")) {
-            compose_part(&raw, &to, circuit, Part::Whole)
+            compose_part(&raw, &to, (circuit, now_ms), Part::Whole)
         } else {
-            finish_blocks(blocks, rest, &to, circuit)
+            finish_blocks(blocks, rest, &to, (circuit, now_ms))
         };
         let Some(composed) = composed else {
             return Ok(Outcome::Nothing);
@@ -693,6 +842,83 @@ mod tests {
         };
         assert!(!draft.clean(&raw, (&mut circuit, 0)));
         assert!(llm.seen.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_shared_model_cleans_up_a_block_on_its_own_thread() {
+        let store = Store::memory();
+        let settings = Settings::default();
+        let audio = spoken();
+        let mut asr = Fixed::detecting(&[FIRST, "and that is all for this week"]);
+        let mut draft = drafted(&mut asr, &audio);
+        let llm = crate::llm::Sharing::new(vec![
+            Ok("The plan is simple.".into()),
+            Ok("That is all for this week.".into()),
+        ]);
+        let target = Target::default();
+        let to = Destination {
+            target: &target,
+            category: Category::Other,
+            settings: &settings,
+            store: &store,
+            rewriter: Some(&llm),
+        };
+        let mut circuit = RewriteCircuit::default();
+        let thinking = llm.0.lock().unwrap();
+        // The block goes off to the model, and the caller carries on.
+        assert!(!draft.clean(&to, (&mut circuit, 0)));
+        assert!(draft.cleaning());
+        assert!(!draft.clean(&to, (&mut circuit, 0)));
+        drop(thinking);
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        while !draft.clean(&to, (&mut circuit, 0)) {
+            assert!(Instant::now() < deadline, "timed out");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(!draft.cleaning());
+        let (paste, record, _) = text(run_live(
+            &request(&audio, "A"),
+            &mut draft,
+            &settings,
+            &store,
+            &mut asr,
+            Some(&llm),
+            (&mut circuit, 0),
+        ));
+        assert_eq!(paste, "The plan is simple. That is all for this week. ");
+        assert!(record.rewritten);
+        assert_eq!(llm.seen().len(), 2);
+    }
+
+    #[test]
+    fn a_dictionary_change_while_the_model_thinks_counts_the_right_entry() {
+        let store = Store::memory();
+        store.add_word("review", "code review", "manual", NOW).unwrap();
+        let settings = Settings::default();
+        let audio = spoken();
+        let mut asr = Fixed::detecting(&[FIRST]);
+        let mut draft = drafted(&mut asr, &audio);
+        let llm = crate::llm::Sharing::new(vec![Err("down".into())]);
+        let target = Target::default();
+        let to = Destination {
+            target: &target,
+            category: Category::Other,
+            settings: &settings,
+            store: &store,
+            rewriter: Some(&llm),
+        };
+        let mut circuit = RewriteCircuit::default();
+        let thinking = llm.0.lock().unwrap();
+        assert!(!draft.clean(&to, (&mut circuit, 0)));
+        // An entry that sorts first moves the others along.
+        store.add_word("zzz", "aardvark", "manual", NOW).unwrap();
+        drop(thinking);
+        draft.settle(&to, (&mut circuit, 0));
+        let fired: Vec<(bool, i64)> = draft.blocks.iter().flat_map(|(_, block)| block.fired.clone()).collect();
+        store.record_origin_hits(&fired).unwrap();
+        let words = store.dictionary().unwrap();
+        let hits = |term: &str| words.iter().find(|word| word.term == term).unwrap().hits;
+        assert_eq!((hits("code review"), hits("aardvark")), (1, 0));
     }
 
     #[test]

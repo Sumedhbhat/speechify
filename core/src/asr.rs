@@ -5,7 +5,8 @@ use crate::audio::encode_wav;
 use crate::http::Http;
 use crate::Result;
 use regex::Regex;
-use std::sync::LazyLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::Duration;
 
 /// What the recogniser is told about the speaker.
@@ -34,6 +35,89 @@ pub trait Recognizer {
     /// in each. Empty when the recogniser does not report it.
     fn heard(&self) -> Vec<Heard> {
         Vec::new()
+    }
+    /// Like `transcribe`, but a recogniser that can gives up early once
+    /// `stop` is set: nobody wants the answer any more.
+    fn transcribe_until(&mut self, audio: &[f32], hint: &Hint, _stop: &AtomicBool) -> Result<String> {
+        self.transcribe(audio, hint)
+    }
+    /// Another handle on this recogniser, for a thread of its own, if it
+    /// can be used from one. `None` means it works only where it is.
+    fn share(&mut self) -> Option<Box<dyn Recognizer + Send>> {
+        None
+    }
+    /// Whether a handle shared from this one is in the middle of something,
+    /// so that using this one now would wait for it.
+    fn busy(&self) -> bool {
+        false
+    }
+}
+
+/// A recogniser that threads take turns with: each use waits for the one
+/// before it, on whichever handle that was.
+pub struct Shared<R> {
+    inner: Arc<Mutex<R>>,
+    name: String,
+}
+
+impl<R: Recognizer> Shared<R> {
+    pub fn new(recognizer: R) -> Shared<R> {
+        Shared {
+            name: recognizer.name().to_string(),
+            inner: Arc::new(Mutex::new(recognizer)),
+        }
+    }
+
+    /// The recogniser itself, once no other handle is using it.
+    pub fn lock(&self) -> MutexGuard<'_, R> {
+        self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Waits up to `wait` for every other handle to be dropped, so that
+    /// dropping this one frees the recogniser here and now. Returns whether
+    /// that happened in time.
+    pub fn wait_alone(&self, wait: Duration) -> bool {
+        let deadline = std::time::Instant::now() + wait;
+        while Arc::strong_count(&self.inner) > 1 {
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        true
+    }
+}
+
+impl<R> Clone for Shared<R> {
+    fn clone(&self) -> Shared<R> {
+        Shared {
+            inner: self.inner.clone(),
+            name: self.name.clone(),
+        }
+    }
+}
+
+impl<R: Recognizer + Send + 'static> Recognizer for Shared<R> {
+    fn transcribe(&mut self, audio: &[f32], hint: &Hint) -> Result<String> {
+        self.lock().transcribe(audio, hint)
+    }
+    fn transcribe_until(&mut self, audio: &[f32], hint: &Hint, stop: &AtomicBool) -> Result<String> {
+        self.lock().transcribe_until(audio, hint, stop)
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn detect(&mut self, audio: &[f32], threshold: f64) -> Option<Result<Vec<std::ops::Range<usize>>>> {
+        self.lock().detect(audio, threshold)
+    }
+    fn heard(&self) -> Vec<Heard> {
+        self.lock().heard()
+    }
+    fn share(&mut self) -> Option<Box<dyn Recognizer + Send>> {
+        Some(Box::new(self.clone()))
+    }
+    fn busy(&self) -> bool {
+        matches!(self.inner.try_lock(), Err(std::sync::TryLockError::WouldBlock))
     }
 }
 
@@ -167,6 +251,7 @@ pub fn strip_tags(text: &str) -> String {
 
 /// A recogniser behind an OpenAI-compatible `/audio/transcriptions` endpoint,
 /// for people who run a speech server on another machine.
+#[derive(Clone)]
 pub struct Remote {
     http: Http,
     url: String,
@@ -225,6 +310,11 @@ impl Recognizer for Remote {
     fn name(&self) -> &str {
         &self.model
     }
+
+    /// A server needs nothing in common between requests.
+    fn share(&mut self) -> Option<Box<dyn Recognizer + Send>> {
+        Some(Box::new(self.clone()))
+    }
 }
 
 #[cfg(test)]
@@ -234,6 +324,8 @@ pub(crate) struct Fixed {
     pub heard: Vec<(usize, String, Vec<String>, String)>,
     /// Finds speech exactly, wherever the samples are not silent.
     pub detects: bool,
+    /// Each answer waits until this is free.
+    pub gate: Option<Arc<Mutex<()>>>,
 }
 
 #[cfg(test)]
@@ -243,6 +335,7 @@ impl Fixed {
             answers: answers.iter().map(|text| Ok(text.to_string())).collect(),
             heard: vec![],
             detects: false,
+            gate: None,
         }
     }
 
@@ -264,6 +357,7 @@ impl Recognizer for Fixed {
             hint.vocabulary.to_vec(),
             hint.previous.to_string(),
         ));
+        let _open = self.gate.as_ref().map(|gate| gate.lock().unwrap());
         self.answers.remove(0)
     }
 
@@ -280,6 +374,23 @@ impl Recognizer for Fixed {
 mod tests {
     use super::*;
     use crate::testing::{Reply, Server};
+
+    #[test]
+    fn a_shared_recogniser_can_wait_for_its_other_handles() {
+        let mut shared = Shared::new(Fixed::new(&[]));
+        assert!(shared.wait_alone(Duration::ZERO));
+        let other = shared.share().unwrap();
+        assert!(!shared.wait_alone(Duration::from_millis(10)));
+        let gone = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            drop(other);
+        });
+        assert!(shared.wait_alone(Duration::from_secs(5)));
+        gone.join().unwrap();
+        // A speech server can be asked from anywhere.
+        let mut remote = Remote::new("http://127.0.0.1:9", "", "model");
+        assert_eq!(remote.share().unwrap().name(), "model");
+    }
 
     /// A recogniser whose detector gives these answers in turn, then none.
     struct Detecting(Vec<Option<Result<Vec<std::ops::Range<usize>>>>>);

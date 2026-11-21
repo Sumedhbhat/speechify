@@ -14,9 +14,15 @@ use std::time::Duration;
 pub trait Rewriter {
     fn rewrite(&self, system: &str, user: &str) -> Result<String>;
     fn model(&self) -> &str;
+    /// Another handle on this model, for a thread of its own, if it can be
+    /// used from one. `None` means it works only where it is.
+    fn share(&self) -> Option<Box<dyn Rewriter + Send>> {
+        None
+    }
 }
 
 /// A chat model behind Ollama or any OpenAI-compatible server.
+#[derive(Clone)]
 pub struct Chat {
     http: Http,
     url: String,
@@ -126,6 +132,10 @@ impl Rewriter for Chat {
 
     fn model(&self) -> &str {
         &self.model
+    }
+
+    fn share(&self) -> Option<Box<dyn Rewriter + Send>> {
+        Some(Box::new(self.clone()))
     }
 }
 
@@ -350,6 +360,38 @@ impl Rewriter for Scripted {
 
     fn model(&self) -> &str {
         "scripted"
+    }
+}
+
+/// A `Scripted` that other threads can use too.
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct Sharing(pub std::sync::Arc<std::sync::Mutex<Scripted>>);
+
+#[cfg(test)]
+impl Sharing {
+    pub fn new(answers: Vec<Result<String>>) -> Sharing {
+        Sharing(std::sync::Arc::new(std::sync::Mutex::new(Scripted::new(answers))))
+    }
+
+    /// What it was asked so far.
+    pub fn seen(&self) -> Vec<(String, String)> {
+        self.0.lock().unwrap().seen.borrow().clone()
+    }
+}
+
+#[cfg(test)]
+impl Rewriter for Sharing {
+    fn rewrite(&self, system: &str, user: &str) -> Result<String> {
+        self.0.lock().unwrap().rewrite(system, user)
+    }
+
+    fn model(&self) -> &str {
+        "scripted"
+    }
+
+    fn share(&self) -> Option<Box<dyn Rewriter + Send>> {
+        Some(Box::new(self.clone()))
     }
 }
 
@@ -644,6 +686,8 @@ mod tests {
     fn scripted_rewriter_replays_answers() {
         let scripted = Scripted::new(vec![Ok("a".into()), Err("down".into())]);
         assert_eq!(scripted.rewrite("s", "u").unwrap(), "a");
+        let chat = Chat::new("http://127.0.0.1:9", "", "gemma3:4b", Duration::from_secs(1));
+        assert_eq!(chat.share().unwrap().model(), "gemma3:4b");
         assert_eq!(scripted.rewrite("s2", "u2").unwrap_err(), "down");
         assert_eq!(scripted.seen.borrow().len(), 2);
         assert_eq!(scripted.model(), "scripted");

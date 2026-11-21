@@ -117,9 +117,11 @@ Waiting for the whole recording before recognising any of it made the wait after
 - Each piece is normalised, trimmed and checked for phantom phrases on its own. Whisper is given the end of the text so far as its prompt, so it carries on in the same style.
 - A recogniser without a voice detector (a remote server) gets the whole recording at the end, as before; `Live` stops asking for audio once it knows.
 - Recognising in pieces also fixes long recordings: Parakeet given a minute or more at once loses words (half of one 67 s recording in the evaluation).
-- The worker thread does this work between key events, so a key-up that arrives while a piece is being recognised is handled when that piece is done.
+- The worker thread never recognises a piece itself. It finds the cut, then hands the piece to a `job::Job` on a thread of its own, holding another handle on the same model (`asr::Shared`, which lets one thread at a time use the model). Later ticks collect the words. Key events therefore never wait for a piece. A cancel drops the job, which sets its stop flag; transcribe.cpp checks it between decoding steps (it cannot stop in the middle of the encoder), and the answer is thrown away. A key-up stops the microphone straight away and then waits only for the piece already under way, since its words are needed, before recognising the rest.
 
 When the language model is on, `pipeline::Draft` does the same for cleanup: once at least 40 words ending in a full sentence have been recognised, they are cleaned up as a block while the user goes on speaking. The model sees the end of the text cleaned up so far, so it can carry on a numbered list. Blocks are joined (list items on their own lines) and the destination's style is applied once to the whole, so a style that drops the closing full stop does not drop one in the middle. Command Mode is never cleaned up early: the instruction only means something whole.
+
+The model is asked on a thread of its own too. A cancel forgets the block. A key-up waits for its answer, which it would need anyway. When the worker stops, `Models` waits for a piece still under way to release the model, so that the model is freed before the process exits (Metal checks at exit that nothing is left on the GPU).
 
 ## Speech recognition
 

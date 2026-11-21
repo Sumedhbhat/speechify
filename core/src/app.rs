@@ -121,6 +121,10 @@ fn app_name(target: &Target) -> &str {
 }
 
 pub struct Controller<P: Platform, E: Engines> {
+    /// The recording in progress, recognised and cleaned up as it is made.
+    /// Declared first so that it is dropped first: work it left running
+    /// elsewhere is told to stop before the engines are dropped.
+    draft: Draft,
     pub platform: P,
     pub engines: E,
     pub store: Store,
@@ -130,8 +134,6 @@ pub struct Controller<P: Platform, E: Engines> {
     /// The last cancelled or failed recording, for Undo and retry.
     kept: Option<(Vec<f32>, Target, bool, String)>,
     muted: bool,
-    /// The recording in progress, recognised and cleaned up as it is made.
-    draft: Draft,
     /// How long the recogniser took over its last piece, which sets how
     /// long the next recording's pieces must be.
     piece_cost_ms: u64,
@@ -284,7 +286,8 @@ impl<P: Platform, E: Engines> Controller<P, E> {
             vocabulary: &vocabulary,
             previous: "",
         };
-        if !matches!(self.draft.live.advance(&pending, recognizer, &hint), Ok(true)) || self.command {
+        let advanced = matches!(self.draft.live.advance(&pending, recognizer, &hint), Ok(true));
+        if self.command || !(advanced || self.draft.cleaning()) {
             return;
         }
         let into = Destination {
@@ -564,10 +567,12 @@ impl<P: Platform, E: Engines> Controller<P, E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::asr::Fixed;
+    use crate::asr::{Fixed, Shared};
     use crate::audio::tone;
     use crate::hotkey::Bind;
-    use crate::llm::Scripted;
+    use crate::llm::{Scripted, Sharing};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     #[derive(Default)]
     struct Fake {
@@ -666,6 +671,9 @@ mod tests {
     struct Models {
         asr: Fixed,
         llm: Option<Scripted>,
+        /// Used instead of `asr` and `llm` when set: they work on threads of their own.
+        shared: Option<Shared<Fixed>>,
+        sharing: Option<Sharing>,
         teacher_asr: Fixed,
         broken: Option<String>,
         warmed: u32,
@@ -676,7 +684,14 @@ mod tests {
             if let Some(error) = &self.broken {
                 return Err(error.clone());
             }
-            Ok((&mut self.asr, self.llm.as_ref().map(|llm| llm as &dyn Rewriter)))
+            let llm = match &self.sharing {
+                Some(sharing) => Some(sharing as &dyn Rewriter),
+                None => self.llm.as_ref().map(|llm| llm as &dyn Rewriter),
+            };
+            match &mut self.shared {
+                Some(shared) => Ok((shared, llm)),
+                None => Ok((&mut self.asr, llm)),
+            }
         }
         fn teacher(&mut self, _: &Settings) -> Result<(&mut dyn Recognizer, Option<&dyn Rewriter>)> {
             if let Some(error) = &self.broken {
@@ -703,6 +718,8 @@ mod tests {
             Models {
                 asr: Fixed::new(heard),
                 llm: None,
+                shared: None,
+                sharing: None,
                 teacher_asr: Fixed::new(&[]),
                 broken: None,
                 warmed: 0,
@@ -786,6 +803,66 @@ mod tests {
     }
 
     #[test]
+    fn a_release_or_a_cancel_never_waits_for_work_in_the_background() {
+        let first = "so the plan for the launch is simple we finish the review on monday we fix whatever it finds on tuesday and wednesday and we ship on thursday morning if nothing else comes up before then and the build stays green.";
+        let mut app = app(&[]);
+        set(&mut app, |s| s.rewrite.enabled = true);
+        let gate = Arc::new(Mutex::new(()));
+        let mut fixed = Fixed::detecting(&[first, first, "and that is all for this week"]);
+        fixed.gate = Some(gate.clone());
+        app.engines.shared = Some(Shared::new(fixed));
+        let llm = Sharing::new(vec![
+            Ok("The plan is simple.".into()),
+            Ok("That is all for this week.".into()),
+        ]);
+        app.engines.sharing = Some(llm.clone());
+        app.platform.audio = [tone(4000, 0.3), vec![0.0; 16_000], tone(2000, 0.3)].concat();
+        let tick_until = |app: &mut Controller<Fake, Models>, done: &dyn Fn(&Controller<Fake, Models>) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !done(app) {
+                assert!(Instant::now() < deadline, "timed out");
+                std::thread::sleep(Duration::from_millis(1));
+                app.handle(Event::Tick);
+            }
+        };
+
+        // A piece is being recognised when the user cancels: the cancel
+        // does not wait for it.
+        let held = gate.lock().unwrap();
+        app.handle(Event::Down(Bind::PushToTalk));
+        app.platform.now += 5000;
+        app.handle(Event::Tick);
+        app.handle(Event::Down(Bind::Cancel));
+        app.handle(Event::Released);
+        assert!(
+            matches!(app.platform.bars.last(), Some(Bar::Notice { message, .. }) if message == "Dictation cancelled")
+        );
+        drop(held);
+
+        // A block is with the model when the user lets go: the release
+        // waits for it and uses it.
+        app.handle(Event::Down(Bind::PushToTalk));
+        app.platform.now += 5000;
+        let model = llm.0.clone();
+        let (ready, started) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _thinking = model.lock().unwrap();
+            ready.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+        });
+        started.recv().unwrap();
+        tick_until(&mut app, &|app| app.draft.cleaning());
+        app.platform.now += 2000;
+        app.handle(Event::Up(Bind::PushToTalk));
+        holder.join().unwrap();
+        assert_eq!(
+            app.platform.log.last().unwrap(),
+            "paste:The plan is simple. That is all for this week. |Standard|usual delay"
+        );
+        assert_eq!(llm.seen().len(), 2);
+    }
+
+    #[test]
     fn the_first_recording_goes_by_the_last_saved_dictation() {
         let store = Store::memory();
         let mut slow = crate::testing::dictation("an old one", "Slack", 1_800_000_000);
@@ -798,6 +875,8 @@ mod tests {
             Models {
                 asr: Fixed::new(&[]),
                 llm: None,
+                shared: None,
+                sharing: None,
                 teacher_asr: Fixed::new(&[]),
                 broken: None,
                 warmed: 0,

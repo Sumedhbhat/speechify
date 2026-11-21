@@ -13,6 +13,7 @@ pub mod format;
 pub mod hotkey;
 pub mod http;
 pub mod insights;
+pub mod job;
 pub mod learn;
 pub mod live;
 pub mod llm;

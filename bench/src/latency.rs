@@ -231,6 +231,7 @@ pub fn blocks(manifest: &Path, output: &Path, model: &str, seconds: f64, limit: 
     let url = std::env::var("LIVE_LLM_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".into());
     let llm_model = std::env::var("LIVE_LLM_MODEL").unwrap_or_else(|_| "gemma3:1b".into());
     let chat = Chat::new(&url, "", &llm_model, Duration::from_secs(600));
+    let inline = Inline(&chat);
     let mut s = settings(model);
     s.rewrite.enabled = true;
     s.rewrite.model = llm_model.clone();
@@ -256,7 +257,7 @@ pub fn blocks(manifest: &Path, output: &Path, model: &str, seconds: f64, limit: 
             category: Category::Work,
             settings: &s,
             store: &store,
-            rewriter: Some(&chat as &dyn Rewriter),
+            rewriter: Some(&inline as &dyn Rewriter),
         };
         let mut draft = Draft::new(Live::new(cuts()));
         let mut available = 0;
@@ -282,7 +283,7 @@ pub fn blocks(manifest: &Path, output: &Path, model: &str, seconds: f64, limit: 
             &s,
             &store,
             &mut engine,
-            Some(&chat),
+            Some(&inline),
             (&mut RewriteCircuit::default(), 0),
         )?;
         let Outcome::Text { record, .. } = outcome else { continue };
@@ -314,4 +315,17 @@ pub fn blocks(manifest: &Path, output: &Path, model: &str, seconds: f64, limit: 
         save(output, &rows)?;
     }
     Ok(())
+}
+
+/// The model asked on the caller's own thread, so that each block's
+/// cleanup is timed where it happens. The app asks it on another thread.
+struct Inline<'a>(&'a Chat);
+
+impl Rewriter for Inline<'_> {
+    fn rewrite(&self, system: &str, user: &str) -> speechify_core::Result<String> {
+        self.0.rewrite(system, user)
+    }
+    fn model(&self) -> &str {
+        self.0.model()
+    }
 }
