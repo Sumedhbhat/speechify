@@ -51,6 +51,35 @@ pub trait Recognizer {
     fn busy(&self) -> bool {
         false
     }
+    /// Whether this recogniser is a model made to take audio as it comes.
+    fn streams(&self) -> bool {
+        false
+    }
+    /// Starts a stream, abandoning whatever one came before, unless `stop`
+    /// is already set: a cancelled start must not reset a newer stream.
+    fn stream_start(&mut self, _hint: &Hint, _stop: &AtomicBool) -> Result<()> {
+        Err(NOT_STREAMING.into())
+    }
+    /// Gives the stream more audio, and says what it has made of it all so
+    /// far. Gives up early once `stop` is set.
+    fn stream_feed(&mut self, _audio: &[f32], _stop: &AtomicBool) -> Result<Streamed> {
+        Err(NOT_STREAMING.into())
+    }
+    /// Ends the stream: the audio it still held back is recognised too.
+    fn stream_end(&mut self, _stop: &AtomicBool) -> Result<Streamed> {
+        Err(NOT_STREAMING.into())
+    }
+}
+
+pub const NOT_STREAMING: &str = "This speech model cannot recognise speech as it comes";
+
+/// What a stream has made of its audio so far.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Streamed {
+    /// The start of the text, which no later audio will change.
+    pub settled: String,
+    /// All of the text as the model now hears it.
+    pub full: String,
 }
 
 /// A recogniser that threads take turns with: each use waits for the one
@@ -58,12 +87,15 @@ pub trait Recognizer {
 pub struct Shared<R> {
     inner: Arc<Mutex<R>>,
     name: String,
+    /// Known without the lock, which a stream on another thread may hold.
+    streams: bool,
 }
 
 impl<R: Recognizer> Shared<R> {
     pub fn new(recognizer: R) -> Shared<R> {
         Shared {
             name: recognizer.name().to_string(),
+            streams: recognizer.streams(),
             inner: Arc::new(Mutex::new(recognizer)),
         }
     }
@@ -93,6 +125,7 @@ impl<R> Clone for Shared<R> {
         Shared {
             inner: self.inner.clone(),
             name: self.name.clone(),
+            streams: self.streams,
         }
     }
 }
@@ -118,6 +151,20 @@ impl<R: Recognizer + Send + 'static> Recognizer for Shared<R> {
     }
     fn busy(&self) -> bool {
         matches!(self.inner.try_lock(), Err(std::sync::TryLockError::WouldBlock))
+    }
+    fn streams(&self) -> bool {
+        self.streams
+    }
+    fn stream_start(&mut self, hint: &Hint, stop: &AtomicBool) -> Result<()> {
+        // `stop` is read under the lock, so a cancelled job cannot start
+        // after a newer recording has begun its own stream.
+        self.lock().stream_start(hint, stop)
+    }
+    fn stream_feed(&mut self, audio: &[f32], stop: &AtomicBool) -> Result<Streamed> {
+        self.lock().stream_feed(audio, stop)
+    }
+    fn stream_end(&mut self, stop: &AtomicBool) -> Result<Streamed> {
+        self.lock().stream_end(stop)
     }
 }
 
@@ -370,10 +417,91 @@ impl Recognizer for Fixed {
     }
 }
 
+/// A model made to stream: each feed settles the next text in `settles`
+/// (the last one stays once they run out), and ending gives `ending`.
+#[cfg(test)]
+pub(crate) struct Talker {
+    pub settles: Vec<Result<String>>,
+    pub ending: Result<String>,
+    /// What recognising the whole recording at once gives.
+    pub whole: String,
+    pub detects: bool,
+    pub started: usize,
+    pub fed: usize,
+    /// Each feed waits until this is free.
+    pub gate: Option<Arc<Mutex<()>>>,
+}
+
+#[cfg(test)]
+impl Talker {
+    pub fn new(settles: &[&str], ending: &str) -> Talker {
+        Talker {
+            settles: settles.iter().map(|text| Ok(text.to_string())).collect(),
+            ending: Ok(ending.into()),
+            whole: String::new(),
+            detects: true,
+            started: 0,
+            fed: 0,
+            gate: None,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Recognizer for Talker {
+    fn transcribe(&mut self, _: &[f32], _: &Hint) -> Result<String> {
+        Ok(self.whole.clone())
+    }
+    fn name(&self) -> &str {
+        "talker"
+    }
+    fn detect(&mut self, audio: &[f32], _: f64) -> Option<Result<Vec<std::ops::Range<usize>>>> {
+        self.detects.then(|| Ok(crate::testing::sounding(audio)))
+    }
+    fn streams(&self) -> bool {
+        true
+    }
+    fn stream_start(&mut self, hint: &Hint, _: &AtomicBool) -> Result<()> {
+        assert_eq!(hint.language, "en");
+        self.started += 1;
+        Ok(())
+    }
+    fn stream_feed(&mut self, audio: &[f32], _: &AtomicBool) -> Result<Streamed> {
+        let _open = self.gate.as_ref().map(|gate| gate.lock().unwrap());
+        self.fed += audio.len();
+        let next = if self.settles.len() > 1 { self.settles.remove(0) } else { self.settles[0].clone() };
+        next.map(|settled| Streamed {
+            full: settled.clone(),
+            settled,
+        })
+    }
+    fn stream_end(&mut self, _: &AtomicBool) -> Result<Streamed> {
+        self.ending.clone().map(|full| Streamed {
+            settled: full.clone(),
+            full,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testing::{Reply, Server};
+
+    #[test]
+    fn an_ordinary_recogniser_cannot_stream() {
+        let mut fixed = Fixed::new(&[]);
+        let stop = AtomicBool::new(false);
+        assert!(!fixed.streams() && !Shared::new(Fixed::new(&[])).streams());
+        assert_eq!(
+            fixed
+                .stream_start(&Hint::default(), &AtomicBool::new(false))
+                .unwrap_err(),
+            NOT_STREAMING
+        );
+        assert_eq!(fixed.stream_feed(&[0.0], &stop).unwrap_err(), NOT_STREAMING);
+        assert_eq!(fixed.stream_end(&stop).unwrap_err(), NOT_STREAMING);
+    }
 
     #[test]
     fn a_shared_recogniser_can_wait_for_its_other_handles() {

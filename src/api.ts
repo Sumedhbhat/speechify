@@ -26,6 +26,8 @@ export interface Settings {
     remote_url: string;
     remote_key: string;
     remote_model: string;
+    streaming: boolean; // dictate with streaming_model instead of model
+    streaming_model: string;
   };
   rewrite: {
     level: "none" | "light" | "medium";
@@ -165,6 +167,7 @@ export interface SpeechModel {
   bytes: number;
   notes: string;
   wants_gpu: boolean;
+  streaming: boolean; // recognises speech as it is spoken
   installed: boolean;
   active: boolean; // chosen for live dictation
   teacher: boolean; // chosen for the nightly review

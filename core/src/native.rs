@@ -4,7 +4,7 @@
 //! run time, so the app needs no C++ toolchain to build and one binary can
 //! use CPU, Vulkan, Metal or CUDA depending on the machine.
 
-use crate::asr::{prompt, Hint, Recognizer};
+use crate::asr::{prompt, Hint, Recognizer, Streamed, NOT_STREAMING};
 use crate::Result;
 use libloading::Library;
 use std::ffi::{c_char, c_void, CStr, CString};
@@ -93,6 +93,29 @@ struct Capabilities {
     max_audio_ms: i64,
     n_translate_target_languages: i32,
     translate_target_languages: *const *const c_char,
+    spare: Spare,
+}
+
+// Streaming, from transcribe.h 0.4.1.
+#[repr(C)]
+struct StreamParams {
+    struct_size: u64,
+    family: *const c_void,
+    commit_policy: i32,
+    stable_prefix_agreement_n: u32,
+    spare: Spare,
+}
+
+#[repr(C)]
+struct StreamText {
+    struct_size: u64,
+    full_text: *const c_char,
+    full_text_bytes: u64,
+    committed_text: *const c_char,
+    committed_text_bytes: u64,
+    tentative_text: *const c_char,
+    tentative_text_bytes: u64,
+    raw_tentative_start_bytes: u64,
     spare: Spare,
 }
 
@@ -201,6 +224,14 @@ api! {
     transcribe_token_init: unsafe extern "C" fn(*mut Token),
     transcribe_get_token: unsafe extern "C" fn(*mut c_void, i32, *mut Token) -> i32,
     transcribe_device_count: unsafe extern "C" fn() -> i32,
+    transcribe_stream_params_init: unsafe extern "C" fn(*mut StreamParams),
+    transcribe_stream_begin: unsafe extern "C" fn(*mut c_void, *const RunParams, *const StreamParams) -> i32,
+    transcribe_stream_feed: unsafe extern "C" fn(*mut c_void, *const f32, i32, *mut c_void) -> i32,
+    transcribe_stream_finalize: unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32,
+    transcribe_stream_reset: unsafe extern "C" fn(*mut c_void),
+    transcribe_stream_text_init: unsafe extern "C" fn(*mut StreamText),
+    transcribe_stream_get_text: unsafe extern "C" fn(*mut c_void, *mut StreamText) -> i32,
+    transcribe_was_truncated: unsafe extern "C" fn(*mut c_void) -> bool,
     transcribe_device_get: unsafe extern "C" fn(i32) -> *mut c_void,
 }
 
@@ -273,6 +304,14 @@ unsafe fn text(pointer: *const c_char) -> String {
     }
 }
 
+/// Reads `bytes` bytes of text owned by the runtime; null reads as empty.
+unsafe fn sized_text(pointer: *const c_char, bytes: u64) -> String {
+    if pointer.is_null() || bytes == 0 {
+        return String::new();
+    }
+    String::from_utf8_lossy(std::slice::from_raw_parts(pointer as *const u8, bytes as usize)).into_owned()
+}
+
 /// Virtual machines expose a fake Metal device that produces garbage.
 fn trusted(device: &str) -> bool {
     !device.to_lowercase().contains("paravirtual")
@@ -292,6 +331,8 @@ unsafe fn check_abi(api: &Api) -> Result<()> {
         (26, std::mem::size_of::<VadParams>()),
         (27, std::mem::size_of::<VadResult>()),
         (28, std::mem::size_of::<VadSegment>()),
+        (3, std::mem::size_of::<StreamParams>()),
+        (10, std::mem::size_of::<StreamText>()),
     ];
     let fits = sizes
         .iter()
@@ -514,6 +555,10 @@ pub struct Engine {
     languages: Vec<String>,
     detector: Option<Detector>,
     heard: Vec<crate::asr::Heard>,
+    /// The model is made to recognise speech as it comes.
+    streams: bool,
+    /// A stream was started and not yet ended.
+    streaming: bool,
 }
 
 // An engine is owned by one worker thread at a time.
@@ -571,6 +616,8 @@ impl Engine {
             languages: vec![],
             detector: None,
             heard: vec![],
+            streams: false,
+            streaming: false,
         };
 
         let mut session: SessionParams = std::mem::zeroed();
@@ -589,6 +636,7 @@ impl Engine {
         // Models without a stated limit get ten minutes per run.
         let limit_ms = if caps.max_audio_ms > 0 { caps.max_audio_ms } else { 600_000 };
         engine.max_samples = limit_ms as usize * 16;
+        engine.streams = caps.supports_streaming;
         let languages = if caps.languages.is_null() { 0 } else { caps.n_languages.max(0) as usize };
         for i in 0..languages {
             let code = CStr::from_ptr(*caps.languages.add(i));
@@ -631,6 +679,53 @@ impl Engine {
         self
     }
 
+    /// Whether the model knows `language`; an empty one means "any".
+    fn knows(&self, language: &str) -> bool {
+        language.is_empty() || self.languages.is_empty() || self.languages.iter().any(|known| known == language)
+    }
+
+    /// Abandons a stream left unfinished, as a cancelled dictation leaves
+    /// one, so that the session can be used again.
+    fn abandon(&mut self) {
+        if std::mem::take(&mut self.streaming) {
+            unsafe { (self.runtime.api.transcribe_stream_reset)(self.session) };
+        }
+    }
+
+    /// Runs one step of the stream, which gives up once `stop` is set, and
+    /// reads its text afterwards. A failed step ends the stream.
+    fn step(&mut self, stop: &AtomicBool, run: impl FnOnce(&Api, *mut c_void) -> i32) -> Result<Streamed> {
+        if !self.streaming {
+            return Err("No speech is being recognised as it comes".into());
+        }
+        // Work nobody wants any more, such as a cancelled feed that only now
+        // got the model, must not touch a stream a newer dictation started.
+        if stop.load(Ordering::SeqCst) {
+            return Err(explain(13));
+        }
+        let api = &self.runtime.api;
+        let flag = stop as *const AtomicBool as *mut c_void;
+        let status = unsafe {
+            (api.transcribe_set_abort_callback)(self.session, Some(stopped), flag);
+            let status = run(api, self.session);
+            (api.transcribe_set_abort_callback)(self.session, None, ptr::null_mut());
+            status
+        };
+        if let Err(error) = check(status) {
+            self.abandon();
+            return Err(error);
+        }
+        unsafe {
+            let mut out: StreamText = std::mem::zeroed();
+            (api.transcribe_stream_text_init)(&mut out);
+            check((api.transcribe_stream_get_text)(self.session, &mut out))?;
+            Ok(Streamed {
+                settled: sized_text(out.committed_text, out.committed_text_bytes),
+                full: sized_text(out.full_text, out.full_text_bytes),
+            })
+        }
+    }
+
     /// The device the model actually runs on, e.g. "vulkan NVIDIA GeForce RTX 4060".
     pub fn device(&self) -> &str {
         &self.device
@@ -643,12 +738,10 @@ impl Recognizer for Engine {
     }
 
     fn transcribe_until(&mut self, audio: &[f32], hint: &Hint, stop: &AtomicBool) -> Result<String> {
-        if !hint.language.is_empty()
-            && !self.languages.is_empty()
-            && !self.languages.contains(&hint.language.to_string())
-        {
+        if !self.knows(hint.language) {
             return Err(explain(10));
         }
+        self.abandon();
         let api = &self.runtime.api;
         let supports = |feature| unsafe { (api.transcribe_model_supports)(self.model, feature) };
         let language = c_string(hint.language);
@@ -708,6 +801,65 @@ impl Recognizer for Engine {
 
     fn heard(&self) -> Vec<crate::asr::Heard> {
         self.heard.clone()
+    }
+
+    fn streams(&self) -> bool {
+        self.streams
+    }
+
+    fn stream_start(&mut self, hint: &Hint, stop: &AtomicBool) -> Result<()> {
+        if !self.streams {
+            return Err(NOT_STREAMING.into());
+        }
+        if !self.knows(hint.language) {
+            return Err(explain(10));
+        }
+        if stop.load(Ordering::SeqCst) {
+            return Err(explain(13));
+        }
+        let api = &self.runtime.api;
+        unsafe { (api.transcribe_stream_reset)(self.session) };
+        self.streaming = false;
+        self.heard.clear();
+        let language = c_string(hint.language);
+        unsafe {
+            let mut run: RunParams = std::mem::zeroed();
+            (api.transcribe_run_params_init)(&mut run);
+            let known = self.languages.iter().any(|known| known == hint.language);
+            run.language = if known { language.as_ptr() } else { run.language };
+            let pnc = (api.transcribe_model_supports)(self.model, FEATURE_PNC);
+            run.pnc = if pnc { PNC_ON } else { run.pnc };
+            // The family's own defaults: its most accurate setting.
+            let mut stream: StreamParams = std::mem::zeroed();
+            (api.transcribe_stream_params_init)(&mut stream);
+            check((api.transcribe_stream_begin)(self.session, &run, &stream))?;
+        }
+        self.streaming = true;
+        Ok(())
+    }
+
+    fn stream_feed(&mut self, audio: &[f32], stop: &AtomicBool) -> Result<Streamed> {
+        // The runtime refuses an empty feed; nothing new leaves the text as it was.
+        self.step(stop, |api, session| unsafe {
+            if audio.is_empty() {
+                0
+            } else {
+                (api.transcribe_stream_feed)(session, audio.as_ptr(), audio.len() as i32, ptr::null_mut())
+            }
+        })
+    }
+
+    fn stream_end(&mut self, stop: &AtomicBool) -> Result<Streamed> {
+        let ended = self.step(stop, |api, session| unsafe {
+            (api.transcribe_stream_finalize)(session, ptr::null_mut())
+        })?;
+        self.streaming = false;
+        self.heard = unsafe { self.words() };
+        // A stream that reached the model's limit still ends "fine"; this is
+        // the only sign that its text is cut short.
+        let truncated = unsafe { (self.runtime.api.transcribe_was_truncated)(self.session) };
+        check(if truncated { 17 } else { 0 })?;
+        Ok(ended)
     }
 
     fn detect(&mut self, audio: &[f32], threshold: f64) -> Option<Result<Vec<Range<usize>>>> {
@@ -771,6 +923,8 @@ mod tests {
         assert!(!abi_fits(200, 100) && !abi_fits(8, 16 + SPARE_BYTES));
         assert!(trusted("vulkan NVIDIA GeForce RTX 4060") && !trusted("metal Apple Paravirtual device"));
         assert_eq!(unsafe { text(ptr::null()) }, "");
+        assert_eq!(unsafe { sized_text(ptr::null(), 4) }, "");
+        assert_eq!(unsafe { sized_text(c"words".as_ptr(), 4) }, "word");
     }
 
     #[test]
@@ -925,6 +1079,66 @@ mod tests {
         assert_eq!(heard.len(), text.split_whitespace().count(), "{heard:?}");
         assert!(heard.iter().all(|word| (0.0..=1.0).contains(&word.p)), "{heard:?}");
         assert!(heard.iter().any(|word| word.word.starts_with("Americans")));
+    }
+
+    #[test]
+    fn a_streaming_model_recognises_speech_as_it_comes() {
+        let Some((runtime, model)) = fixture() else { return };
+        let stop = AtomicBool::new(false);
+        let english = Hint {
+            language: "en",
+            ..Hint::default()
+        };
+        // An ordinary model cannot stream.
+        let mut whisper = Engine::open(&runtime, &model, "cpu").unwrap();
+        assert!(!whisper.streams());
+        assert_eq!(whisper.stream_start(&english, &stop).unwrap_err(), NOT_STREAMING);
+
+        let path = std::env::var_os("SPEECHIFY_TEST_STREAM_MODEL")
+            .map(PathBuf::from)
+            .expect("streaming model fixture");
+        let mut engine = Engine::open(&runtime, &path, "cpu").unwrap();
+        assert!(engine.streams());
+        assert!(engine
+            .stream_feed(&[0.0; 1600], &stop)
+            .unwrap_err()
+            .contains("No speech"));
+        let hindi = Hint {
+            language: "hi",
+            ..Hint::default()
+        };
+        assert!(engine.stream_start(&hindi, &stop).unwrap_err().contains("language"));
+
+        let speech = crate::audio::decode_wav(include_bytes!("../tests/fixtures/jfk.wav")).unwrap();
+        engine.stream_start(&english, &stop).unwrap();
+        let mut seen = Streamed::default();
+        for chunk in speech.chunks(8000) {
+            seen = engine.stream_feed(chunk, &stop).unwrap();
+        }
+        // Nothing new leaves the text as it was.
+        assert_eq!(engine.stream_feed(&[], &stop).unwrap(), seen);
+        let ended = engine.stream_end(&stop).unwrap();
+        let text = ended.full.to_lowercase();
+        assert!(text.contains("ask not what your country can do for you"), "{text}");
+        assert!(ended.full.starts_with(seen.settled.trim()), "{ended:?} {seen:?}");
+
+        // A stream given up halfway, as a cancel does, is told to stop...
+        engine.stream_start(&english, &stop).unwrap();
+        engine.stream_feed(&speech[..32_000], &stop).unwrap();
+        let cancelled = AtomicBool::new(true);
+        let stopped = engine.stream_feed(&speech[32_000..], &cancelled).unwrap_err();
+        assert_eq!(stopped, "Recognition was stopped");
+        // A start that was cancelled leaves the stream alone.
+        let stopped = engine.stream_start(&english, &cancelled).unwrap_err();
+        assert_eq!(stopped, "Recognition was stopped");
+        // A step that fails ends the stream.
+        assert!(engine.stream_feed(&[f32::NAN; 160], &stop).is_err());
+        assert!(engine.stream_end(&stop).is_err());
+        // ...and one simply left behind does not get in the way of the next run.
+        engine.stream_start(&english, &stop).unwrap();
+        engine.stream_feed(&speech[..32_000], &stop).unwrap();
+        let again = engine.transcribe(&speech, &english).unwrap().to_lowercase();
+        assert!(again.contains("ask not"), "{again}");
     }
 
     #[test]

@@ -106,7 +106,7 @@ fn same_app(now: &Target, then: &Target) -> bool {
 /// server's model) is the one these settings use.
 fn same_recogniser(name: &str, speech: &crate::settings::Speech) -> bool {
     if speech.remote_url.trim().is_empty() {
-        !speech.model.is_empty() && name.starts_with(&speech.model)
+        !speech.active_model().is_empty() && name.starts_with(speech.active_model())
     } else {
         name == speech.remote_model
     }
@@ -890,6 +890,11 @@ mod tests {
         assert!(same_recogniser("whisper-large-v3-turbo-Q8_0", &speech));
         speech.model = "parakeet-tdt-0.6b-v3".into();
         assert!(!same_recogniser("whisper-large-v3-turbo-Q8_0", &speech));
+        // The streaming setup goes by its own model.
+        speech.streaming = true;
+        assert!(same_recogniser("parakeet-unified-en-0.6b-Q8_0", &speech));
+        assert!(!same_recogniser("parakeet-tdt-0.6b-v3-Q8_0", &speech));
+        speech.streaming = false;
         speech.model.clear();
         assert!(!same_recogniser("anything", &speech));
         speech.remote_url = "http://server".into();
