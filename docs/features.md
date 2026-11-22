@@ -185,7 +185,7 @@ Select text in any app, hold the command shortcut, say an instruction, and let g
 
 ## History
 
-Each dictation is stored with the heard text, the final text, the app, timings, and the recording if you keep audio. On the Home page you can search, play the recording, copy, flag for review, edit and delete. Details show the app, category, models, timings and fixes made.
+Each dictation is stored with the heard text, the final text, the app, timings, and the recording if you keep audio. On the Home page you can search, play the recording, copy, flag for review, edit and delete. Each dictation shows whether the language model tidied it, was asked but its answer was not used (it failed, timed out or answered with something that did not look like a clean-up, so the built-in rules were used), or did not tidy it. A failure can also show as the last: one that happens at once, or in blocks cleaned up while you spoke, records no clean-up time. Details show the app, category, models, timings and fixes made.
 
 Editing a dictation teaches Speechify at once: small word swaps become dictionary entries, and the edit becomes a worked example for the language model's prompt. A rewrite of most of the sentence teaches nothing about spelling, so it is not turned into dictionary entries. Common words swapped for other common words count as editing, not correcting.
 

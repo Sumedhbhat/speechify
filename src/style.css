@@ -928,6 +928,7 @@ details.advanced > .hint {
 
 .entry-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   font-size: 12px;

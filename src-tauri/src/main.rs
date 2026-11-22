@@ -98,6 +98,7 @@ fn main() {
             commands::export_diagnostics,
             commands::try_format,
             commands::bar_action,
+            commands::bar_hit,
             commands::open_main,
             commands::check_update,
             commands::install_update,
@@ -117,6 +118,9 @@ fn main() {
             #[cfg(target_os = "macos")]
             shell::build_app_menu(app.handle())?;
             shell::build_tray(app.handle())?;
+            shell::track_bar(app.handle());
+            #[cfg(target_os = "macos")]
+            shell::bar_never_activates(app.handle());
             shell::place_bar(app.handle(), &speechify_core::app::Bar::Idle);
             if toggle {
                 shared.send(worker::Msg::StartupToggle);

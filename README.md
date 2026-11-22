@@ -70,7 +70,7 @@ Meta is the Windows key on Windows, Super on Linux and Command on a Mac. A short
 
 ### The bar
 
-A small pill sits at the bottom centre of the screen. At rest it reads "Click to dictate". While you speak it shows a waveform, a cancel button and, in hands-free mode, a stop button. Command Mode adds a "Command" label. While working it shimmers, and on success it shows a check and the word count.
+A small pill sits at the bottom centre of the screen. At rest it is a thin handle that reads "Click to dictate" only while the pointer is on it; clicks anywhere else, even right next to it, go to the app underneath (on Wayland, which does not tell apps where the pointer is, the whole bar area takes clicks). While you speak it shows a waveform, a cancel button and, in hands-free mode, a stop button. Command Mode adds a "Command" label. While working it shimmers, and on success it shows a check and the word count.
 
 If no text field has focus, or the paste fails, the bar shows a **copy card** above the pill. The card holds the text with a Copy button, so nothing you said is lost. Short notices ("No speech heard", "Dictation cancelled") appear in the same place.
 

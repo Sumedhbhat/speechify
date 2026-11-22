@@ -3,8 +3,10 @@
 use crate::worker::{Msg, Shared};
 use speechify_core::app::Bar;
 use speechify_core::hotkey::Bind;
+use speechify_core::pointer::{self, Seen};
 use speechify_core::session::Event;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager};
@@ -85,6 +87,119 @@ pub fn place_bar(app: &AppHandle, bar: &Bar) {
         ));
     }
     bar_visible(&window, true);
+}
+
+#[derive(Default)]
+pub struct BarHit(Mutex<Vec<pointer::Area>>);
+
+impl BarHit {
+    pub fn set(&self, areas: Vec<pointer::Area>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = areas;
+    }
+
+    fn seen(&self, pointer: (f64, f64), origin: (f64, f64), scale: f64) -> Seen {
+        let areas = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        Seen::Pointer {
+            clickable: pointer::over(&areas, pointer, origin, scale),
+            on_pill: pointer::over(&areas[..areas.len().min(1)], pointer, origin, scale),
+        }
+    }
+}
+
+const TRACK_EVERY: Duration = Duration::from_millis(40);
+const TRACK_HIDDEN: Duration = Duration::from_millis(250);
+
+#[cfg(windows)]
+fn bar_pass_through(window: &tauri::WebviewWindow, pass: bool) {
+    let window = window.clone();
+    let app = window.app_handle().clone();
+    let _ = app.run_on_main_thread(move || {
+        #[link(name = "user32")]
+        extern "system" {
+            fn GetWindowLongPtrW(window: *mut std::ffi::c_void, index: i32) -> isize;
+            fn SetWindowLongPtrW(window: *mut std::ffi::c_void, index: i32, value: isize) -> isize;
+        }
+        const GWL_EXSTYLE: i32 = -20;
+        const WS_EX_TRANSPARENT: isize = 0x20;
+        const WS_EX_LAYERED: isize = 0x80000;
+        const BITS: isize = WS_EX_TRANSPARENT | WS_EX_LAYERED;
+        if let Ok(handle) = window.hwnd() {
+            unsafe {
+                let style = GetWindowLongPtrW(handle.0, GWL_EXSTYLE);
+                let style = if pass { style | BITS } else { style & !BITS };
+                SetWindowLongPtrW(handle.0, GWL_EXSTYLE, style);
+            }
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn bar_pass_through(window: &tauri::WebviewWindow, pass: bool) {
+    let _ = window.set_ignore_cursor_events(pass);
+}
+
+pub fn track_bar(app: &AppHandle) {
+    if speechify_os::is_wayland() {
+        return;
+    }
+    app.manage(BarHit::default());
+    let app = app.clone();
+    let _ = std::thread::Builder::new().name("bar-pointer".into()).spawn(move || {
+        let mut tracker = pointer::Tracker::default();
+        let mut wait = TRACK_EVERY;
+        loop {
+            std::thread::sleep(wait);
+            let Some(window) = app.get_webview_window("bar") else {
+                continue;
+            };
+            let seen = if !window.is_visible().unwrap_or(false) {
+                Seen::Hidden
+            } else if let (Ok(cursor), Ok(origin), Ok(scale)) =
+                (app.cursor_position(), window.outer_position(), window.scale_factor())
+            {
+                let origin = (origin.x as f64, origin.y as f64);
+                app.state::<BarHit>().seen((cursor.x, cursor.y), origin, scale)
+            } else {
+                Seen::Unknown
+            };
+            wait = if seen == Seen::Hidden { TRACK_HIDDEN } else { TRACK_EVERY };
+            if let Some(change) = tracker.update(seen) {
+                bar_pass_through(&window, change.pass_through);
+                if let Some(hover) = change.hover {
+                    let _ = app.emit_to("bar", "bar-hover", hover);
+                }
+            }
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+pub fn bar_never_activates(app: &AppHandle) {
+    use std::ffi::{c_char, c_void};
+    #[link(name = "objc")]
+    extern "C" {
+        fn sel_registerName(name: *const c_char) -> *const c_void;
+        fn objc_msgSend();
+    }
+    let Some(window) = app.get_webview_window("bar") else {
+        return;
+    };
+    let target = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        let Ok(ns_window) = target.ns_window() else { return };
+        unsafe {
+            type Responds = unsafe extern "C" fn(*mut c_void, *const c_void, *const c_void) -> i8;
+            type SetBool = unsafe extern "C" fn(*mut c_void, *const c_void, i8);
+            let send = objc_msgSend as unsafe extern "C" fn();
+            let responds = std::mem::transmute::<unsafe extern "C" fn(), Responds>(send);
+            let set = std::mem::transmute::<unsafe extern "C" fn(), SetBool>(send);
+            let check = sel_registerName(c"respondsToSelector:".as_ptr());
+            let prevents = sel_registerName(c"_setPreventsActivation:".as_ptr());
+            if responds(ns_window, check, prevents) != 0 {
+                set(ns_window, prevents, 1);
+            }
+        }
+    });
 }
 
 pub fn show_bar(app: &AppHandle, bar: &Bar) {
