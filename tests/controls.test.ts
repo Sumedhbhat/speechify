@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { chordName, number, select, shortcut, text, toggle } from "../src/controls";
+import {
+  chordName,
+  number,
+  RECORD_LIMIT_MS,
+  select,
+  shortcut,
+  text,
+  toggle,
+} from "../src/controls";
 import type { Settings } from "../src/api";
 import { change, makeDeps, settle } from "./fakes";
 
@@ -187,6 +195,14 @@ describe("chordName", () => {
     expect(chordName(["Escape"])).toBe("Escape");
   });
 
+  it("takes letters from the keyboard layout when given", () => {
+    // AZERTY: the key in Q's place types A.
+    expect(chordName(["ControlLeft", "KeyQ"], { KeyQ: "a" })).toBe("Ctrl+A");
+    // Shifted digits and composed characters keep the key's place.
+    expect(chordName(["ShiftLeft", "Digit1"], { Digit1: "&" })).toBe("Shift+1");
+    expect(chordName(["AltLeft", "KeyA"], { KeyA: "å" })).toBe("Alt+A");
+  });
+
   it("leaves keys a shortcut cannot use for the shell to reject", () => {
     expect(chordName(["ControlLeft", "ArrowLeft"])).toBe("Ctrl+ArrowLeft");
     expect(chordName(["KeyAB"])).toBe("KeyAB");
@@ -196,18 +212,19 @@ describe("chordName", () => {
 describe("shortcut", () => {
   const pause = vi.fn(async (_paused: boolean) => undefined);
 
-  function press(type: "keydown" | "keyup", code: string, repeat = false) {
-    const event = new KeyboardEvent(type, { code, repeat, cancelable: true });
+  function press(type: "keydown" | "keyup", code: string, repeat = false, key = "") {
+    const event = new KeyboardEvent(type, { code, key, repeat, cancelable: true });
     window.dispatchEvent(event);
     return event;
   }
 
-  function recorder(get: (s: Settings) => string = (s) => s.hotkeys.push_to_talk) {
+  function recorder(get: (s: Settings) => string = (s) => s.hotkeys.push_to_talk, layout = false) {
     const el = mount(
       shortcut(ctx.deps.settings, current, {
         label: "Push to talk",
         hint: "Hold to dictate.",
         pause,
+        layout,
         get,
         set: (s, v) => (s.hotkeys.push_to_talk = v),
       }),
@@ -301,5 +318,31 @@ describe("shortcut", () => {
     expect(error.hidden).toBe(false);
     record.click();
     expect(error.hidden).toBe(true);
+  });
+
+  it("follows the keyboard layout where the shell's reader does", async () => {
+    const { record } = recorder(undefined, true);
+    record.click();
+    press("keydown", "ControlLeft", false, "Control");
+    press("keydown", "KeyQ", false, "a");
+    press("keyup", "KeyQ");
+    await settle();
+    expect(saved()).toBe("Ctrl+A");
+  });
+
+  it("gives up before the shell stops pausing shortcuts", () => {
+    vi.useFakeTimers();
+    try {
+      const { record, keys } = recorder();
+      record.click();
+      vi.advanceTimersByTime(RECORD_LIMIT_MS - 1);
+      expect(record.textContent).toBe("Press keys…");
+      vi.advanceTimersByTime(1);
+      expect(record.textContent).toBe("Record");
+      expect(pause).toHaveBeenLastCalledWith(false);
+      expect(keys().textContent).toBe("CtrlMetaSpace");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

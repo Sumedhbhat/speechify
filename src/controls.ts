@@ -172,18 +172,27 @@ const ORDER = ["Ctrl", "Alt", "Shift", "Meta"];
  * Names the keys held together, by `KeyboardEvent.code`, the way shortcut
  * settings write them. A modifier pressed alone keeps its side, so Right
  * Shift stays free of the left one; in a combination either side works
- * (Alt+Shift+Z). Keys a shortcut cannot use keep their code, and the shell
- * rejects them with its own reason.
+ * (Alt+Shift+Z). `letters` maps a code to the letter the keyboard layout
+ * puts there, for systems whose key reader follows the layout. Keys a
+ * shortcut cannot use keep their code, and the shell rejects them with its
+ * own reason.
  */
-export function chordName(codes: string[]): string {
+export function chordName(codes: string[], letters: Record<string, string> = {}): string {
   const sides = codes.map((code) => MODIFIERS[code]);
   if (codes.length === 1 && sides[0]) return sides[0][1];
   const modifiers = new Set(sides.map((side) => side?.[0]));
   const others = codes
     .filter((code) => !MODIFIERS[code])
-    .map((code) => code.replace(/^Key(?=[A-Z]$)|^Digit(?=\d$)/, ""));
+    .map((code) => {
+      const letter = letters[code];
+      if (letter && /^[a-z]$/i.test(letter)) return letter.toUpperCase();
+      return code.replace(/^Key(?=[A-Z]$)|^Digit(?=\d$)/, "");
+    });
   return [...ORDER.filter((name) => modifiers.has(name)), ...others].join("+");
 }
+
+/** Recording gives up before the shell's 30-second pause runs out. */
+export const RECORD_LIMIT_MS = 25_000;
 
 /**
  * A shortcut setting, entered by pressing it: Record, then the keys. It is
@@ -193,7 +202,11 @@ export function chordName(codes: string[]): string {
 export function shortcut(
   store: SettingsStore,
   settings: Settings,
-  binding: Binding<string> & { pause: (paused: boolean) => Promise<void> },
+  binding: Binding<string> & {
+    pause: (paused: boolean) => Promise<void>;
+    /** Letters follow the keyboard layout (Windows, Linux), not the key's place (macOS). */
+    layout: boolean;
+  },
 ): HTMLElement {
   const id = nextId("shortcut");
   const error = errorSlot();
@@ -228,10 +241,13 @@ export function shortcut(
   );
 
   let held: string[] | null = null;
+  let letters: Record<string, string> = {};
+  let limit: ReturnType<typeof setTimeout> | undefined;
   const pause = (paused: boolean) => void binding.pause(paused).catch(() => undefined);
   const stop = () => {
     const recording = held !== null;
     held = null;
+    clearTimeout(limit);
     window.removeEventListener("keydown", down, true);
     window.removeEventListener("keyup", up, true);
     record.textContent = "Record";
@@ -243,7 +259,8 @@ export function shortcut(
     event.stopPropagation();
     if (!held || !event.code || held.includes(event.code)) return;
     held.push(event.code);
-    show(chordName(held));
+    if (binding.layout) letters[event.code] = event.key;
+    show(chordName(held, letters));
   };
   const up = (event: KeyboardEvent) => {
     event.preventDefault();
@@ -251,17 +268,22 @@ export function shortcut(
     // Only a key that is part of the shortcut ends it: Enter can start
     // recording and be let go a moment later.
     if (!held?.includes(event.code)) return;
-    const value = chordName(held);
+    const value = chordName(held, letters);
     stop();
     void commit(value);
   };
+  const cancel = () => {
+    stop();
+    show(saved);
+  };
   record.addEventListener("click", () => {
     if (held) {
-      stop();
-      show(saved);
+      cancel();
       return;
     }
     held = [];
+    letters = {};
+    limit = setTimeout(cancel, RECORD_LIMIT_MS);
     error.hidden = true;
     record.textContent = "Press keys…";
     record.setAttribute("aria-pressed", "true");
@@ -272,9 +294,7 @@ export function shortcut(
   });
   // Clicking elsewhere or leaving the window gives up.
   record.addEventListener("blur", () => {
-    if (!held) return;
-    stop();
-    show(saved);
+    if (held) cancel();
   });
   clear.addEventListener("click", () => void commit(""));
   stop();

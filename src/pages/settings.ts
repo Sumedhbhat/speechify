@@ -88,6 +88,7 @@ export function createSettingsPage({ api, settings: store }: Deps): Page {
               label,
               hint,
               pause: api.pauseShortcuts,
+              layout: status.platform !== "macos",
               get: (s) => s.hotkeys[key],
               set: (s, v) => (s.hotkeys[key] = v),
             }),

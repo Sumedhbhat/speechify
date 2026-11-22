@@ -376,8 +376,11 @@ impl Tracker {
                     Phase::Down { since }
                 }
                 settling @ Phase::Settling { .. } => settling,
-                Phase::Down { .. } if !held => {
-                    edges.push(Edge::Up(bind));
+                Phase::Down { since } if !held => {
+                    // Let go as a letter goes down, still in the abort window:
+                    // typing, as when the letter joins first.
+                    let typed = quiet && !chord.covers(pressed) && now.saturating_sub(since) < ABORT_MS;
+                    edges.push(if typed { Edge::Abort(bind) } else { Edge::Up(bind) });
                     Phase::Up
                 }
                 Phase::Down { since } if quiet && foreign && now.saturating_sub(since) < ABORT_MS => {
@@ -697,6 +700,25 @@ mod tests {
         assert_eq!(
             tracker.update(&keys(&[RightShift, Space]), 50),
             vec![Edge::Down(Bind::PushToTalk), Edge::Down(Bind::HandsFree)]
+        );
+    }
+
+    #[test]
+    fn letting_go_as_a_letter_goes_down_soon_after_is_typing() {
+        let mut tracker = fresh(&right_shift());
+        tracker.update(&keys(&[RightShift]), 0);
+        tracker.update(&keys(&[RightShift]), SETTLE_MS);
+        assert_eq!(
+            tracker.update(&keys(&[Char('A')]), 300),
+            vec![Edge::Abort(Bind::PushToTalk)]
+        );
+        // Later it is just the end of the dictation.
+        tracker.update(&keys(&[]), 400);
+        tracker.update(&keys(&[RightShift]), 1000);
+        tracker.update(&keys(&[RightShift]), 1000 + SETTLE_MS);
+        assert_eq!(
+            tracker.update(&keys(&[Char('A')]), 1000 + ABORT_MS),
+            vec![Edge::Up(Bind::PushToTalk)]
         );
     }
 

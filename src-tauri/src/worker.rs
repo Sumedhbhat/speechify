@@ -298,6 +298,9 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
                 if let Some(tracker) = lock(&keys.tracker).as_mut() {
                     tracker.hold_off();
                 }
+                // Feed the tracker even if no key changed, so that what is
+                // not held goes back up.
+                keys.binding_revision.fetch_add(1, Ordering::Release);
             }
             was_paused = paused;
             let names = if paused { Vec::new() } else { keyboard.pressed() };
