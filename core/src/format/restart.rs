@@ -12,8 +12,11 @@ const VERBS: &[&str] = &[
     "found", "thought", "brought", "began", "won", "lost", "felt", "knew", "saw",
 ];
 const DETERMINERS: &[&str] = &[
-    "the", "a", "an", "my", "our", "your", "their", "his", "her", "its", "these", "those", "some", "all", "any", "two",
+    "the", "a", "an", "my", "our", "your", "their", "his", "her", "its", "these", "those", "some", "any", "two",
     "three", "few", "many", "more", "new", "old",
+];
+const BARE: &[&str] = &[
+    "cost", "need", "want", "seem", "look", "stay", "belong", "mean", "matter", "fill", "sell", "hurt",
 ];
 const SUBJECTS: &[&str] = &["i", "we", "you", "he", "she", "they", "it"];
 const STRONGER: &[&str] = &[
@@ -140,11 +143,12 @@ fn restarts(words: &[String], at: usize) -> Option<usize> {
                 let plain = core(word);
                 let counted = i > 0 && {
                     let before = core(&words[i - 1]);
-                    DETERMINERS.contains(&before.as_str()) || before.chars().all(|c| c.is_ascii_digit())
+                    DETERMINERS.contains(&before.as_str())
+                        || !before.is_empty() && before.chars().all(|c| c.is_ascii_digit())
                 };
                 let plural = plain.ends_with('s') && !plain.ends_with("ss") && !counted;
                 let acts = plain.len() > 4 && (plain.ends_with("ed") || plural);
-                if negates(word) || VERBS.contains(&plain.as_str()) || acts {
+                if negates(word) || VERBS.contains(&plain.as_str()) || BARE.contains(&plain.as_str()) || acts {
                     return false;
                 }
                 if word.ends_with(['.', '!', '?', ';', ':']) {
@@ -379,6 +383,11 @@ mod tests {
             "I'm the one, the only one.",
             "I'm the king, the real king.",
             "Check the logs, the server has logs.",
+            "Book the rooms, the big rooms by the entrance cost extra.",
+            "I want the rooms, the two rooms by the stairs cost extra.",
+            "Grab the chairs, the folding chairs by the wall need the cushions.",
+            "Send it to the team, the design team by Friday — costs extra.",
+            "I booked the room, the corner room by the lobby all fills up fast.",
             "Book the room, the big room by the entrance costs extra.",
             "Send the file, the final file to Ravi contains errors.",
             "Book the room, the big room by the lobby, unfortunately, is occupied.",
