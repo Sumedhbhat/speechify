@@ -1656,3 +1656,25 @@ progress::-moz-progress-bar {
     transition: none !important;
   }
 }
+
+/* Shortcut recorder */
+
+.shortcut {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.shortcut-keys {
+  display: inline-flex;
+  gap: 4px;
+  min-width: 96px;
+  justify-content: flex-end;
+  color: var(--muted);
+}
+
+.btn[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}

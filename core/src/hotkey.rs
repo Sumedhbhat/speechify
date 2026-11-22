@@ -10,11 +10,21 @@ use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Key {
+    /// Either Ctrl key. The keyboard reports a side; a shortcut may name one.
     Ctrl,
     Alt,
     Shift,
     /// Windows key, Command on a Mac, Super on Linux.
     Meta,
+    LeftCtrl,
+    RightCtrl,
+    LeftAlt,
+    /// Also AltGr.
+    RightAlt,
+    LeftShift,
+    RightShift,
+    LeftMeta,
+    RightMeta,
     Space,
     Escape,
     CapsLock,
@@ -31,7 +41,24 @@ pub enum Key {
 
 impl Key {
     pub fn is_modifier(self) -> bool {
-        matches!(self, Key::Ctrl | Key::Alt | Key::Shift | Key::Meta)
+        self.either_side().is_some()
+    }
+
+    /// The modifier without its side: Right Shift is a Shift.
+    fn either_side(self) -> Option<Key> {
+        Some(match self {
+            Key::Ctrl | Key::LeftCtrl | Key::RightCtrl => Key::Ctrl,
+            Key::Alt | Key::LeftAlt | Key::RightAlt => Key::Alt,
+            Key::Shift | Key::LeftShift | Key::RightShift => Key::Shift,
+            Key::Meta | Key::LeftMeta | Key::RightMeta => Key::Meta,
+            _ => return None,
+        })
+    }
+
+    /// Whether holding `pressed` holds this shortcut key. Shift is held by
+    /// either Shift key; Right Shift only by the right one.
+    fn held_by(self, pressed: Key) -> bool {
+        self == pressed || pressed.either_side() == Some(self)
     }
 
     /// Parses a key name as reported by the operating-system layer;
@@ -41,7 +68,28 @@ impl Key {
     }
 
     fn parse(name: &str) -> Result<Key> {
-        let lower = name.trim().to_lowercase();
+        let lower: String = name
+            .trim()
+            .to_lowercase()
+            .chars()
+            .filter(|c| !matches!(c, ' ' | '_' | '-'))
+            .collect();
+        // "Right Shift", "Left Ctrl": one side of a modifier.
+        for (prefix, left) in [("left", true), ("right", false)] {
+            if let Some(rest) = lower.strip_prefix(prefix) {
+                return match (Key::parse(rest), left) {
+                    (Ok(Key::Ctrl), true) => Ok(Key::LeftCtrl),
+                    (Ok(Key::Ctrl), false) => Ok(Key::RightCtrl),
+                    (Ok(Key::Alt), true) => Ok(Key::LeftAlt),
+                    (Ok(Key::Alt), false) => Ok(Key::RightAlt),
+                    (Ok(Key::Shift), true) => Ok(Key::LeftShift),
+                    (Ok(Key::Shift), false) => Ok(Key::RightShift),
+                    (Ok(Key::Meta), true) => Ok(Key::LeftMeta),
+                    (Ok(Key::Meta), false) => Ok(Key::RightMeta),
+                    _ => Err(format!("Unknown key \"{}\"", name.trim())),
+                };
+            }
+        }
         Ok(match lower.as_str() {
             "ctrl" | "control" => Key::Ctrl,
             "alt" | "option" | "opt" => Key::Alt,
@@ -49,7 +97,7 @@ impl Key {
             "meta" | "win" | "windows" | "cmd" | "command" | "super" => Key::Meta,
             "space" => Key::Space,
             "escape" | "esc" => Key::Escape,
-            "capslock" | "caps lock" | "caps" => Key::CapsLock,
+            "capslock" | "caps" => Key::CapsLock,
             "enter" | "return" => Key::Enter,
             "tab" => Key::Tab,
             _ => {
@@ -66,10 +114,19 @@ impl Key {
         })
     }
 
+    /// The name settings use; `parse` reads it back.
     fn name(self) -> String {
         match self {
             Key::Char(c) => c.to_string(),
             Key::Function(n) => format!("F{n}"),
+            Key::LeftCtrl => "Left Ctrl".into(),
+            Key::RightCtrl => "Right Ctrl".into(),
+            Key::LeftAlt => "Left Alt".into(),
+            Key::RightAlt => "Right Alt".into(),
+            Key::LeftShift => "Left Shift".into(),
+            Key::RightShift => "Right Shift".into(),
+            Key::LeftMeta => "Left Meta".into(),
+            Key::RightMeta => "Right Meta".into(),
             other => format!("{other:?}"),
         }
     }
@@ -98,6 +155,31 @@ impl Chord {
     pub fn keys(&self) -> &BTreeSet<Key> {
         &self.0
     }
+
+    /// Whether these keys hold every key of the shortcut.
+    fn held_by(&self, pressed: &BTreeSet<Key>) -> bool {
+        self.0.iter().all(|key| pressed.iter().any(|&down| key.held_by(down)))
+    }
+
+    /// Whether holding this shortcut holds `other` too: Shift+Space extends
+    /// Right Shift, since Right Shift+Space holds both.
+    fn extends(&self, other: &Chord) -> bool {
+        other
+            .0
+            .iter()
+            .all(|&key| self.0.iter().any(|&mine| key.held_by(mine) || mine.held_by(key)))
+    }
+
+    /// Whether every key in `pressed` is part of the shortcut.
+    fn covers(&self, pressed: &BTreeSet<Key>) -> bool {
+        pressed.iter().all(|&down| self.0.iter().any(|key| key.held_by(down)))
+    }
+
+    /// Shift, Right Shift or Ctrl+Meta: keys people also hold to type
+    /// capitals or other apps' shortcuts.
+    fn modifiers_only(&self) -> bool {
+        self.0.iter().all(|key| key.is_modifier())
+    }
 }
 
 impl std::fmt::Display for Chord {
@@ -118,34 +200,95 @@ pub enum Bind {
     Cancel,
 }
 
+impl Bind {
+    const ALL: [Bind; 6] = [
+        Bind::PushToTalk,
+        Bind::HandsFree,
+        Bind::Command,
+        Bind::PasteLast,
+        Bind::CopyLast,
+        Bind::Cancel,
+    ];
+
+    fn shortcut(self, hotkeys: &crate::settings::Hotkeys) -> &str {
+        match self {
+            Bind::PushToTalk => &hotkeys.push_to_talk,
+            Bind::HandsFree => &hotkeys.hands_free,
+            Bind::Command => &hotkeys.command,
+            Bind::PasteLast => &hotkeys.paste_last,
+            Bind::CopyLast => &hotkeys.copy_last,
+            Bind::Cancel => &hotkeys.cancel,
+        }
+    }
+
+    /// Whether this shortcut is made only of modifiers, so that a press may
+    /// still turn out to be typing for the first `UNSURE_MS` after it goes
+    /// down.
+    pub fn unsure(self, hotkeys: &crate::settings::Hotkeys) -> bool {
+        Chord::parse(self.shortcut(hotkeys)).is_ok_and(|chord| chord.modifiers_only())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Edge {
     Down(Bind),
     Up(Bind),
+    /// Another key joined a modifier-only shortcut just after it went down:
+    /// it was the start of a capital letter or some other shortcut, not a
+    /// dictation.
+    Abort(Bind),
     /// Every key is up again; deferred pastes are safe now.
     Released,
 }
 
+/// A modifier-only shortcut held alone this long goes down. Typing a capital
+/// usually adds the letter sooner, so Shift+A never opens the microphone.
+pub const SETTLE_MS: u64 = 150;
+/// Another key joining a modifier-only shortcut this soon after it was
+/// pressed aborts it. Later, extra keys are ignored, as for any shortcut.
+pub const ABORT_MS: u64 = crate::session::TAP_MS;
+/// How long after going down such a shortcut may still be aborted.
+pub const UNSURE_MS: u64 = ABORT_MS - SETTLE_MS;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Up,
+    /// Modifier-only and held alone since `since`, not yet down.
+    Settling {
+        since: u64,
+    },
+    Down {
+        since: u64,
+    },
+    /// Used for something else; waits for its keys to be let go.
+    Spent,
+}
+
+struct Binding {
+    bind: Bind,
+    chord: Chord,
+    phase: Phase,
+}
+
 pub struct Tracker {
-    bindings: Vec<(Bind, Chord, bool)>,
+    bindings: Vec<Binding>,
     any_down: bool,
 }
 
 impl Tracker {
     pub fn new(hotkeys: &crate::settings::Hotkeys) -> Result<Tracker> {
-        let pairs = [
-            (Bind::PushToTalk, &hotkeys.push_to_talk),
-            (Bind::HandsFree, &hotkeys.hands_free),
-            (Bind::Command, &hotkeys.command),
-            (Bind::PasteLast, &hotkeys.paste_last),
-            (Bind::CopyLast, &hotkeys.copy_last),
-            (Bind::Cancel, &hotkeys.cancel),
-        ];
         let mut bindings = Vec::new();
-        for (bind, text) in pairs {
+        for bind in Bind::ALL {
+            let text = bind.shortcut(hotkeys);
             // An empty shortcut switches the action off.
             if !text.trim().is_empty() {
-                bindings.push((bind, Chord::parse(text)?, false));
+                bindings.push(Binding {
+                    bind,
+                    chord: Chord::parse(text)?,
+                    // Keys already held when the shortcuts change were
+                    // pressed for something else.
+                    phase: Phase::Spent,
+                });
             }
         }
         Ok(Tracker {
@@ -154,27 +297,99 @@ impl Tracker {
         })
     }
 
-    /// Feeds the current key state and returns what changed.
-    pub fn update(&mut self, pressed: &BTreeSet<Key>) -> Vec<Edge> {
+    /// The shortcuts down now.
+    pub fn down(&self) -> Vec<Bind> {
+        self.bindings
+            .iter()
+            .filter(|binding| matches!(binding.phase, Phase::Down { .. }))
+            .map(|binding| binding.bind)
+            .collect()
+    }
+
+    /// Keys held now were pressed for something else, such as recording a
+    /// new shortcut: nothing goes down until they are let go.
+    pub fn hold_off(&mut self) {
+        for binding in &mut self.bindings {
+            binding.phase = Phase::Spent;
+        }
+    }
+
+    /// Whether a shortcut is settling, so `update` must be called again as
+    /// time passes even though no key changed.
+    pub fn settling(&self) -> bool {
+        self.bindings
+            .iter()
+            .any(|binding| matches!(binding.phase, Phase::Settling { .. }))
+    }
+
+    /// Feeds the current key state and returns what changed. `now` is a
+    /// monotonic clock in milliseconds.
+    pub fn update(&mut self, pressed: &BTreeSet<Key>, now: u64) -> Vec<Edge> {
         let mut edges = Vec::new();
-        let chords: Vec<Chord> = self.bindings.iter().map(|(_, chord, _)| chord.clone()).collect();
-        for (bind, chord, active) in &mut self.bindings {
-            let held = chord.0.is_subset(pressed);
-            if *active && !held {
-                *active = false;
-                edges.push(Edge::Up(*bind));
-            } else if !*active && held {
-                // Extra keys are fine only when they extend this shortcut into
-                // another one (Ctrl+Meta → Ctrl+Meta+Space). Ctrl+Meta+Left is
-                // somebody else's shortcut and must not start dictation.
-                let foreign = !chords
-                    .iter()
-                    .any(|other| other.0.is_superset(&chord.0) && pressed.is_subset(&other.0));
-                if !foreign {
-                    *active = true;
-                    edges.push(Edge::Down(*bind));
+        let chords: Vec<(Bind, Chord)> = self
+            .bindings
+            .iter()
+            .map(|binding| (binding.bind, binding.chord.clone()))
+            .collect();
+        for Binding { bind, chord, phase } in &mut self.bindings {
+            let bind = *bind;
+            let held = chord.held_by(pressed);
+            // Extra keys are fine only when they extend this shortcut into
+            // one that carries on dictating (Ctrl+Meta → Ctrl+Meta+Space).
+            // Ctrl+Meta+Left is somebody else's shortcut, and Alt+Shift+Z
+            // pastes: neither may start dictation.
+            let ours = chords.iter().any(|(other_bind, other)| {
+                (*other_bind == bind || matches!(other_bind, Bind::HandsFree | Bind::Command))
+                    && other.extends(chord)
+                    && other.covers(pressed)
+            });
+            let foreign = held && !ours;
+            let extended = held && !foreign && !chord.covers(pressed);
+            let quiet = chord.modifiers_only();
+            *phase = match *phase {
+                Phase::Up | Phase::Spent if !held => Phase::Up,
+                Phase::Spent => Phase::Spent,
+                Phase::Up if foreign => {
+                    if quiet {
+                        Phase::Spent
+                    } else {
+                        Phase::Up
+                    }
                 }
-            }
+                Phase::Up if quiet && !extended => Phase::Settling { since: now },
+                Phase::Up => {
+                    edges.push(Edge::Down(bind));
+                    Phase::Down { since: now }
+                }
+                Phase::Settling { .. } if !held => {
+                    // Let go cleanly before settling: a tap, which counts.
+                    // Let go as another key went down: typing.
+                    if chord.covers(pressed) {
+                        edges.push(Edge::Down(bind));
+                        edges.push(Edge::Up(bind));
+                    }
+                    Phase::Up
+                }
+                Phase::Settling { .. } if foreign => Phase::Spent,
+                Phase::Settling { since } if extended || now.saturating_sub(since) >= SETTLE_MS => {
+                    edges.push(Edge::Down(bind));
+                    Phase::Down { since }
+                }
+                settling @ Phase::Settling { .. } => settling,
+                Phase::Down { since } if !held => {
+                    // Let go as a letter goes down, still in the abort window:
+                    // typing, as when the letter joins first. Space left held
+                    // from Shift+Space hands-free is not a letter.
+                    let typed = quiet && !ours && now.saturating_sub(since) < ABORT_MS;
+                    edges.push(if typed { Edge::Abort(bind) } else { Edge::Up(bind) });
+                    Phase::Up
+                }
+                Phase::Down { since } if quiet && foreign && now.saturating_sub(since) < ABORT_MS => {
+                    edges.push(Edge::Abort(bind));
+                    Phase::Spent
+                }
+                down @ Phase::Down { .. } => down,
+            };
         }
         if self.any_down && pressed.is_empty() {
             edges.push(Edge::Released);
@@ -188,6 +403,7 @@ impl Tracker {
 mod tests {
     use super::*;
     use crate::settings::Hotkeys;
+    use Key::*;
 
     fn keys(list: &[Key]) -> BTreeSet<Key> {
         list.iter().copied().collect()
@@ -204,6 +420,21 @@ mod tests {
         }
     }
 
+    fn right_shift() -> Hotkeys {
+        Hotkeys {
+            push_to_talk: "Right Shift".into(),
+            hands_free: String::new(),
+            ..windows()
+        }
+    }
+
+    /// A tracker that has seen the keyboard at rest.
+    fn fresh(hotkeys: &Hotkeys) -> Tracker {
+        let mut tracker = Tracker::new(hotkeys).unwrap();
+        assert_eq!(tracker.update(&keys(&[]), 0), vec![]);
+        tracker
+    }
+
     #[test]
     fn parses_names_and_aliases() {
         assert_eq!(
@@ -215,8 +446,27 @@ mod tests {
         assert_eq!(Chord::parse("option+return").unwrap().to_string(), "Alt+Enter");
         assert_eq!(Chord::parse("caps lock").unwrap().keys().len(), 1);
         assert_eq!(Chord::parse("Shift+Tab").unwrap().to_string(), "Shift+Tab");
-        assert_eq!(Key::from_name("Meta"), Key::Meta);
-        assert_eq!(Key::from_name("Other"), Key::Other);
+        for name in ["Right Shift", "rightshift", "right_shift"] {
+            assert_eq!(Chord::parse(name).unwrap().to_string(), "Right Shift", "{name}");
+        }
+        assert_eq!(
+            Chord::parse("left ctrl+right option").unwrap().to_string(),
+            "Left Ctrl+Right Alt"
+        );
+        assert_eq!(Chord::parse("Left Cmd+Space").unwrap().to_string(), "Left Meta+Space");
+        assert_eq!(Chord::parse("Left Win").unwrap().to_string(), "Left Meta");
+        assert_eq!(Chord::parse("right meta").unwrap().to_string(), "Right Meta");
+        assert_eq!(Chord::parse("Left Space").unwrap_err(), "Unknown key \"Left Space\"");
+        assert_eq!(Chord::parse("Right").unwrap_err(), "Unknown key \"Right\"");
+        assert_eq!(Key::from_name("Meta"), Meta);
+        assert_eq!(Key::from_name("Right Shift"), RightShift);
+        assert_eq!(Key::from_name("Left Alt"), LeftAlt);
+        assert_eq!(Key::from_name("Other"), Other);
+        for key in [
+            LeftCtrl, RightCtrl, LeftAlt, RightAlt, LeftShift, RightShift, LeftMeta, RightMeta,
+        ] {
+            assert_eq!(Key::from_name(&key.name()), key);
+        }
     }
 
     #[test]
@@ -240,64 +490,260 @@ mod tests {
     }
 
     #[test]
-    fn hold_and_release() {
-        let mut tracker = Tracker::new(&windows()).unwrap();
-        assert_eq!(tracker.update(&keys(&[Key::Ctrl])), vec![]);
+    fn either_side_holds_a_plain_modifier() {
+        let mut tracker = fresh(&windows());
+        tracker.update(&keys(&[RightCtrl, LeftMeta]), 0);
         assert_eq!(
-            tracker.update(&keys(&[Key::Ctrl, Key::Meta])),
+            tracker.update(&keys(&[RightCtrl, LeftMeta]), 200),
             vec![Edge::Down(Bind::PushToTalk)]
         );
-        assert_eq!(tracker.update(&keys(&[Key::Ctrl, Key::Meta])), vec![]);
-        assert_eq!(tracker.update(&keys(&[Key::Meta])), vec![Edge::Up(Bind::PushToTalk)]);
-        assert_eq!(tracker.update(&keys(&[])), vec![Edge::Released]);
-        assert_eq!(tracker.update(&keys(&[])), vec![]);
+        assert_eq!(
+            tracker.update(&keys(&[LeftAlt, RightShift, Char('Z')]), 3000),
+            vec![Edge::Up(Bind::PushToTalk), Edge::Down(Bind::PasteLast)]
+        );
+    }
+
+    #[test]
+    fn hold_settles_then_release() {
+        let mut tracker = fresh(&windows());
+        assert_eq!(tracker.update(&keys(&[Ctrl]), 0), vec![]);
+        assert_eq!(tracker.update(&keys(&[Ctrl, Meta]), 10), vec![]);
+        assert!(tracker.settling());
+        assert_eq!(tracker.update(&keys(&[Ctrl, Meta]), 100), vec![]);
+        assert_eq!(
+            tracker.update(&keys(&[Ctrl, Meta]), 10 + SETTLE_MS),
+            vec![Edge::Down(Bind::PushToTalk)]
+        );
+        assert!(!tracker.settling());
+        assert_eq!(tracker.update(&keys(&[Ctrl, Meta]), 1000), vec![]);
+        assert_eq!(tracker.update(&keys(&[Meta]), 2000), vec![Edge::Up(Bind::PushToTalk)]);
+        assert_eq!(tracker.update(&keys(&[]), 2010), vec![Edge::Released]);
+        assert_eq!(tracker.update(&keys(&[]), 2020), vec![]);
+    }
+
+    #[test]
+    fn a_clean_tap_counts_before_it_settles() {
+        let mut tracker = fresh(&windows());
+        tracker.update(&keys(&[Ctrl, Meta]), 0);
+        assert_eq!(
+            tracker.update(&keys(&[Ctrl]), 80),
+            vec![Edge::Down(Bind::PushToTalk), Edge::Up(Bind::PushToTalk)]
+        );
     }
 
     #[test]
     fn extending_a_shortcut_keeps_the_first_one_down() {
-        let mut tracker = Tracker::new(&windows()).unwrap();
-        tracker.update(&keys(&[Key::Ctrl, Key::Meta]));
+        let mut tracker = fresh(&windows());
+        tracker.update(&keys(&[Ctrl, Meta]), 0);
+        tracker.update(&keys(&[Ctrl, Meta]), 200);
         assert_eq!(
-            tracker.update(&keys(&[Key::Ctrl, Key::Meta, Key::Space])),
+            tracker.update(&keys(&[Ctrl, Meta, Space]), 300),
             vec![Edge::Down(Bind::HandsFree)]
         );
         assert_eq!(
-            tracker.update(&keys(&[])),
+            tracker.update(&keys(&[]), 400),
             vec![Edge::Up(Bind::PushToTalk), Edge::Up(Bind::HandsFree), Edge::Released]
         );
-        // All three at once still starts both.
+        // Extended at once, push-to-talk goes down without settling, then
+        // Command Mode once it has settled.
         assert_eq!(
-            tracker.update(&keys(&[Key::Ctrl, Key::Meta, Key::Alt])),
-            vec![Edge::Down(Bind::PushToTalk), Edge::Down(Bind::Command)]
+            tracker.update(&keys(&[Ctrl, Meta, Space]), 1000),
+            vec![Edge::Down(Bind::PushToTalk), Edge::Down(Bind::HandsFree)]
+        );
+        tracker.update(&keys(&[]), 1100);
+        assert_eq!(
+            tracker.update(&keys(&[Ctrl, Meta, Alt]), 2000),
+            vec![Edge::Down(Bind::PushToTalk)]
+        );
+        assert_eq!(
+            tracker.update(&keys(&[Ctrl, Meta, Alt]), 2000 + SETTLE_MS),
+            vec![Edge::Down(Bind::Command)]
         );
     }
 
     #[test]
     fn other_apps_shortcuts_do_not_trigger() {
-        let mut tracker = Tracker::new(&windows()).unwrap();
-        assert_eq!(tracker.update(&keys(&[Key::Ctrl, Key::Meta, Key::Char('D')])), vec![]);
-        // Once it is a foreign combination, releasing the extra key starts normally.
+        let mut tracker = fresh(&windows());
+        assert_eq!(tracker.update(&keys(&[Ctrl, Meta, Char('D')]), 0), vec![]);
+        // Letting go of the extra key does not start it either: this press was for something else.
+        assert_eq!(tracker.update(&keys(&[Ctrl, Meta]), 50), vec![]);
+        assert_eq!(tracker.update(&keys(&[Ctrl, Meta]), 1000), vec![]);
+        assert_eq!(tracker.update(&keys(&[]), 1100), vec![Edge::Released]);
+        // A key pressed once dictation is under way does not interrupt it.
+        tracker.update(&keys(&[Ctrl, Meta]), 2000);
+        tracker.update(&keys(&[Ctrl, Meta]), 2000 + SETTLE_MS);
+        assert_eq!(tracker.update(&keys(&[Ctrl, Meta, Char('D')]), 2000 + ABORT_MS), vec![]);
         assert_eq!(
-            tracker.update(&keys(&[Key::Ctrl, Key::Meta])),
-            vec![Edge::Down(Bind::PushToTalk)]
-        );
-        // A key pressed while dictating does not interrupt it.
-        assert_eq!(tracker.update(&keys(&[Key::Ctrl, Key::Meta, Key::Char('D')])), vec![]);
-        assert_eq!(
-            tracker.update(&keys(&[Key::Escape])),
+            tracker.update(&keys(&[Escape]), 3000),
             vec![Edge::Up(Bind::PushToTalk), Edge::Down(Bind::Cancel)]
         );
     }
 
     #[test]
-    fn extra_keys_must_belong_to_a_single_extension() {
-        let mut tracker = Tracker::new(&windows()).unwrap();
-        assert!(tracker
-            .update(&keys(&[Key::Ctrl, Key::Meta, Key::Space, Key::Alt]))
-            .is_empty());
+    fn a_key_joining_soon_after_aborts() {
+        let mut tracker = fresh(&windows());
+        tracker.update(&keys(&[Ctrl, Meta]), 0);
         assert_eq!(
-            tracker.update(&keys(&[Key::Ctrl, Key::Meta, Key::Space])),
+            tracker.update(&keys(&[Ctrl, Meta]), SETTLE_MS),
+            vec![Edge::Down(Bind::PushToTalk)]
+        );
+        assert_eq!(
+            tracker.update(&keys(&[Ctrl, Meta, Char('D')]), 300),
+            vec![Edge::Abort(Bind::PushToTalk)]
+        );
+        assert_eq!(tracker.update(&keys(&[Ctrl, Meta]), 400), vec![]);
+        assert_eq!(tracker.update(&keys(&[Ctrl, Meta]), 2000), vec![]);
+        assert_eq!(tracker.update(&keys(&[]), 2100), vec![Edge::Released]);
+    }
+
+    #[test]
+    fn extra_keys_must_belong_to_a_single_extension() {
+        let mut tracker = fresh(&windows());
+        assert!(tracker.update(&keys(&[Ctrl, Meta, Space, Alt]), 0).is_empty());
+        assert_eq!(
+            tracker.update(&keys(&[Ctrl, Meta, Space]), 50),
+            vec![Edge::Down(Bind::HandsFree)]
+        );
+    }
+
+    #[test]
+    fn right_shift_only() {
+        let mut tracker = fresh(&right_shift());
+        // Left Shift is for typing.
+        assert_eq!(tracker.update(&keys(&[LeftShift]), 0), vec![]);
+        assert!(!tracker.settling());
+        assert_eq!(tracker.update(&keys(&[LeftShift]), 1000), vec![]);
+        tracker.update(&keys(&[]), 1100);
+        // Right Shift held alone dictates.
+        tracker.update(&keys(&[RightShift]), 2000);
+        assert_eq!(
+            tracker.update(&keys(&[RightShift]), 2000 + SETTLE_MS),
+            vec![Edge::Down(Bind::PushToTalk)]
+        );
+        assert_eq!(
+            tracker.update(&keys(&[]), 5000),
+            vec![Edge::Up(Bind::PushToTalk), Edge::Released]
+        );
+        // Both Shift keys together are not the shortcut.
+        assert_eq!(tracker.update(&keys(&[LeftShift, RightShift]), 6000), vec![]);
+        assert_eq!(tracker.update(&keys(&[RightShift]), 7000), vec![]);
+        tracker.update(&keys(&[]), 7100);
+    }
+
+    #[test]
+    fn typing_with_right_shift_never_dictates() {
+        let mut tracker = fresh(&right_shift());
+        // A capital letter: the letter follows within the settling time.
+        assert_eq!(tracker.update(&keys(&[RightShift]), 0), vec![]);
+        assert_eq!(tracker.update(&keys(&[RightShift, Char('A')]), 80), vec![]);
+        assert_eq!(tracker.update(&keys(&[RightShift]), 150), vec![]);
+        // More capitals while Shift stays down.
+        assert_eq!(tracker.update(&keys(&[RightShift]), 600), vec![]);
+        assert_eq!(tracker.update(&keys(&[RightShift, Char('B')]), 700), vec![]);
+        assert_eq!(tracker.update(&keys(&[]), 800), vec![Edge::Released]);
+        // A slow capital starts and is aborted at once.
+        tracker.update(&keys(&[RightShift]), 1000);
+        assert_eq!(
+            tracker.update(&keys(&[RightShift]), 1200),
+            vec![Edge::Down(Bind::PushToTalk)]
+        );
+        assert_eq!(
+            tracker.update(&keys(&[RightShift, Char('C')]), 1250),
+            vec![Edge::Abort(Bind::PushToTalk)]
+        );
+        assert_eq!(tracker.update(&keys(&[]), 1300), vec![Edge::Released]);
+        // Alt+Shift+Z with the right Shift pastes and does not dictate.
+        assert_eq!(
+            tracker.update(&keys(&[LeftAlt, RightShift, Char('Z')]), 2000),
+            vec![Edge::Down(Bind::PasteLast)]
+        );
+    }
+
+    #[test]
+    fn double_tap_right_shift() {
+        let mut tracker = fresh(&right_shift());
+        let tap = vec![Edge::Down(Bind::PushToTalk), Edge::Up(Bind::PushToTalk), Edge::Released];
+        tracker.update(&keys(&[RightShift]), 0);
+        assert_eq!(tracker.update(&keys(&[]), 90), tap);
+        tracker.update(&keys(&[RightShift]), 200);
+        assert_eq!(tracker.update(&keys(&[]), 290), tap);
+    }
+
+    #[test]
+    fn keys_held_when_shortcuts_change_wait_to_be_let_go() {
+        let mut tracker = Tracker::new(&right_shift()).unwrap();
+        assert_eq!(tracker.update(&keys(&[RightShift]), 0), vec![]);
+        assert_eq!(tracker.update(&keys(&[RightShift]), 1000), vec![]);
+        assert_eq!(tracker.update(&keys(&[]), 1100), vec![Edge::Released]);
+        tracker.update(&keys(&[RightShift]), 2000);
+        assert!(tracker.settling());
+        // Recording a shortcut in Settings ends with Right Shift still down.
+        assert_eq!(tracker.down(), vec![]);
+        tracker.hold_off();
+        assert!(!tracker.settling());
+        assert_eq!(tracker.update(&keys(&[RightShift]), 3000), vec![]);
+        tracker.update(&keys(&[]), 3100);
+        tracker.update(&keys(&[RightShift]), 4000);
+        assert_eq!(
+            tracker.update(&keys(&[RightShift]), 4000 + SETTLE_MS),
+            vec![Edge::Down(Bind::PushToTalk)]
+        );
+        assert_eq!(tracker.down(), vec![Bind::PushToTalk]);
+    }
+
+    #[test]
+    fn a_plain_shortcut_extends_one_side() {
+        let mut tracker = fresh(&Hotkeys {
+            hands_free: "Shift+Space".into(),
+            ..right_shift()
+        });
+        tracker.update(&keys(&[RightShift]), 0);
+        assert_eq!(
+            tracker.update(&keys(&[RightShift, Space]), 50),
             vec![Edge::Down(Bind::PushToTalk), Edge::Down(Bind::HandsFree)]
         );
+        // Letting go of Shift first is the end of the press, not typing.
+        assert_eq!(
+            tracker.update(&keys(&[Space]), 150),
+            vec![Edge::Up(Bind::PushToTalk), Edge::Up(Bind::HandsFree)]
+        );
+    }
+
+    #[test]
+    fn letting_go_as_a_letter_goes_down_soon_after_is_typing() {
+        let mut tracker = fresh(&right_shift());
+        tracker.update(&keys(&[RightShift]), 0);
+        tracker.update(&keys(&[RightShift]), SETTLE_MS);
+        assert_eq!(
+            tracker.update(&keys(&[Char('A')]), 300),
+            vec![Edge::Abort(Bind::PushToTalk)]
+        );
+        // Later it is just the end of the dictation.
+        tracker.update(&keys(&[]), 400);
+        tracker.update(&keys(&[RightShift]), 1000);
+        tracker.update(&keys(&[RightShift]), 1000 + SETTLE_MS);
+        assert_eq!(
+            tracker.update(&keys(&[Char('A')]), 1000 + ABORT_MS),
+            vec![Edge::Up(Bind::PushToTalk)]
+        );
+    }
+
+    #[test]
+    fn letting_go_as_a_letter_goes_down_is_typing() {
+        let mut tracker = fresh(&right_shift());
+        tracker.update(&keys(&[RightShift]), 0);
+        assert_eq!(tracker.update(&keys(&[Char('A')]), 60), vec![]);
+        assert_eq!(tracker.update(&keys(&[]), 120), vec![Edge::Released]);
+    }
+
+    #[test]
+    fn unsure_means_modifiers_only() {
+        let hotkeys = right_shift();
+        assert!(Bind::PushToTalk.unsure(&hotkeys));
+        assert!(Bind::Command.unsure(&hotkeys));
+        assert!(!Bind::HandsFree.unsure(&hotkeys));
+        assert!(!Bind::PasteLast.unsure(&hotkeys));
+        assert!(!Bind::Cancel.unsure(&hotkeys));
+        assert!(!Bind::CopyLast.unsure(&hotkeys));
     }
 }

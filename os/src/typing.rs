@@ -227,11 +227,11 @@ fn wait_for_release() -> Result<(), String> {
         return Err("Speechify cannot read the keyboard. Check desktop and Accessibility permissions.".into());
     }
     for _ in 0..40 {
-        if !keyboard
-            .pressed()
-            .iter()
-            .any(|key| matches!(key.as_str(), "Ctrl" | "Alt" | "Shift" | "Meta"))
-        {
+        if !keyboard.pressed().iter().any(|key| {
+            ["Ctrl", "Alt", "Shift", "Meta"]
+                .iter()
+                .any(|modifier| key.ends_with(modifier))
+        }) {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(25));

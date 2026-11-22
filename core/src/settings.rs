@@ -74,8 +74,11 @@ impl Default for Hotkeys {
         let mac = cfg!(target_os = "macos");
         let pick = |other: &str, on_mac: &str| if mac { on_mac } else { other }.to_string();
         Self {
-            push_to_talk: pick("Ctrl+Meta", "Ctrl+Alt"),
-            hands_free: pick("Ctrl+Meta+Space", "Ctrl+Alt+Space"),
+            // Hold to talk, double-tap to keep talking. Only the right Shift,
+            // so the left one stays free for typing.
+            push_to_talk: "Right Shift".into(),
+            // Double-tap covers hands-free; Right Shift+Space would catch typing.
+            hands_free: String::new(),
             command: pick("Ctrl+Meta+Alt", "Ctrl+Alt+Meta"),
             paste_last: pick("Alt+Shift+Z", "Ctrl+Meta+V"),
             copy_last: pick("Alt+Shift+X", "Ctrl+Meta+C"),

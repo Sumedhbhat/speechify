@@ -13,6 +13,9 @@ pub const LIMIT_MS: u64 = 20 * 60_000;
 pub enum Event {
     Down(Bind),
     Up(Bind),
+    /// The shortcut turned out to be part of another key combination, such
+    /// as Shift+A: drop the recording without a word.
+    Abort(Bind),
     /// All keys are up.
     Released,
     /// The bar was clicked at rest, or its stop button while recording.
@@ -117,6 +120,11 @@ impl Session {
         !matches!(self.state, State::Idle | State::Busy)
     }
 
+    /// A shortcut is held down: not a tap, not hands-free.
+    pub fn is_held(&self) -> bool {
+        matches!(self.state, State::Held { .. })
+    }
+
     pub fn is_busy(&self) -> bool {
         self.state == State::Busy
     }
@@ -194,6 +202,18 @@ impl Session {
                     warned,
                 };
                 vec![Effect::Mode { command, locked: true }]
+            }
+            // A double-tap whose second press was the start of a capital is
+            // not a lock either.
+            (State::Held { by, .. }, Abort(aborted)) if aborted == by => {
+                self.state = State::Idle;
+                vec![Effect::Discard { keep: false }]
+            }
+            // Only the press that locked can still be aborted: any later
+            // dictation shortcut stops the recording when it goes down.
+            (State::Locked { .. }, Abort(PushToTalk | HandsFree | Command)) => {
+                self.state = State::Idle;
+                vec![Effect::Discard { keep: false }]
             }
             (State::Held { since, by, command, .. }, Up(released)) if released == by => {
                 if now.saturating_sub(since) < TAP_MS {
@@ -326,6 +346,37 @@ mod tests {
         assert_eq!(s.handle(Tick, 400), vec![]);
         assert_eq!(s.handle(Tick, 700), vec![Effect::Discard { keep: false }]);
         assert_eq!(s.handle(Undo, 800), vec![]);
+    }
+
+    #[test]
+    fn an_aborted_press_is_dropped_silently() {
+        let mut s = Session::new();
+        s.handle(Down(PushToTalk), 0);
+        // Another shortcut aborting does not touch this recording.
+        assert_eq!(s.handle(Abort(Command), 100), vec![]);
+        assert_eq!(s.handle(Abort(PushToTalk), 200), vec![Effect::Discard { keep: false }]);
+        assert!(!s.is_recording());
+        assert_eq!(s.handle(Up(PushToTalk), 300), vec![]);
+        assert_eq!(s.handle(Undo, 400), vec![]);
+        // It does not count as the first half of a double-tap.
+        assert_eq!(s.handle(Down(PushToTalk), 500), START);
+        assert!(s.is_held());
+    }
+
+    #[test]
+    fn a_double_tap_whose_second_press_was_typing_is_dropped() {
+        let mut s = Session::new();
+        s.handle(Down(PushToTalk), 0);
+        s.handle(Up(PushToTalk), 100);
+        assert!(!s.is_held());
+        s.handle(Down(PushToTalk), 300);
+        assert_eq!(s.handle(Abort(PushToTalk), 400), vec![Effect::Discard { keep: false }]);
+        // A modifier-only hands-free shortcut that was the start of Ctrl+C.
+        s.handle(Down(HandsFree), 1000);
+        // Paste and copy leave a recording running, and so does their abort.
+        assert_eq!(s.handle(Abort(PasteLast), 1050), vec![]);
+        assert_eq!(s.handle(Abort(HandsFree), 1100), vec![Effect::Discard { keep: false }]);
+        assert!(!s.is_recording());
     }
 
     #[test]

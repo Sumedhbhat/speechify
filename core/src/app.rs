@@ -134,6 +134,10 @@ pub struct Controller<P: Platform, E: Engines> {
     /// The last cancelled or failed recording, for Undo and retry.
     kept: Option<(Vec<f32>, Target, bool, String)>,
     muted: bool,
+    /// A recording started by a modifier-only shortcut, which may still be
+    /// typing (Shift held a moment before a capital) until this time: its
+    /// chime, mute and Listening bar are held back until then.
+    unsure: Option<(u64, Option<Bar>)>,
     /// How long the recogniser took over its last piece, which sets how
     /// long the next recording's pieces must be.
     piece_cost_ms: u64,
@@ -162,6 +166,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
             command: false,
             kept: None,
             muted: false,
+            unsure: None,
             draft: Draft::default(),
             piece_cost_ms,
             cost_for: speech,
@@ -207,19 +212,26 @@ impl<P: Platform, E: Engines> Controller<P, E> {
     /// whatever it decides.
     pub fn handle(&mut self, event: Event) {
         let settings = self.store.settings();
+        let unsure = matches!(event, Event::Down(bind) if bind.unsure(&settings.hotkeys));
         for effect in self.session.handle(event, self.platform.now_ms()) {
             match effect {
                 Effect::Start => {
-                    if !self.start(&settings) {
+                    if !self.start(&settings, unsure) {
                         // The microphone did not open: skip the "listening" display.
                         break;
                     }
                 }
                 Effect::Mode { command, locked } => {
                     self.command = command;
-                    self.platform.show(Bar::Listening { command, locked });
+                    let bar = Bar::Listening { command, locked };
+                    match &mut self.unsure {
+                        // A double-tap lock is meant.
+                        Some((_, held)) if !locked => *held = Some(bar),
+                        _ => self.reveal(&settings, Some(bar)),
+                    }
                 }
                 Effect::Stop { command } => {
+                    self.reveal(&settings, None);
                     let audio = self.platform.stop_capture();
                     self.unmute();
                     if settings.sounds {
@@ -232,6 +244,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                     self.session.handle(Event::Finished, self.platform.now_ms());
                 }
                 Effect::Discard { keep } => {
+                    self.unsure = None;
                     let audio = self.platform.stop_capture();
                     self.draft = Draft::default();
                     self.unmute();
@@ -265,6 +278,15 @@ impl<P: Platform, E: Engines> Controller<P, E> {
             }
         }
         if event == Event::Tick && self.session.is_recording() {
+            // A tap waiting for its second press stays quiet.
+            if self
+                .unsure
+                .as_ref()
+                .is_some_and(|(until, _)| self.platform.now_ms() >= *until)
+                && self.session.is_held()
+            {
+                self.reveal(&settings, None);
+            }
             self.listen(&settings);
         }
     }
@@ -301,7 +323,26 @@ impl<P: Platform, E: Engines> Controller<P, E> {
         self.draft.clean(&into, (&mut self.rewrite_circuit, now_ms));
     }
 
-    fn start(&mut self, settings: &Settings) -> bool {
+    /// Gives the feedback a recording holds back while it may be typing,
+    /// then shows `bar`, or the bar held back.
+    fn reveal(&mut self, settings: &Settings, bar: Option<Bar>) {
+        let mut bar = bar;
+        if let Some((_, held)) = self.unsure.take() {
+            if settings.mute_while_dictating {
+                self.platform.mute(true);
+                self.muted = true;
+            }
+            if settings.sounds {
+                self.platform.chime(Chime::Start);
+            }
+            bar = bar.or(held);
+        }
+        if let Some(bar) = bar {
+            self.platform.show(bar);
+        }
+    }
+
+    fn start(&mut self, settings: &Settings, unsure: bool) -> bool {
         // Remember where the text is headed before the bar or anything else can take focus.
         self.target = self.platform.target();
         // Another model or device has its own speed, still to be measured.
@@ -316,12 +357,9 @@ impl<P: Platform, E: Engines> Controller<P, E> {
             self.notice(&error, true, false);
             return false;
         }
-        if settings.mute_while_dictating {
-            self.platform.mute(true);
-            self.muted = true;
-        }
-        if settings.sounds {
-            self.platform.chime(Chime::Start);
+        self.unsure = Some((self.platform.now_ms() + crate::hotkey::UNSURE_MS, None));
+        if !unsure {
+            self.reveal(settings, None);
         }
         self.sync_rewrite_settings(settings);
         let mut warm = settings.clone();
@@ -971,6 +1009,58 @@ mod tests {
     }
 
     #[test]
+    fn a_modifier_only_press_stays_quiet_until_it_is_surely_dictation() {
+        let mut app = app(&[]);
+        set(&mut app, |s| s.mute_while_dictating = true);
+        // Right Shift held a moment before a capital: the microphone opened
+        // but nothing was heard or shown, and it closes again.
+        app.handle(Event::Down(Bind::PushToTalk));
+        app.platform.now += 100;
+        app.handle(Event::Tick);
+        app.handle(Event::Abort(Bind::PushToTalk));
+        assert_eq!(app.platform.log, vec!["start:", "stop"]);
+        assert_eq!(app.platform.bars, vec![Bar::Idle]);
+        assert!(app.is_idle());
+
+        // Held on, it chimes and shows the bar once it cannot be typing.
+        app.handle(Event::Down(Bind::PushToTalk));
+        app.platform.now += crate::hotkey::UNSURE_MS - 1;
+        app.handle(Event::Tick);
+        assert_eq!(app.platform.log.len(), 3);
+        app.platform.now += 1;
+        app.handle(Event::Tick);
+        assert_eq!(app.platform.log[3..], ["mute:true", "chime:Start"]);
+        assert_eq!(
+            app.platform.bars.last().unwrap(),
+            &Bar::Listening {
+                command: false,
+                locked: false
+            }
+        );
+        app.handle(Event::Down(Bind::Cancel));
+    }
+
+    #[test]
+    fn a_tap_stays_quiet_and_a_double_tap_chimes_at_once() {
+        let mut app = app(&[]);
+        app.handle(Event::Down(Bind::PushToTalk));
+        app.handle(Event::Up(Bind::PushToTalk));
+        app.platform.now += crate::hotkey::UNSURE_MS;
+        app.handle(Event::Tick);
+        assert_eq!(app.platform.log, vec!["start:"]);
+        assert!(app.platform.bars.is_empty());
+        app.handle(Event::Down(Bind::PushToTalk));
+        assert_eq!(app.platform.log, vec!["start:", "chime:Start"]);
+        assert_eq!(
+            app.platform.bars,
+            vec![Bar::Listening {
+                command: false,
+                locked: true
+            }]
+        );
+    }
+
+    #[test]
     fn hold_speak_release_pastes_and_records() {
         let mut app = app(&["hello team the build is green"]);
         dictate(&mut app);
@@ -1146,6 +1236,7 @@ mod tests {
         let mut app = app(&["this was nearly lost"]);
         app.handle(Event::Down(Bind::PushToTalk));
         app.platform.now += 900;
+        app.handle(Event::Tick);
         app.handle(Event::Down(Bind::Cancel));
         assert_eq!(
             app.platform.bars[1..],
@@ -1316,6 +1407,8 @@ mod tests {
         let mut app = app(&["make it formal"]);
         app.engines.llm = Some(Scripted::new(vec![Ok("Selected words, formally.".into())]));
         app.handle(Event::Down(Bind::Command));
+        app.platform.now += 400;
+        app.handle(Event::Tick);
         assert_eq!(
             app.platform.bars.last().unwrap(),
             &Bar::Listening {
@@ -1323,7 +1416,7 @@ mod tests {
                 locked: false
             }
         );
-        app.platform.now += 1500;
+        app.platform.now += 1100;
         app.handle(Event::Up(Bind::Command));
         assert_eq!(
             app.platform.log.last().unwrap(),

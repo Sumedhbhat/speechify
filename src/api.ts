@@ -236,6 +236,8 @@ export type BarAction = "click" | "cancel" | "undo" | "dismiss";
 export const api = {
   getSettings: () => invoke<Settings>("get_settings"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
+  // Settings is recording a shortcut; the shell stops reading them meanwhile.
+  pauseShortcuts: (paused: boolean) => invoke<void>("pause_shortcuts", { paused }),
   getStatus: () => invoke<Status>("get_status"),
   /** `null` when this is the newest release. */
   checkUpdate: () => invoke<Update | null>("check_update"),

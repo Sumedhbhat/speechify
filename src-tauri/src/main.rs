@@ -64,6 +64,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
             commands::save_settings,
+            commands::pause_shortcuts,
             commands::get_status,
             commands::rewrite_status,
             commands::history,

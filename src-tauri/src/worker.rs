@@ -26,6 +26,9 @@ pub enum Msg {
     Quit,
 }
 
+/// The longest Settings may hold shortcuts off while recording one.
+const PAUSE_LIMIT: Duration = Duration::from_secs(30);
+
 struct Queued {
     message: Msg,
     at: Instant,
@@ -38,6 +41,10 @@ pub struct Shared {
     db: Mutex<Store>,
     tracker: Mutex<Option<Tracker>>,
     binding_revision: AtomicUsize,
+    /// Settings is recording a new shortcut: the keys are for it, not for
+    /// dictation. Expires on its own so a closed page cannot leave every
+    /// shortcut switched off.
+    shortcuts_paused_until: Mutex<Option<Instant>>,
     pub speech: Arc<Mutex<SpeechStatus>>,
     pub teacher_running: AtomicBool,
     pub quitting: Arc<AtomicBool>,
@@ -138,10 +145,25 @@ impl Shared {
         self.data_dir.join("audio")
     }
 
+    /// Stops reading shortcuts while Settings records a new one, for up to
+    /// `PAUSE_LIMIT`.
+    pub fn pause_shortcuts(&self, paused: bool) {
+        *lock(&self.shortcuts_paused_until) = paused.then(|| Instant::now() + PAUSE_LIMIT);
+    }
+
+    fn shortcuts_paused(&self) -> bool {
+        lock(&self.shortcuts_paused_until).is_some_and(|until| Instant::now() < until)
+    }
+
     /// Rebuilds the shortcut tracker from settings. Called after a save.
     pub fn rebind(&self) -> speechify_core::Result<()> {
         let tracker = Tracker::new(&self.db().settings().hotkeys)?;
-        *lock(&self.tracker) = Some(tracker);
+        let old = lock(&self.tracker).replace(tracker);
+        // The new tracker waits for held keys to be let go without reporting
+        // it, so a shortcut held now must not be left down.
+        for bind in old.as_ref().map(Tracker::down).unwrap_or_default() {
+            self.send(Msg::Input(Event::Up(bind)));
+        }
         self.binding_revision.fetch_add(1, Ordering::Release);
         Ok(())
     }
@@ -219,6 +241,7 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
         db: Mutex::new(Store::open(&db_path)?),
         tracker: Mutex::new(None),
         binding_revision: AtomicUsize::new(0),
+        shortcuts_paused_until: Mutex::new(None),
         speech: Arc::new(Mutex::new(SpeechStatus::default())),
         teacher_running: AtomicBool::new(false),
         quitting: Arc::new(AtomicBool::new(false)),
@@ -241,6 +264,9 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
         let mut access_checked = Instant::now();
         let mut previous = Vec::new();
         let mut revision = 0;
+        // The tracker times modifier-only shortcuts against this.
+        let clock = Instant::now();
+        let mut was_paused = false;
         loop {
             if keys.quitting.load(Ordering::Relaxed) {
                 return;
@@ -265,9 +291,23 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
                 continue;
             }
             std::thread::sleep(Duration::from_millis(12));
-            let names = keyboard.pressed();
+            // While paused every key reads as up, which also ends a held
+            // dictation. Keys still down when it ends were for the recorder.
+            let paused = keys.shortcuts_paused();
+            if was_paused && !paused {
+                if let Some(tracker) = lock(&keys.tracker).as_mut() {
+                    tracker.hold_off();
+                }
+                // Feed the tracker even if no key changed, so that what is
+                // not held goes back up.
+                keys.binding_revision.fetch_add(1, Ordering::Release);
+            }
+            was_paused = paused;
+            let names = if paused { Vec::new() } else { keyboard.pressed() };
             let current_revision = keys.binding_revision.load(Ordering::Acquire);
-            if names == previous && current_revision == revision {
+            // A settling shortcut goes down after a while with no key change.
+            let settling = lock(&keys.tracker).as_ref().is_some_and(Tracker::settling);
+            if names == previous && current_revision == revision && !settling {
                 continue;
             }
             revision = current_revision;
@@ -275,12 +315,13 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
             let pressed: BTreeSet<Key> = names.iter().map(|name| Key::from_name(name)).collect();
             let edges = lock(&keys.tracker)
                 .as_mut()
-                .map(|tracker| tracker.update(&pressed))
+                .map(|tracker| tracker.update(&pressed, clock.elapsed().as_millis() as u64))
                 .unwrap_or_default();
             for edge in edges {
                 keys.send(Msg::Input(match edge {
                     Edge::Down(bind) => Event::Down(bind),
                     Edge::Up(bind) => Event::Up(bind),
+                    Edge::Abort(bind) => Event::Abort(bind),
                     Edge::Released => Event::Released,
                 }));
             }
