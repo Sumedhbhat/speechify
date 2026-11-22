@@ -213,6 +213,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
     pub fn handle(&mut self, event: Event) {
         let settings = self.store.settings();
         let unsure = matches!(event, Event::Down(bind) if bind.unsure(&settings.hotkeys));
+        let mut started = false;
         for effect in self.session.handle(event, self.platform.now_ms()) {
             match effect {
                 Effect::Start => {
@@ -220,13 +221,14 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                         // The microphone did not open: skip the "listening" display.
                         break;
                     }
+                    started = unsure;
                 }
                 Effect::Mode { command, locked } => {
                     self.command = command;
                     let bar = Bar::Listening { command, locked };
                     match &mut self.unsure {
                         // A double-tap lock is meant.
-                        Some((_, held)) if !locked => *held = Some(bar),
+                        Some((_, held)) if !locked || started => *held = Some(bar),
                         _ => self.reveal(&settings, Some(bar)),
                     }
                 }
@@ -283,7 +285,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                 .unsure
                 .as_ref()
                 .is_some_and(|(until, _)| self.platform.now_ms() >= *until)
-                && self.session.is_held()
+                && !self.session.awaits_tap()
             {
                 self.reveal(&settings, None);
             }
@@ -1041,6 +1043,32 @@ mod tests {
     }
 
     #[test]
+    fn a_modifier_only_hands_free_press_stays_quiet_too() {
+        let mut app = app(&[]);
+        set(&mut app, |s| s.hotkeys.hands_free = "Right Ctrl".into());
+        app.handle(Event::Down(Bind::HandsFree));
+        app.platform.now += 100;
+        app.handle(Event::Tick);
+        app.handle(Event::Abort(Bind::HandsFree));
+        assert_eq!(app.platform.log, vec!["start:", "stop"]);
+        assert_eq!(app.platform.bars, vec![Bar::Idle]);
+
+        app.handle(Event::Down(Bind::HandsFree));
+        app.handle(Event::Up(Bind::HandsFree));
+        app.platform.now += crate::hotkey::UNSURE_MS;
+        app.handle(Event::Tick);
+        assert_eq!(app.platform.log[2..], ["start:", "chime:Start"]);
+        assert_eq!(
+            app.platform.bars.last().unwrap(),
+            &Bar::Listening {
+                command: false,
+                locked: true
+            }
+        );
+        app.handle(Event::Down(Bind::Cancel));
+    }
+
+    #[test]
     fn a_tap_stays_quiet_and_a_double_tap_chimes_at_once() {
         let mut app = app(&[]);
         app.handle(Event::Down(Bind::PushToTalk));
@@ -1184,6 +1212,7 @@ mod tests {
         app.handle(Event::Released);
         assert!(app.platform.log.last().unwrap().starts_with("paste:See you at four."));
         app.handle(Event::Down(Bind::CopyLast));
+        app.handle(Event::Released);
         assert_eq!(app.platform.log.last().unwrap(), "copy:See you at four.");
     }
 
@@ -1211,16 +1240,19 @@ mod tests {
     fn copy_and_paste_last_with_and_without_history() {
         let mut app = app(&["first words spoken here"]);
         app.handle(Event::Down(Bind::CopyLast));
+        app.handle(Event::Released);
         app.handle(Event::Down(Bind::PasteLast));
         app.handle(Event::Released);
         let messages: Vec<String> = app.platform.bars.iter().map(|bar| format!("{bar:?}")).collect();
         assert!(messages[0].contains("Nothing to copy yet") && messages[1].contains("Nothing to paste yet"));
         dictate(&mut app);
         app.handle(Event::Down(Bind::CopyLast));
+        app.handle(Event::Released);
         assert_eq!(app.platform.log.last().unwrap(), "copy:First words spoken here.");
         assert!(format!("{:?}", app.platform.bars.last().unwrap()).contains("Copied your last dictation"));
         app.platform.copy_error = Some("The clipboard is busy".into());
         app.handle(Event::Down(Bind::CopyLast));
+        app.handle(Event::Released);
         assert_eq!(
             app.platform.bars.last().unwrap(),
             &Bar::Notice {
