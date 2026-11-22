@@ -34,6 +34,24 @@ const STRONGER: &[&str] = &[
     "incredibly",
     "seriously",
     "ever",
+    "best",
+    "favorite",
+    "favourite",
+    "beautiful",
+    "amazing",
+    "wonderful",
+    "lovely",
+    "dear",
+    "sweet",
+    "good",
+    "whole",
+    "entire",
+    "only",
+    "own",
+    "real",
+    "true",
+    "honest",
+    "dream",
 ];
 const CLOSERS: &[&str] = &["into", "to", "by", "before", "after", "then", "please", "now"];
 const UNFINISHED: &[&str] = &["the", "a", "an", "my", "our", "your", "to", "of", "with", "and"];
@@ -87,6 +105,7 @@ fn restated(left: &[String], right: &[String]) -> Option<(usize, bool)> {
             if JOINERS.contains(&plain.as_str())
                 || OTHERS.contains(&plain.as_str())
                 || STRONGER.contains(&plain.as_str())
+                || VERBS.contains(&plain.as_str())
                 || negates(word)
                 || word.ends_with(['\'', '’'])
                 || word.contains("'s")
@@ -138,7 +157,8 @@ fn restarts(words: &[String], at: usize) -> Option<usize> {
                 matches!(
                     before.as_str(),
                     "is" | "are" | "was" | "were" | "be" | "been" | "am" | "got"
-                ) || before.ends_with("'s")
+                ) || (before.ends_with("'s") && before != "let's")
+                    || before.ends_with("'m")
                     || before.ends_with("'re")
             };
         (start == 0 || !negates(&words[start - 1]))
@@ -202,6 +222,10 @@ mod tests {
             (
                 "Send it to the team, the design team by Friday.",
                 "Send it to the design team by Friday.",
+            ),
+            (
+                "Let's run the tests, run the integration tests before we push.",
+                "Let's run the integration tests before we push.",
             ),
             (
                 "We should run the tests, run the integration tests before we push.",
@@ -314,6 +338,17 @@ mod tests {
             "Let's go home, let's go home now.",
             "One more time, one more time please.",
             "Never again, never ever again.",
+            "I love my wife, my beautiful wife.",
+            "Meet my friend, my best friend.",
+            "Happy birthday to my sister, my favorite sister.",
+            "Thank you to my mom, my amazing mom.",
+            "I miss the old days, the good old days.",
+            "Welcome to the family, the whole family.",
+            "Congrats to the team, the entire team.",
+            "Here's to the team, the best team.",
+            "I'm the one, the only one.",
+            "I'm the king, the real king.",
+            "Check the logs, the server has logs.",
             "Run the tests. Run the integration tests.",
             "The plan, the outline of the plan.",
             "Read it, then read it again.",
