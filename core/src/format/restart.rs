@@ -11,6 +11,10 @@ const VERBS: &[&str] = &[
     "got", "went", "came", "broke", "took", "left", "made", "said", "sent", "kept", "ran", "fell", "gave", "told",
     "found", "thought", "brought", "began", "won", "lost", "felt", "knew", "saw",
 ];
+const DETERMINERS: &[&str] = &[
+    "the", "a", "an", "my", "our", "your", "their", "his", "her", "its", "these", "those", "some", "all", "any", "two",
+    "three", "few", "many", "more", "new", "old",
+];
 const SUBJECTS: &[&str] = &["i", "we", "you", "he", "she", "they", "it"];
 const STRONGER: &[&str] = &[
     "very",
@@ -132,10 +136,14 @@ fn restarts(words: &[String], at: usize) -> Option<usize> {
         let continues =
             |said: usize| next(said, 0).is_some_and(|word| negates(&word) || VERBS.contains(&word.as_str()));
         let verbless = |from: usize| {
-            for word in &words[from..] {
+            for (i, word) in words.iter().enumerate().skip(from) {
                 let plain = core(word);
-                let acts =
-                    plain.len() > 4 && (plain.ends_with("ed") || (plain.ends_with('s') && !plain.ends_with("ss")));
+                let counted = i > 0 && {
+                    let before = core(&words[i - 1]);
+                    DETERMINERS.contains(&before.as_str()) || before.chars().all(|c| c.is_ascii_digit())
+                };
+                let plural = plain.ends_with('s') && !plain.ends_with("ss") && !counted;
+                let acts = plain.len() > 4 && (plain.ends_with("ed") || plural);
                 if negates(word) || VERBS.contains(&plain.as_str()) || acts {
                     return false;
                 }
@@ -228,6 +236,26 @@ mod tests {
             (
                 "Let's run the tests, run the integration tests before we push.",
                 "Let's run the integration tests before we push.",
+            ),
+            (
+                "Let's merge the latest branch, latest master branch into this branch and push the changes.",
+                "Let's merge the latest master branch into this branch and push the changes.",
+            ),
+            (
+                "Let's merge the latest branch, latest master branch into this branch, please, and rerun the tests.",
+                "Let's merge the latest master branch into this branch, please, and rerun the tests.",
+            ),
+            (
+                "Send it to the team, the design team by Friday with the slides.",
+                "Send it to the design team by Friday with the slides.",
+            ),
+            (
+                "Move the file, the config file to the new folder and update the paths.",
+                "Move the config file to the new folder and update the paths.",
+            ),
+            (
+                "send it to the team, the design team by friday with the slides and then ping me",
+                "send it to the design team by friday with the slides and then ping me",
             ),
             (
                 "We should run the tests, run the integration tests before we push.",
