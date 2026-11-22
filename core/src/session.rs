@@ -93,6 +93,7 @@ enum State {
 pub struct Session {
     state: State,
     paste_pending: bool,
+    copy_pending: bool,
     undoable: bool,
 }
 
@@ -107,6 +108,7 @@ impl Session {
         Self {
             state: State::Idle,
             paste_pending: false,
+            copy_pending: false,
             undoable: false,
         }
     }
@@ -120,9 +122,9 @@ impl Session {
         !matches!(self.state, State::Idle | State::Busy)
     }
 
-    /// A shortcut is held down: not a tap, not hands-free.
-    pub fn is_held(&self) -> bool {
-        matches!(self.state, State::Held { .. })
+    /// A tap is waiting to see whether a second press makes it a double-tap.
+    pub fn awaits_tap(&self) -> bool {
+        matches!(self.state, State::TapWait { .. })
     }
 
     pub fn is_busy(&self) -> bool {
@@ -140,11 +142,20 @@ impl Session {
                 self.paste_pending = !self.is_recording();
                 vec![]
             }
-            (_, Released) if self.paste_pending => {
+            (_, Abort(PasteLast | CopyLast)) => {
                 self.paste_pending = false;
-                vec![Effect::PasteLast]
+                self.copy_pending = false;
+                vec![]
             }
-            (State::Idle | State::Busy, Down(CopyLast)) => vec![Effect::CopyLast],
+            (State::Idle | State::Busy, Down(CopyLast)) => {
+                self.copy_pending = true;
+                vec![]
+            }
+            (_, Released) if self.paste_pending || self.copy_pending => {
+                let copy = std::mem::take(&mut self.copy_pending).then_some(Effect::CopyLast);
+                let paste = std::mem::take(&mut self.paste_pending).then_some(Effect::PasteLast);
+                copy.into_iter().chain(paste).collect()
+            }
 
             (State::Idle, Down(by @ (PushToTalk | Command))) => {
                 let command = by == Command;
@@ -360,7 +371,7 @@ mod tests {
         assert_eq!(s.handle(Undo, 400), vec![]);
         // It does not count as the first half of a double-tap.
         assert_eq!(s.handle(Down(PushToTalk), 500), START);
-        assert!(s.is_held());
+        assert!(!s.awaits_tap());
     }
 
     #[test]
@@ -368,7 +379,7 @@ mod tests {
         let mut s = Session::new();
         s.handle(Down(PushToTalk), 0);
         s.handle(Up(PushToTalk), 100);
-        assert!(!s.is_held());
+        assert!(s.awaits_tap());
         s.handle(Down(PushToTalk), 300);
         assert_eq!(s.handle(Abort(PushToTalk), 400), vec![Effect::Discard { keep: false }]);
         // A modifier-only hands-free shortcut that was the start of Ctrl+C.
@@ -520,7 +531,13 @@ mod tests {
         assert_eq!(s.handle(Down(PasteLast), 10), vec![]);
         assert_eq!(s.handle(Released, 50), vec![Effect::PasteLast]);
         assert_eq!(s.handle(Released, 60), vec![]);
-        assert_eq!(s.handle(Down(CopyLast), 70), vec![Effect::CopyLast]);
+        assert_eq!(s.handle(Down(CopyLast), 70), vec![]);
+        assert_eq!(s.handle(Released, 80), vec![Effect::CopyLast]);
+        // The start of another shortcut does not paste or copy.
+        s.handle(Down(PasteLast), 90);
+        s.handle(Down(CopyLast), 91);
+        assert_eq!(s.handle(Abort(CopyLast), 92), vec![]);
+        assert_eq!(s.handle(Released, 93), vec![]);
         s.handle(Down(PushToTalk), 100);
         assert_eq!(s.handle(Down(PasteLast), 200), vec![]);
         assert_eq!(s.handle(Down(CopyLast), 210), vec![]);
