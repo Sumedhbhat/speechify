@@ -338,12 +338,12 @@ impl Tracker {
             // one that carries on dictating (Ctrl+Meta → Ctrl+Meta+Space).
             // Ctrl+Meta+Left is somebody else's shortcut, and Alt+Shift+Z
             // pastes: neither may start dictation.
-            let foreign = held
-                && !chords.iter().any(|(other_bind, other)| {
-                    (*other_bind == bind || matches!(other_bind, Bind::HandsFree | Bind::Command))
-                        && other.extends(chord)
-                        && other.covers(pressed)
-                });
+            let ours = chords.iter().any(|(other_bind, other)| {
+                (*other_bind == bind || matches!(other_bind, Bind::HandsFree | Bind::Command))
+                    && other.extends(chord)
+                    && other.covers(pressed)
+            });
+            let foreign = held && !ours;
             let extended = held && !foreign && !chord.covers(pressed);
             let quiet = chord.modifiers_only();
             *phase = match *phase {
@@ -378,8 +378,9 @@ impl Tracker {
                 settling @ Phase::Settling { .. } => settling,
                 Phase::Down { since } if !held => {
                     // Let go as a letter goes down, still in the abort window:
-                    // typing, as when the letter joins first.
-                    let typed = quiet && !chord.covers(pressed) && now.saturating_sub(since) < ABORT_MS;
+                    // typing, as when the letter joins first. Space left held
+                    // from Shift+Space hands-free is not a letter.
+                    let typed = quiet && !ours && now.saturating_sub(since) < ABORT_MS;
                     edges.push(if typed { Edge::Abort(bind) } else { Edge::Up(bind) });
                     Phase::Up
                 }
@@ -700,6 +701,11 @@ mod tests {
         assert_eq!(
             tracker.update(&keys(&[RightShift, Space]), 50),
             vec![Edge::Down(Bind::PushToTalk), Edge::Down(Bind::HandsFree)]
+        );
+        // Letting go of Shift first is the end of the press, not typing.
+        assert_eq!(
+            tracker.update(&keys(&[Space]), 150),
+            vec![Edge::Up(Bind::PushToTalk), Edge::Up(Bind::HandsFree)]
         );
     }
 
