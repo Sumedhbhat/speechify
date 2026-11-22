@@ -4,55 +4,82 @@ const LONGEST: usize = 6;
 const INSERTED: usize = 2;
 const EXACT: usize = 3;
 const JOINERS: &[&str] = &["and", "or", "but", "nor", "then", "than", "vs", "versus"];
+const OTHERS: &[&str] = &["other", "another", "second", "next", "different", "wrong", "same"];
+const VERBS: &[&str] = &[
+    "is", "are", "was", "were", "am", "be", "been", "can", "could", "will", "would", "should", "shall", "must", "may",
+    "might", "has", "have", "had", "do", "does", "did", "stays", "needs", "wants", "looks", "seems", "goes", "works",
+];
 
 fn core(word: &str) -> String {
     word.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()
-}
-
-fn ends_sentence(word: &str) -> bool {
-    word.ends_with(['.', '!', '?', ';', ':'])
 }
 
 fn pauses(word: &str) -> bool {
     word.ends_with([',', '.', '!', '?', ';', ':'])
 }
 
-fn restated(left: &[String], right: &[String]) -> bool {
+fn negates(word: &str) -> bool {
+    let word = core(word).replace('’', "'");
+    matches!(word.as_str(), "not" | "no" | "never" | "nor") || word.ends_with("n't")
+}
+
+fn restated(left: &[String], right: &[String]) -> Option<usize> {
     let (first, last) = (core(&left[0]), core(&left[left.len() - 1]));
     if right.is_empty() || core(&right[0]) != first || left[..left.len() - 1].iter().any(|w| pauses(w)) {
-        return false;
+        return None;
     }
     let exact = left.len() >= EXACT
-        && left[left.len() - 1].ends_with(',')
         && right.len() > left.len()
         && left.iter().zip(right).all(|(a, b)| core(a) == core(b))
         && !pauses(&right[left.len() - 1]);
     if exact {
-        return true;
+        return Some(left.len());
     }
     let mut at = 1;
     let mut inserted = 0;
     for wanted in &left[1..] {
         let wanted = core(wanted);
         loop {
-            let Some(word) = right.get(at) else { return false };
+            let word = right.get(at)?;
             if pauses(word) && core(word) != wanted {
-                return false;
+                return None;
             }
             at += 1;
             if core(word) == wanted {
                 break;
             }
-            if JOINERS.contains(&core(word).as_str()) || word.ends_with('\'') || word.contains("'s") {
-                return false;
+            let plain = core(word);
+            if JOINERS.contains(&plain.as_str())
+                || OTHERS.contains(&plain.as_str())
+                || negates(word)
+                || word.ends_with('\'')
+                || word.contains("'s")
+            {
+                return None;
             }
             inserted += 1;
             if inserted > INSERTED {
-                return false;
+                return None;
             }
         }
     }
-    inserted > 0 && core(&right[at - 1]) == last && first != last
+    (inserted > 0 && core(&right[at - 1]) == last && first != last).then_some(at)
+}
+
+fn restarts(words: &[String], at: usize) -> Option<usize> {
+    if !words[at - 1].ends_with(',') {
+        return None;
+    }
+    (2..=LONGEST.min(at)).find(|&len| {
+        let start = at - len;
+        let follows = |said: usize| {
+            words
+                .get(at + said)
+                .is_some_and(|next| negates(next) || VERBS.contains(&core(next).as_str()))
+        };
+        (start == 0 || !negates(&words[start - 1]))
+            && restated(&words[start..at], &words[at..]).is_some_and(|said| !follows(said))
+    })
 }
 
 pub fn apply(text: &str, edits: &mut Edits) -> String {
@@ -63,9 +90,7 @@ pub fn apply(text: &str, edits: &mut Edits) -> String {
             let mut words: Vec<String> = line.split(' ').filter(|w| !w.is_empty()).map(str::to_string).collect();
             let mut at = 1;
             while at < words.len() {
-                let found = (2..=LONGEST.min(at))
-                    .find(|&len| !ends_sentence(&words[at - 1]) && restated(&words[at - len..at], &words[at..]));
-                match found {
+                match restarts(&words, at) {
                     Some(len) => {
                         let start = at - len;
                         if words[start].starts_with(char::is_uppercase) {
@@ -103,10 +128,6 @@ mod tests {
             (
                 "Let's merge the latest branch, latest master branch into this branch, please.",
                 "Let's merge the latest master branch into this branch, please.",
-            ),
-            (
-                "Let's merge the latest branch latest master branch into this branch please",
-                "Let's merge the latest master branch into this branch please",
             ),
             (
                 "Send it to the team, the design team by Friday.",
@@ -154,6 +175,21 @@ mod tests {
             "go go go go go go go",
             "um uh um uh um uh um uh",
             "we need to we need to talk",
+            "Let's merge the latest branch latest master branch into this branch",
+            "Don't delete the branch, delete the remote branch.",
+            "Don't restart the server, restart the dev server.",
+            "Not the button, the blue button.",
+            "Not this file, this other file.",
+            "We know it works, we know it never works on Windows.",
+            "It is working, it is not working.",
+            "You know you don't know.",
+            "I fixed the bug, the other bug is still open.",
+            "Call the client, the new client wants a demo.",
+            "Book the room, the big room is taken.",
+            "Close the tab, the other tab stays open.",
+            "Merge the PR, the second PR can wait.",
+            "I said the date, the due date is Monday.",
+            "Ship the fix, the fix isn't ready.",
             "Run the tests. Run the integration tests.",
             "The plan, the outline of the plan.",
             "Read it, then read it again.",
