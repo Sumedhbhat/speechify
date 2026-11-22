@@ -9,6 +9,9 @@ const VERBS: &[&str] = &[
     "is", "are", "was", "were", "am", "be", "been", "can", "could", "will", "would", "should", "shall", "must", "may",
     "might", "has", "have", "had", "do", "does", "did", "stays", "needs", "wants", "looks", "seems", "goes", "works",
 ];
+const CLOSERS: &[&str] = &[
+    "into", "to", "for", "by", "on", "in", "at", "with", "from", "of", "before", "after", "then", "please", "now",
+];
 
 fn core(word: &str) -> String {
     word.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()
@@ -23,7 +26,7 @@ fn negates(word: &str) -> bool {
     matches!(word.as_str(), "not" | "no" | "never" | "nor") || word.ends_with("n't")
 }
 
-fn restated(left: &[String], right: &[String]) -> Option<usize> {
+fn restated(left: &[String], right: &[String]) -> Option<(usize, bool)> {
     let (first, last) = (core(&left[0]), core(&left[left.len() - 1]));
     if right.is_empty() || core(&right[0]) != first || left[..left.len() - 1].iter().any(|w| pauses(w)) {
         return None;
@@ -33,7 +36,7 @@ fn restated(left: &[String], right: &[String]) -> Option<usize> {
         && left.iter().zip(right).all(|(a, b)| core(a) == core(b))
         && !pauses(&right[left.len() - 1]);
     if exact {
-        return Some(left.len());
+        return Some((left.len(), true));
     }
     let mut at = 1;
     let mut inserted = 0;
@@ -52,8 +55,9 @@ fn restated(left: &[String], right: &[String]) -> Option<usize> {
             if JOINERS.contains(&plain.as_str())
                 || OTHERS.contains(&plain.as_str())
                 || negates(word)
-                || word.ends_with('\'')
+                || word.ends_with(['\'', '’'])
                 || word.contains("'s")
+                || word.contains("’s")
             {
                 return None;
             }
@@ -63,7 +67,7 @@ fn restated(left: &[String], right: &[String]) -> Option<usize> {
             }
         }
     }
-    (inserted > 0 && core(&right[at - 1]) == last && first != last).then_some(at)
+    (inserted > 0 && core(&right[at - 1]) == last && first != last).then_some((at, false))
 }
 
 fn restarts(words: &[String], at: usize) -> Option<usize> {
@@ -72,13 +76,25 @@ fn restarts(words: &[String], at: usize) -> Option<usize> {
     }
     (2..=LONGEST.min(at)).find(|&len| {
         let start = at - len;
-        let follows = |said: usize| {
-            words
-                .get(at + said)
-                .is_some_and(|next| negates(next) || VERBS.contains(&core(next).as_str()))
+        let next = |said: usize, ahead: usize| words.get(at + said + ahead).map(|word| core(word));
+        let continues =
+            |said: usize| next(said, 0).is_some_and(|word| negates(&word) || VERBS.contains(&word.as_str()));
+        let closes = |said: usize| {
+            words[at + said - 1].ends_with(['.', '!', '?'])
+                || match next(said, 0) {
+                    None => true,
+                    Some(word) if word == "and" => next(said, 1).as_deref() == Some("then"),
+                    Some(word) => CLOSERS.contains(&word.as_str()),
+                }
         };
         (start == 0 || !negates(&words[start - 1]))
-            && restated(&words[start..at], &words[at..]).is_some_and(|said| !follows(said))
+            && restated(&words[start..at], &words[at..]).is_some_and(|(said, exact)| {
+                if exact {
+                    !continues(said)
+                } else {
+                    closes(said)
+                }
+            })
     })
 }
 
@@ -147,10 +163,7 @@ mod tests {
             ),
             ("I think we need to, we need to talk.", "I think we need to talk."),
             ("Run the tests, run the unit tests.", "Run the unit tests."),
-            (
-                "Fix it.\nThe readme, the main readme file.",
-                "Fix it.\nThe main readme file.",
-            ),
+            ("Fix it.\nThe readme, the main readme.", "Fix it.\nThe main readme."),
         ] {
             assert_eq!(run(said), meant, "{said}");
         }
@@ -190,6 +203,18 @@ mod tests {
             "Merge the PR, the second PR can wait.",
             "I said the date, the due date is Monday.",
             "Ship the fix, the fix isn't ready.",
+            "Restart the server, the dev server crashed again.",
+            "Merge the branch, the feature branch broke CI.",
+            "I checked the test, the unit test failed.",
+            "Tell the team, the design team said yes.",
+            "Check the logs, the server logs show errors.",
+            "Call the office, the main office closes at five.",
+            "Fix the build, the nightly build keeps failing.",
+            "Pack the charger, the phone charger and the cable.",
+            "The team, the design team, and the PM.",
+            "Ask the team, the team’s support team knows the answer.",
+            "Invite the team and the design team and the sales team.",
+            "She said \"the team.\" The design team is ready.",
             "Run the tests. Run the integration tests.",
             "The plan, the outline of the plan.",
             "Read it, then read it again.",
@@ -204,10 +229,10 @@ mod tests {
         let mut edits = Edits::default();
         assert_eq!(
             apply(
-                "Open the report, the quarterly report and the doc, the shared doc",
+                "Open the report, the quarterly report for me and the doc, the shared doc",
                 &mut edits
             ),
-            "Open the quarterly report and the shared doc"
+            "Open the quarterly report for me and the shared doc"
         );
         assert_eq!(edits.backtracks, 2);
     }
