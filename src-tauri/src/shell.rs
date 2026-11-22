@@ -89,8 +89,6 @@ pub fn place_bar(app: &AppHandle, bar: &Bar) {
     bar_visible(&window, true);
 }
 
-/// Where the bar page draws something clickable; the page reports it
-/// whenever its layout changes.
 #[derive(Default)]
 pub struct BarHit(Mutex<Vec<pointer::Area>>);
 
@@ -99,26 +97,47 @@ impl BarHit {
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = areas;
     }
 
-    fn over(&self, pointer: (f64, f64), origin: (f64, f64), scale: f64) -> bool {
-        pointer::over(
-            &self.0.lock().unwrap_or_else(|e| e.into_inner()),
-            pointer,
-            origin,
-            scale,
-        )
+    fn seen(&self, pointer: (f64, f64), origin: (f64, f64), scale: f64) -> Seen {
+        let areas = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        Seen::Pointer {
+            clickable: pointer::over(&areas, pointer, origin, scale),
+            on_pill: pointer::over(&areas[..areas.len().min(1)], pointer, origin, scale),
+        }
     }
 }
 
-/// How often the bar checks where the pointer is.
 const TRACK_EVERY: Duration = Duration::from_millis(40);
+const TRACK_HIDDEN: Duration = Duration::from_millis(250);
 
-/// Lets clicks reach the apps under the bar except over what it shows (see
-/// `speechify_core::pointer`), and tells the page when the pointer is on it.
-/// The page shows its hover state from this instead of CSS `:hover`: a
-/// window that never takes focus does not reliably hear the pointer leave.
-///
-/// Wayland does not tell apps where the pointer is, so there the window
-/// keeps taking clicks and the page falls back to CSS `:hover`.
+#[cfg(windows)]
+fn bar_pass_through(window: &tauri::WebviewWindow, pass: bool) {
+    let window = window.clone();
+    let app = window.app_handle().clone();
+    let _ = app.run_on_main_thread(move || {
+        #[link(name = "user32")]
+        extern "system" {
+            fn GetWindowLongPtrW(window: *mut std::ffi::c_void, index: i32) -> isize;
+            fn SetWindowLongPtrW(window: *mut std::ffi::c_void, index: i32, value: isize) -> isize;
+        }
+        const GWL_EXSTYLE: i32 = -20;
+        const WS_EX_TRANSPARENT: isize = 0x20;
+        const WS_EX_LAYERED: isize = 0x80000;
+        const BITS: isize = WS_EX_TRANSPARENT | WS_EX_LAYERED;
+        if let Ok(handle) = window.hwnd() {
+            unsafe {
+                let style = GetWindowLongPtrW(handle.0, GWL_EXSTYLE);
+                let style = if pass { style | BITS } else { style & !BITS };
+                SetWindowLongPtrW(handle.0, GWL_EXSTYLE, style);
+            }
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn bar_pass_through(window: &tauri::WebviewWindow, pass: bool) {
+    let _ = window.set_ignore_cursor_events(pass);
+}
+
 pub fn track_bar(app: &AppHandle) {
     if speechify_os::is_wayland() {
         return;
@@ -127,8 +146,9 @@ pub fn track_bar(app: &AppHandle) {
     let app = app.clone();
     let _ = std::thread::Builder::new().name("bar-pointer".into()).spawn(move || {
         let mut tracker = pointer::Tracker::default();
+        let mut wait = TRACK_EVERY;
         loop {
-            std::thread::sleep(TRACK_EVERY);
+            std::thread::sleep(wait);
             let Some(window) = app.get_webview_window("bar") else {
                 continue;
             };
@@ -138,12 +158,13 @@ pub fn track_bar(app: &AppHandle) {
                 (app.cursor_position(), window.outer_position(), window.scale_factor())
             {
                 let origin = (origin.x as f64, origin.y as f64);
-                Seen::Pointer(app.state::<BarHit>().over((cursor.x, cursor.y), origin, scale))
+                app.state::<BarHit>().seen((cursor.x, cursor.y), origin, scale)
             } else {
                 Seen::Unknown
             };
+            wait = if seen == Seen::Hidden { TRACK_HIDDEN } else { TRACK_EVERY };
             if let Some(change) = tracker.update(seen) {
-                let _ = window.set_ignore_cursor_events(change.pass_through);
+                bar_pass_through(&window, change.pass_through);
                 if let Some(hover) = change.hover {
                     let _ = app.emit_to("bar", "bar-hover", hover);
                 }
@@ -152,9 +173,6 @@ pub fn track_bar(app: &AppHandle) {
     });
 }
 
-/// Keeps a click on the bar from bringing Speechify to the front on a Mac,
-/// which would raise the main window over the app being dictated into.
-/// AppKit's non-activating panels use this; it is skipped if AppKit lacks it.
 #[cfg(target_os = "macos")]
 pub fn bar_never_activates(app: &AppHandle) {
     use std::ffi::{c_char, c_void};
@@ -170,8 +188,6 @@ pub fn bar_never_activates(app: &AppHandle) {
     let _ = window.run_on_main_thread(move || {
         let Ok(ns_window) = target.ns_window() else { return };
         unsafe {
-            // objc_msgSend is called through a pointer cast to each method's
-            // exact signature; BOOL is one byte on both Mac architectures.
             type Responds = unsafe extern "C" fn(*mut c_void, *const c_void, *const c_void) -> i8;
             type SetBool = unsafe extern "C" fn(*mut c_void, *const c_void, i8);
             let send = objc_msgSend as unsafe extern "C" fn();

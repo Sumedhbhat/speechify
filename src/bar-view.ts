@@ -32,22 +32,17 @@ export function createBar(root: HTMLElement, deps: BarDeps): { show(bar: Bar): v
   let level = 0;
   let smooth = 0;
   let generation = 0;
-  // Set once the shell tracks the pointer; until then CSS :hover is used.
   let hovered = false;
   let reported = "";
 
-  // Tells the shell what can be clicked, so clicks anywhere else in the
-  // transparent window reach the app underneath.
   const reportHit = () => {
-    const rects = [pill, above.firstElementChild]
-      .filter((el): el is Element => el instanceof Element)
-      .map((el) => el.getBoundingClientRect())
-      .filter((rect) => rect.width > 0 && rect.height > 0)
-      .map((rect) => [rect.left, rect.top, rect.width, rect.height].map(Math.round));
+    const box = (rect: DOMRect) => [rect.left, rect.top, rect.width, rect.height].map(Math.round);
+    const extra = above.firstElementChild?.getBoundingClientRect();
+    const rects = [box(pill.getBoundingClientRect())];
+    if (extra && extra.width > 0 && extra.height > 0) rects.push(box(extra));
     const key = JSON.stringify(rects);
     if (key === reported) return;
     reported = key;
-    // On failure, let the next layout change send the same areas again.
     void deps.api.barHit(rects).catch(() => {
       if (reported === key) reported = "";
     });
@@ -57,11 +52,8 @@ export function createBar(root: HTMLElement, deps: BarDeps): { show(bar: Bar): v
     observer.observe(pill);
     observer.observe(above);
   }
-  // Card and notice slide in, and the pill pops; report where they settle.
   root.addEventListener("animationend", reportHit);
   root.addEventListener("transitionend", reportHit);
-  // The shell can resize the window without a new state (saving Settings
-  // re-places it), which moves the centred pill without resizing it.
   root.ownerDocument.defaultView?.addEventListener("resize", reportHit);
 
   const act = (action: BarAction) => void deps.api.barAction(action).catch(() => undefined);

@@ -229,7 +229,6 @@ describe("bar", () => {
     emit("barHover", true);
     expect(root.classList.contains("tracked")).toBe(true);
     expect(pill().className).toBe("pill idle hover");
-    // A new state keeps the pointer's hover.
     emit("bar", { state: "card", text: "Hi", message: "" });
     expect(pill().className).toBe("pill idle hover");
     emit("bar", { state: "notice", message: "x", error: false, undo: false });
@@ -274,12 +273,10 @@ describe("bar", () => {
       [12, 8, 416, 80],
     ]);
 
-    // The failed report goes out again on the next layout change.
     resized();
     expect(api.barHit).toHaveBeenCalledTimes(3);
     await settle();
 
-    // A failure after a newer report does not undo that report.
     let fail = (_: unknown) => undefined as unknown;
     api.barHit.mockImplementationOnce(() => new Promise((_, reject) => (fail = reject)));
     rect.mockImplementation(function (this: Element) {
@@ -295,23 +292,29 @@ describe("bar", () => {
     fail("gone");
     await settle();
 
-    // Unchanged areas are not sent again, whatever asks.
     const calls = api.barHit.mock.calls.length;
     resized();
     root.firstElementChild!.dispatchEvent(new Event("animationend", { bubbles: true }));
     root.firstElementChild!.dispatchEvent(new Event("transitionend", { bubbles: true }));
     expect(api.barHit.mock.calls.length).toBe(calls);
 
-    // A smaller window moves the centred pill without resizing it.
     rect.mockImplementation(function (this: Element) {
       return this.classList.contains("pill") ? box(62, 24, 56, 10) : box(0, 0, 0, 0);
     });
     window.dispatchEvent(new Event("resize"));
     expect(api.barHit).toHaveBeenLastCalledWith([[62, 24, 56, 10]]);
 
-    // A hidden card takes no clicks.
     emit("bar", { state: "notice", message: "x", error: false, undo: false });
     expect(api.barHit).toHaveBeenLastCalledWith([[62, 24, 56, 10]]);
+
+    rect.mockImplementation(function (this: Element) {
+      return this.classList.contains("notice") ? box(12, 8, 200, 30) : box(0, 0, 0, 0);
+    });
+    window.dispatchEvent(new Event("resize"));
+    expect(api.barHit).toHaveBeenLastCalledWith([
+      [0, 0, 0, 0],
+      [12, 8, 200, 30],
+    ]);
     vi.unstubAllGlobals();
   });
 });

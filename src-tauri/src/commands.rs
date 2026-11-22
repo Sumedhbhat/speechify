@@ -508,7 +508,6 @@ pub fn bar_action(app: AppHandle, shared: App, action: String) {
     }
 }
 
-/// Where the bar page shows something clickable; see `shell::track_bar`.
 #[tauri::command]
 pub fn bar_hit(app: AppHandle, rects: Vec<speechify_core::pointer::Area>) {
     if let Some(hit) = app.try_state::<shell::BarHit>() {
