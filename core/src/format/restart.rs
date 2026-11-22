@@ -9,8 +9,9 @@ const VERBS: &[&str] = &[
     "is", "are", "was", "were", "am", "be", "been", "can", "could", "will", "would", "should", "shall", "must", "may",
     "might", "has", "have", "had", "do", "does", "did", "stays", "needs", "wants", "looks", "seems", "goes", "works",
 ];
-const CLOSERS: &[&str] = &[
-    "into", "to", "for", "by", "on", "in", "at", "with", "from", "of", "before", "after", "then", "please", "now",
+const CLOSERS: &[&str] = &["into", "to", "by", "before", "after", "then", "please", "now"];
+const UNFINISHED: &[&str] = &[
+    "to", "the", "a", "an", "of", "for", "with", "and", "is", "are", "in", "on", "at", "my", "our", "your", "this",
 ];
 
 fn core(word: &str) -> String {
@@ -79,18 +80,30 @@ fn restarts(words: &[String], at: usize) -> Option<usize> {
         let next = |said: usize, ahead: usize| words.get(at + said + ahead).map(|word| core(word));
         let continues =
             |said: usize| next(said, 0).is_some_and(|word| negates(&word) || VERBS.contains(&word.as_str()));
+        let verbless = |from: usize| {
+            for word in &words[from..] {
+                let plain = core(word);
+                if negates(word) || VERBS.contains(&plain.as_str()) || (plain.len() > 4 && plain.ends_with("ed")) {
+                    return false;
+                }
+                if pauses(word) {
+                    break;
+                }
+            }
+            true
+        };
         let closes = |said: usize| {
             words[at + said - 1].ends_with(['.', '!', '?'])
                 || match next(said, 0) {
                     None => true,
-                    Some(word) if word == "and" => next(said, 1).as_deref() == Some("then"),
-                    Some(word) => CLOSERS.contains(&word.as_str()),
+                    Some(word) if word == "and" => next(said, 1).as_deref() == Some("then") && verbless(at + said),
+                    Some(word) => CLOSERS.contains(&word.as_str()) && verbless(at + said),
                 }
         };
         (start == 0 || !negates(&words[start - 1]))
             && restated(&words[start..at], &words[at..]).is_some_and(|(said, exact)| {
                 if exact {
-                    !continues(said)
+                    !continues(said) && (UNFINISHED.contains(&core(&words[at + said - 1]).as_str()) || closes(said))
                 } else {
                     closes(said)
                 }
@@ -158,7 +171,7 @@ mod tests {
                 "Let's rebase on the latest main and then push.",
             ),
             (
-                "Can you open the settings page, the settings page for the models?",
+                "Can you open the, can you open the settings page for the models?",
                 "Can you open the settings page for the models?",
             ),
             ("I think we need to, we need to talk.", "I think we need to talk."),
@@ -215,6 +228,21 @@ mod tests {
             "Ask the team, the team’s support team knows the answer.",
             "Invite the team and the design team and the sales team.",
             "She said \"the team.\" The design team is ready.",
+            "Restart the dev server, the dev server crashed again.",
+            "Tell the design team, the design team said yes.",
+            "Check the server logs, the server logs show errors.",
+            "Merge the feature branch, the feature branch broke CI.",
+            "Call the main office, the main office closes at five.",
+            "I fixed the login page, the login page crashed on Safari.",
+            "We found the bug in the parser, the bug in the parser broke the build.",
+            "Check the logs, the server logs from yesterday show errors.",
+            "Book the room, the big room on the third floor is taken.",
+            "Restart the server, the dev server in the cluster crashed.",
+            "Fix the build, the nightly build on Linux keeps failing.",
+            "I checked the test, the unit test for parsing failed.",
+            "Ask the team, the design team at work knows.",
+            "Send the file, the final file to Ravi was wrong.",
+            "Pick the date, the due date and then we talked.",
             "Run the tests. Run the integration tests.",
             "The plan, the outline of the plan.",
             "Read it, then read it again.",
@@ -229,10 +257,10 @@ mod tests {
         let mut edits = Edits::default();
         assert_eq!(
             apply(
-                "Open the report, the quarterly report for me and the doc, the shared doc",
+                "Open the report, the quarterly report before lunch and the doc, the shared doc",
                 &mut edits
             ),
-            "Open the quarterly report for me and the shared doc"
+            "Open the quarterly report before lunch and the shared doc"
         );
         assert_eq!(edits.backtracks, 2);
     }
