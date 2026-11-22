@@ -20,6 +20,37 @@ function shown(item: Dictation): string {
   return item.edited ?? item.text;
 }
 
+type Cleanup = { chip: string; className: string; detail: string };
+
+/**
+ * Whether the language model's answer was used. A clean-up time with no
+ * rewrite means the model was asked and its answer was not used. No time
+ * does not prove the model was never asked: a failure in under a
+ * millisecond, or a live dictation whose blocks were all cleaned up while it
+ * was spoken, stores none. So the last case claims only the outcome.
+ */
+function cleanup(item: Dictation): Cleanup {
+  if (item.rewritten) {
+    return {
+      chip: "Language model",
+      className: "chip accent",
+      detail: `${item.command ? "Written" : "Tidied"} by the language model (${item.rewrite_model})`,
+    };
+  }
+  if (item.rewrite_ms > 0) {
+    return {
+      chip: "Language model answer not used",
+      className: "chip warn",
+      detail: "The language model was asked, but its answer was not used",
+    };
+  }
+  return {
+    chip: "Not tidied by language model",
+    className: "chip",
+    detail: "Not tidied by the language model",
+  };
+}
+
 export function createHistory({ api, events }: Deps) {
   let items: Dictation[] = [];
   let query = "";
@@ -137,6 +168,7 @@ export function createHistory({ api, events }: Deps) {
 
   function row(item: Dictation): HTMLElement {
     const open = expanded.has(item.id);
+    const tidied = cleanup(item);
     const actions = h("div", { className: "entry-actions" }, [
       iconButton("copy", "Copy", () => void copy(item), { "data-action": "copy" }),
       item.audio &&
@@ -158,6 +190,7 @@ export function createHistory({ api, events }: Deps) {
         h("time", { textContent: timeOfDay(item.created_at, item.offset_min) }),
         h("span", { className: "entry-app", textContent: item.app || "Unknown app" }),
         h("span", { className: "chip", textContent: categoryLabel(item.category) }),
+        h("span", { className: tidied.className, textContent: tidied.chip, title: tidied.detail }),
         item.command && h("span", { className: "chip accent", textContent: "Command" }),
         item.flagged && h("span", { className: "chip warn", textContent: "Flagged" }),
       ]),
@@ -165,11 +198,11 @@ export function createHistory({ api, events }: Deps) {
         ? editor(item)
         : h("p", { className: "entry-text", textContent: shown(item) }),
       actions,
-      open && detail(item),
+      open && detail(item, tidied),
     ]);
   }
 
-  function detail(item: Dictation): HTMLElement {
+  function detail(item: Dictation, tidied: Cleanup): HTMLElement {
     const pair = (label: string, value: string) => [
       h("dt", { textContent: label }),
       h("dd", { textContent: value }),
@@ -180,16 +213,12 @@ export function createHistory({ api, events }: Deps) {
       ...pair("Typed", item.text),
       ...(item.edited === null ? [] : pair("Corrected", item.edited)),
       ...(item.teacher_text === null ? [] : pair("Teacher's version", item.teacher_text)),
+      ...pair("Clean-up", tidied.detail),
       ...pair(
         "Timing",
         `Recognition ${ms(item.asr_ms)} · Clean-up ${ms(item.rewrite_ms)} · Total ${ms(item.total_ms)}`,
       ),
-      ...pair(
-        "Models",
-        item.rewritten
-          ? `${item.speech_model} + ${item.rewrite_model}`
-          : `${item.speech_model} (not rewritten)`,
-      ),
+      ...pair("Speech model", item.speech_model),
       ...pair("Result", OUTCOME_LABELS[item.outcome]),
     ]);
   }
