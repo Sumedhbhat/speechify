@@ -29,7 +29,13 @@ function items(): Dictation[] {
       text: "Second.",
     }),
     dictation({ id: 3, created_at: now - DAY, text: "Third.", flagged: true }),
-    dictation({ id: 4, created_at: now - 10 * DAY, text: "Fourth." }),
+    dictation({
+      id: 4,
+      created_at: now - 10 * DAY,
+      text: "Fourth.",
+      rewritten: false,
+      rewrite_ms: 0,
+    }),
   ];
 }
 
@@ -149,7 +155,12 @@ describe("history", () => {
     expect(days).toHaveLength(3);
     const [first, second, third] = entries();
     expect(first!.querySelector(".entry-app")!.textContent).toBe("Slack");
-    expect(first!.querySelector(".chip.accent")!.textContent).toBe("Command");
+    const chips = (entry: Element) =>
+      [...entry.querySelectorAll(".chip")].map((el) => el.textContent);
+    expect(chips(first!)).toEqual(["Work", "Language model", "Command"]);
+    expect(chips(second!)).toContain("Language model answer not used");
+    expect(chips(third!)).toContain("Language model");
+    expect(chips(entries()[3]!)).toContain("Not tidied by language model");
     expect(second!.querySelector(".entry-app")!.textContent).toBe("Unknown app");
     expect(third!.classList.contains("flagged")).toBe(true);
     expect(action(first!, "play")).not.toBeNull();
@@ -168,14 +179,19 @@ describe("history", () => {
     const detail = open.querySelector(".detail")!.textContent;
     expect(detail).toContain("um hello there");
     expect(detail).toContain("Recognition 320 ms");
-    expect(detail).toContain("Whisper turbo + qwen2.5:1.5b");
+    expect(detail).toContain("Clean-upWritten by the language model (qwen2.5:1.5b)");
+    expect(detail).toContain("Speech modelWhisper turbo");
     expect(detail).toContain("Typed into the app");
     expect(detail).not.toContain("Teacher");
 
     action(entries()[1]!, "details").click();
     const second = entries()[1]!.querySelector(".detail")!.textContent;
     expect(second).toContain("Second, by the teacher.");
-    expect(second).toContain("(not rewritten)");
+    expect(second).toContain("The language model was asked, but its answer was not used");
+
+    action(entries()[2]!, "details").click();
+    const third = entries()[2]!.querySelector(".detail")!.textContent;
+    expect(third).toContain("Clean-upTidied by the language model (qwen2.5:1.5b)");
 
     action(entries()[0]!, "details").click();
     expect(entries()[0]!.querySelector(".detail")).toBeNull();
@@ -224,7 +240,7 @@ describe("history", () => {
     await settle();
     expect(ctx.api.flagDictation).toHaveBeenCalledWith(1, true);
     expect(action(entries()[0]!, "flag").getAttribute("aria-pressed")).toBe("true");
-    expect(entries()[0]!.querySelector(".chip.warn")).not.toBeNull();
+    expect(entries()[0]!.querySelector(".chip.warn")!.textContent).toBe("Flagged");
     ctx.api.flagDictation.mockRejectedValueOnce("Could not flag.");
     action(entries()[0]!, "flag").click();
     await settle();
