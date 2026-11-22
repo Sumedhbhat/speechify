@@ -47,7 +47,10 @@ export function createBar(root: HTMLElement, deps: BarDeps): { show(bar: Bar): v
     const key = JSON.stringify(rects);
     if (key === reported) return;
     reported = key;
-    void deps.api.barHit(rects).catch(() => undefined);
+    // On failure, let the next layout change send the same areas again.
+    void deps.api.barHit(rects).catch(() => {
+      if (reported === key) reported = "";
+    });
   };
   if (typeof ResizeObserver !== "undefined") {
     const observer = new ResizeObserver(reportHit);

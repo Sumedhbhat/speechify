@@ -274,6 +274,27 @@ describe("bar", () => {
       [12, 8, 416, 80],
     ]);
 
+    // The failed report goes out again on the next layout change.
+    resized();
+    expect(api.barHit).toHaveBeenCalledTimes(3);
+    await settle();
+
+    // A failure after a newer report does not undo that report.
+    let fail = (_: unknown) => undefined as unknown;
+    api.barHit.mockImplementationOnce(() => new Promise((_, reject) => (fail = reject)));
+    rect.mockImplementation(function (this: Element) {
+      return this.classList.contains("pill") ? box(82, 30, 56, 12) : box(0, 0, 0, 0);
+    });
+    resized();
+    rect.mockImplementation(function (this: Element) {
+      if (this.classList.contains("pill")) return box(82.4, 30, 56, 10);
+      if (this.classList.contains("card")) return box(12, 8, 416, 80);
+      return box(0, 0, 0, 0);
+    });
+    resized();
+    fail("gone");
+    await settle();
+
     // Unchanged areas are not sent again, whatever asks.
     const calls = api.barHit.mock.calls.length;
     resized();

@@ -51,23 +51,30 @@ pub struct Tracker {
     /// `None` until the window's state is known, and again once it hides,
     /// so a bar that reappears is set up afresh.
     taking_clicks: Option<bool>,
+    /// The hover last told to the page, kept apart from `taking_clicks`
+    /// because an unknown pointer changes one but not the other.
+    hover: Option<bool>,
 }
 
 impl Tracker {
     pub fn update(&mut self, seen: Seen) -> Option<Change> {
         let (take, hover) = match seen {
             Seen::Hidden => {
-                self.taking_clicks = None;
+                *self = Self::default();
                 return None;
             }
             // Without the pointer, keep the bar clickable rather than dead.
             Seen::Unknown => (true, None),
             Seen::Pointer(inside) => (inside, Some(inside)),
         };
-        if self.taking_clicks == Some(take) {
+        let hover = hover.filter(|&hover| self.hover != Some(hover));
+        if self.taking_clicks == Some(take) && hover.is_none() {
             return None;
         }
         self.taking_clicks = Some(take);
+        if hover.is_some() {
+            self.hover = hover;
+        }
         Some(Change {
             pass_through: !take,
             hover,
@@ -153,5 +160,24 @@ mod tests {
         assert_eq!(tracker.update(Seen::Unknown), None);
         tracker.update(Seen::Pointer(false));
         assert_eq!(tracker.update(Seen::Unknown), open);
+    }
+
+    #[test]
+    fn tells_the_page_about_hover_after_an_unknown_pointer() {
+        let on = Some(Change {
+            pass_through: false,
+            hover: Some(true),
+        });
+        let mut tracker = Tracker::default();
+        tracker.update(Seen::Pointer(false));
+        tracker.update(Seen::Unknown);
+        // Already taking clicks, but the page has not heard of the hover.
+        assert_eq!(tracker.update(Seen::Pointer(true)), on);
+        assert_eq!(tracker.update(Seen::Pointer(true)), None);
+
+        let mut tracker = Tracker::default();
+        tracker.update(Seen::Hidden);
+        tracker.update(Seen::Unknown);
+        assert_eq!(tracker.update(Seen::Pointer(true)), on);
     }
 }
