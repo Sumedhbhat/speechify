@@ -215,6 +215,7 @@ export function fakeApi(): FakeApi {
     exportTraining: vi.fn(async () => "/home/me/speechify-training.jsonl"),
     tryFormat: vi.fn(async (input: string) => `formatted: ${input}`),
     barAction: vi.fn(async () => undefined),
+    barHit: vi.fn(async () => undefined),
     openMain: vi.fn(async () => undefined),
   };
 }
@@ -231,6 +232,7 @@ export function fakeEvents() {
   const events = {
     bar: on("bar"),
     level: on("level"),
+    barHover: on("barHover"),
     historyChanged: on("historyChanged"),
     modelProgress: on("modelProgress"),
     rewriteProgress: on("rewriteProgress"),

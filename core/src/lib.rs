@@ -19,6 +19,7 @@ pub mod live;
 pub mod llm;
 pub mod native;
 pub mod pipeline;
+pub mod pointer;
 pub mod session;
 pub mod settings;
 pub mod store;

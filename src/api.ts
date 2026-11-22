@@ -297,6 +297,7 @@ export const api = {
   tryFormat: (text: string, app: string) => invoke<string>("try_format", { text, app }),
 
   barAction: (action: BarAction) => invoke<void>("bar_action", { action }),
+  barHit: (rects: number[][]) => invoke<void>("bar_hit", { rects }),
   openMain: (page: string) => invoke<void>("open_main", { page }),
 };
 
@@ -304,6 +305,7 @@ export const events = {
   bar: (handler: (bar: Bar) => void) => on<Bar>("bar", handler),
   /** Microphone loudness 0..1, about 20 times a second while listening. */
   level: (handler: (level: number) => void) => on<number>("level", handler),
+  barHover: (handler: (over: boolean) => void) => on<boolean>("bar-hover", handler),
   historyChanged: (handler: () => void) => on<null>("history-changed", () => handler()),
   modelProgress: (handler: (progress: Progress) => void) => on<Progress>("model-progress", handler),
   rewriteProgress: (handler: (progress: Progress) => void) =>
