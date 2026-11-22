@@ -1333,10 +1333,10 @@ mod tests {
             &request(&audio, "Windows Terminal"),
             &settings,
             &store,
-            &mut Fixed::new(&["git add, git add dash a"]),
+            &mut Fixed::new(&["run the tests, run the integration tests"]),
             None,
         ));
-        assert_eq!(paste, "git add, git add dash a");
+        assert_eq!(paste, "run the tests, run the integration tests");
     }
 
     #[test]

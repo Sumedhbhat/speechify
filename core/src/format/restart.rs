@@ -134,10 +134,12 @@ fn restarts(words: &[String], at: usize) -> Option<usize> {
         let verbless = |from: usize| {
             for word in &words[from..] {
                 let plain = core(word);
-                if negates(word) || VERBS.contains(&plain.as_str()) || (plain.len() > 4 && plain.ends_with("ed")) {
+                let acts =
+                    plain.len() > 4 && (plain.ends_with("ed") || (plain.ends_with('s') && !plain.ends_with("ss")));
+                if negates(word) || VERBS.contains(&plain.as_str()) || acts {
                     return false;
                 }
-                if pauses(word) {
+                if word.ends_with(['.', '!', '?', ';', ':']) {
                     break;
                 }
             }
@@ -349,6 +351,9 @@ mod tests {
             "I'm the one, the only one.",
             "I'm the king, the real king.",
             "Check the logs, the server has logs.",
+            "Book the room, the big room by the entrance costs extra.",
+            "Send the file, the final file to Ravi contains errors.",
+            "Book the room, the big room by the lobby, unfortunately, is occupied.",
             "Run the tests. Run the integration tests.",
             "The plan, the outline of the plan.",
             "Read it, then read it again.",
@@ -363,10 +368,10 @@ mod tests {
         let mut edits = Edits::default();
         assert_eq!(
             apply(
-                "Open the report, the quarterly report before lunch and the doc, the shared doc",
+                "Open the report, the quarterly report before lunch and the doc, the team doc",
                 &mut edits
             ),
-            "Open the quarterly report before lunch and the shared doc"
+            "Open the quarterly report before lunch and the team doc"
         );
         assert_eq!(edits.backtracks, 2);
     }
