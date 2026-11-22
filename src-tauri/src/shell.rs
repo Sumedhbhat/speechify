@@ -256,7 +256,10 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 shared.send(Msg::Input(Event::Down(Bind::PasteLast)));
                 shared.send(Msg::Input(Event::Released));
             }
-            "copy" => shared.send(Msg::Input(Event::Down(Bind::CopyLast))),
+            "copy" => {
+                shared.send(Msg::Input(Event::Down(Bind::CopyLast)));
+                shared.send(Msg::Input(Event::Released));
+            }
             "quit" => shared.quit(app),
             _ => {}
         }
