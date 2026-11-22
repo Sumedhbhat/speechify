@@ -281,9 +281,16 @@ describe("bar", () => {
     root.firstElementChild!.dispatchEvent(new Event("transitionend", { bubbles: true }));
     expect(api.barHit.mock.calls.length).toBe(calls);
 
+    // A smaller window moves the centred pill without resizing it.
+    rect.mockImplementation(function (this: Element) {
+      return this.classList.contains("pill") ? box(62, 24, 56, 10) : box(0, 0, 0, 0);
+    });
+    window.dispatchEvent(new Event("resize"));
+    expect(api.barHit).toHaveBeenLastCalledWith([[62, 24, 56, 10]]);
+
     // A hidden card takes no clicks.
     emit("bar", { state: "notice", message: "x", error: false, undo: false });
-    expect(api.barHit).toHaveBeenLastCalledWith([[82, 30, 56, 10]]);
+    expect(api.barHit).toHaveBeenLastCalledWith([[62, 24, 56, 10]]);
     vi.unstubAllGlobals();
   });
 });

@@ -57,6 +57,9 @@ export function createBar(root: HTMLElement, deps: BarDeps): { show(bar: Bar): v
   // Card and notice slide in, and the pill pops; report where they settle.
   root.addEventListener("animationend", reportHit);
   root.addEventListener("transitionend", reportHit);
+  // The shell can resize the window without a new state (saving Settings
+  // re-places it), which moves the centred pill without resizing it.
+  root.ownerDocument.defaultView?.addEventListener("resize", reportHit);
 
   const act = (action: BarAction) => void deps.api.barAction(action).catch(() => undefined);
   // One pending timer at a time: a second Copy must not leave an older

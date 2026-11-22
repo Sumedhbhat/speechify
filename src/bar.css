@@ -110,7 +110,14 @@ button:focus-visible {
    window that never takes focus can miss the pointer leaving, which would
    leave CSS :hover stuck on. Wayland has no tracking, so it keeps :hover. */
 :not(.tracked) > .bar-stack > .pill.idle:hover,
-.pill.idle.hover,
+.pill.idle.hover {
+  min-width: 150px;
+  height: 30px;
+  opacity: 1;
+}
+
+/* Kept apart: WebKit before Safari 15.4 (early macOS 12) lacks :has() and
+   would drop every selector listed with it. */
 .pill.idle:has(:focus-visible) {
   min-width: 150px;
   height: 30px;
@@ -139,7 +146,11 @@ button:focus-visible {
 :not(.tracked) > .bar-stack > .pill.idle:hover .pill-idle .icon,
 :not(.tracked) > .bar-stack > .pill.idle:hover .pill-hint,
 .pill.idle.hover .pill-idle .icon,
-.pill.idle.hover .pill-hint,
+.pill.idle.hover .pill-hint {
+  display: inline-flex;
+  opacity: 1;
+}
+
 .pill.idle:has(:focus-visible) .pill-idle .icon,
 .pill.idle:has(:focus-visible) .pill-hint {
   display: inline-flex;
