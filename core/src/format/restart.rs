@@ -33,6 +33,7 @@ const STRONGER: &[&str] = &[
     "extremely",
     "incredibly",
     "seriously",
+    "ever",
 ];
 const CLOSERS: &[&str] = &["into", "to", "by", "before", "after", "then", "please", "now"];
 const UNFINISHED: &[&str] = &["the", "a", "an", "my", "our", "your", "to", "of", "with", "and"];
@@ -131,12 +132,21 @@ fn restarts(words: &[String], at: usize) -> Option<usize> {
                     Some(word) => CLOSERS.contains(&word.as_str()) && verbless(at + said),
                 }
         };
+        let describes = matches!(core(&words[start]).as_str(), "a" | "an" | "what")
+            || start > 0 && {
+                let before = core(&words[start - 1]).replace('’', "'");
+                matches!(
+                    before.as_str(),
+                    "is" | "are" | "was" | "were" | "be" | "been" | "am" | "got"
+                ) || before.ends_with("'s")
+                    || before.ends_with("'re")
+            };
         (start == 0 || !negates(&words[start - 1]))
             && restated(&words[start..at], &words[at..]).is_some_and(|(said, exact)| {
                 if exact {
-                    !continues(said) && (UNFINISHED.contains(&core(&words[at + said - 1]).as_str()) || closes(said))
+                    !continues(said) && UNFINISHED.contains(&core(&words[at + said - 1]).as_str())
                 } else {
-                    closes(said)
+                    !describes && closes(said)
                 }
             })
     })
@@ -289,6 +299,21 @@ mod tests {
             "Look at this, look at this one.",
             "I sent the file, the final file to Ravi got lost.",
             "Pick the date, the due date and then we left.",
+            "It was a disaster, a complete disaster.",
+            "It was a mistake, a big mistake.",
+            "This is a problem, a real problem.",
+            "That's a lie, a total lie.",
+            "The launch was a success, a huge success.",
+            "It's the truth, the honest truth.",
+            "That's the point, the whole point.",
+            "I got the job, the dream job.",
+            "We need a break, a long break.",
+            "What a day, what a beautiful day.",
+            "I can't wait, I can't wait to see you.",
+            "Can you help me, can you help me please?",
+            "Let's go home, let's go home now.",
+            "One more time, one more time please.",
+            "Never again, never ever again.",
             "Run the tests. Run the integration tests.",
             "The plan, the outline of the plan.",
             "Read it, then read it again.",
