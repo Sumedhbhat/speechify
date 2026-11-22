@@ -8,11 +8,34 @@ const OTHERS: &[&str] = &["other", "another", "second", "next", "different", "wr
 const VERBS: &[&str] = &[
     "is", "are", "was", "were", "am", "be", "been", "can", "could", "will", "would", "should", "shall", "must", "may",
     "might", "has", "have", "had", "do", "does", "did", "stays", "needs", "wants", "looks", "seems", "goes", "works",
+    "got", "went", "came", "broke", "took", "left", "made", "said", "sent", "kept", "ran", "fell", "gave", "told",
+    "found", "thought", "brought", "began", "won", "lost", "felt", "knew", "saw",
+];
+const SUBJECTS: &[&str] = &["i", "we", "you", "he", "she", "they", "it"];
+const STRONGER: &[&str] = &[
+    "very",
+    "so",
+    "too",
+    "much",
+    "way",
+    "super",
+    "really",
+    "just",
+    "even",
+    "still",
+    "all",
+    "actually",
+    "quite",
+    "pretty",
+    "truly",
+    "totally",
+    "absolutely",
+    "extremely",
+    "incredibly",
+    "seriously",
 ];
 const CLOSERS: &[&str] = &["into", "to", "by", "before", "after", "then", "please", "now"];
-const UNFINISHED: &[&str] = &[
-    "to", "the", "a", "an", "of", "for", "with", "and", "is", "are", "in", "on", "at", "my", "our", "your", "this",
-];
+const UNFINISHED: &[&str] = &["the", "a", "an", "my", "our", "your", "to", "of", "with", "and"];
 
 fn core(word: &str) -> String {
     word.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()
@@ -39,6 +62,13 @@ fn restated(left: &[String], right: &[String]) -> Option<(usize, bool)> {
     if exact {
         return Some((left.len(), true));
     }
+    let clause = left.iter().any(|word| {
+        let plain = core(word).replace('’', "'");
+        SUBJECTS.contains(&plain.as_str()) || VERBS.contains(&plain.as_str()) || plain.contains('\'')
+    });
+    if clause {
+        return None;
+    }
     let mut at = 1;
     let mut inserted = 0;
     for wanted in &left[1..] {
@@ -55,6 +85,7 @@ fn restated(left: &[String], right: &[String]) -> Option<(usize, bool)> {
             let plain = core(word);
             if JOINERS.contains(&plain.as_str())
                 || OTHERS.contains(&plain.as_str())
+                || STRONGER.contains(&plain.as_str())
                 || negates(word)
                 || word.ends_with(['\'', '’'])
                 || word.contains("'s")
@@ -243,6 +274,21 @@ mod tests {
             "Ask the team, the design team at work knows.",
             "Send the file, the final file to Ravi was wrong.",
             "Pick the date, the due date and then we talked.",
+            "I'm sorry, I'm so sorry.",
+            "It's good, it's really good.",
+            "I love you, I really love you.",
+            "We won, we actually won.",
+            "She was tired, she was very tired.",
+            "It hurts, it really hurts.",
+            "I'm proud of you, I'm so proud of you.",
+            "That was close, that was way too close.",
+            "The view, the truly great view.",
+            "Come on in, come on in and sit down.",
+            "That's what it is, that's what it is today.",
+            "Here it is, here it is everyone.",
+            "Look at this, look at this one.",
+            "I sent the file, the final file to Ravi got lost.",
+            "Pick the date, the due date and then we left.",
             "Run the tests. Run the integration tests.",
             "The plan, the outline of the plan.",
             "Read it, then read it again.",
