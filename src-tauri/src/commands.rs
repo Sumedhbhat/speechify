@@ -47,6 +47,12 @@ pub fn save_settings(app: AppHandle, shared: App, settings: Settings) -> Result<
     Ok(())
 }
 
+/// Settings is recording a shortcut: the keys pressed are for it.
+#[tauri::command]
+pub fn pause_shortcuts(shared: App, paused: bool) {
+    shared.pause_shortcuts(paused);
+}
+
 #[derive(Serialize)]
 pub struct Status {
     version: String,

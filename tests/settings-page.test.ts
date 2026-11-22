@@ -17,6 +17,10 @@ function updates() {
 
 let ctx: ReturnType<typeof makeDeps>;
 
+function press(type: "keydown" | "keyup", code: string) {
+  window.dispatchEvent(new KeyboardEvent(type, { code, cancelable: true }));
+}
+
 async function setup() {
   const page = createSettingsPage(ctx.deps);
   document.body.append(page.el);
@@ -28,30 +32,37 @@ beforeEach(() => {
 });
 
 describe("settings page", () => {
-  it("shows shortcuts with a format hint and saves them", async () => {
+  it("records shortcuts by pressing them, pausing global shortcuts meanwhile", async () => {
     await setup();
-    expect(document.body.textContent).toContain("Ctrl+Meta+Space or Alt+Shift+D");
-    const push = byLabel<HTMLInputElement>(document, "Push to talk");
-    expect(push.value).toBe("Ctrl+Meta+Space");
-    change(push, "Ctrl+Alt+Space");
+    expect(document.body.textContent).toContain("Click Record and press the keys");
+    const push = byLabel<HTMLButtonElement>(document, "Push to talk");
+    const field = push.closest(".field")!;
+    expect(field.querySelector(".shortcut-keys")!.textContent).toBe("CtrlMetaSpace");
+    push.click();
+    expect(ctx.api.pauseShortcuts).toHaveBeenLastCalledWith(true);
+    press("keydown", "ShiftRight");
+    press("keyup", "ShiftRight");
     await settle();
+    expect(ctx.api.pauseShortcuts).toHaveBeenLastCalledWith(false);
     expect(ctx.api.saveSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        hotkeys: expect.objectContaining({ push_to_talk: "Ctrl+Alt+Space" }),
+        hotkeys: expect.objectContaining({ push_to_talk: "Right Shift" }),
       }),
     );
+    expect(field.querySelector(".shortcut-keys")!.textContent).toBe("Right Shift");
   });
 
   it("shows the shell's reason when a shortcut is rejected and reverts it", async () => {
     await setup();
-    ctx.api.saveSettings.mockRejectedValueOnce("“Ctrl+Nope” is not a key.");
-    const cancel = byLabel<HTMLInputElement>(document, "Cancel");
-    change(cancel, "Ctrl+Nope");
+    ctx.api.saveSettings.mockRejectedValueOnce("Unknown key “ArrowLeft”");
+    const cancel = byLabel<HTMLButtonElement>(document, "Cancel");
+    cancel.click();
+    press("keydown", "ArrowLeft");
+    press("keyup", "ArrowLeft");
     await settle();
-    expect(cancel.value).toBe("Escape");
-    expect(cancel.closest(".field")!.querySelector(".field-error")!.textContent).toBe(
-      "“Ctrl+Nope” is not a key.",
-    );
+    const field = cancel.closest(".field")!;
+    expect(field.querySelector(".shortcut-keys")!.textContent).toBe("Escape");
+    expect(field.querySelector(".field-error")!.textContent).toBe("Unknown key “ArrowLeft”");
   });
 
   it("explains shortcuts on Wayland", async () => {

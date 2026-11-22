@@ -1,15 +1,23 @@
 // Settings: shortcuts, microphone, behaviour, privacy, appearance.
 
 import type { Settings } from "../api";
-import { select, text, toggle, type Binding } from "../controls";
+import { select, shortcut, toggle, type Binding } from "../controls";
 import type { Api, Deps, Page } from "../deps";
 import { errorText, h, pageHeader, section } from "../ui";
 
 type Hotkey = keyof Settings["hotkeys"];
 
 const HOTKEYS: [Hotkey, string, string][] = [
-  ["push_to_talk", "Push to talk", "Hold to dictate, let go to type."],
-  ["hands_free", "Hands-free", "Press once to start, again to stop."],
+  [
+    "push_to_talk",
+    "Push to talk",
+    "Hold to dictate, let go to type. Double-tap to keep dictating hands-free.",
+  ],
+  [
+    "hands_free",
+    "Hands-free",
+    "Press once to start, again to stop. Clear it to use only double-tap.",
+  ],
   ["command", "Command", "Speak an instruction for the selected text."],
   ["paste_last", "Paste last", "Type the last dictation again."],
   ["copy_last", "Copy last", "Copy the last dictation."],
@@ -69,17 +77,17 @@ export function createSettingsPage({ api, settings: store }: Deps): Page {
         section(
           "Shortcuts",
           status.shortcuts
-            ? "Write keys joined by +, like Ctrl+Meta+Space or Alt+Shift+D."
+            ? "Click Record and press the keys. A modifier pressed alone keeps its side, so Right Shift leaves the left one for typing; in a combination either side works."
             : status.wayland
               ? "Global shortcuts are not available on Wayland. Bind “speechify --toggle” to a system shortcut instead."
               : status.platform === "macos"
                 ? "Speechify cannot see your keyboard yet. Enable the current app under System Settings › Privacy & Security › Accessibility. Access is checked every second. If the switch is already on after an update, remove Speechify and add it again, then reopen this page."
                 : "Speechify cannot read the keyboard on this system. Bind “speechify --toggle” to a system shortcut instead.",
           HOTKEYS.map(([key, label, hint]) =>
-            text(store, settings, {
+            shortcut(store, settings, {
               label,
               hint,
-              placeholder: "Ctrl+Meta+Space",
+              pause: api.pauseShortcuts,
               get: (s) => s.hotkeys[key],
               set: (s, v) => (s.hotkeys[key] = v),
             }),

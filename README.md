@@ -13,14 +13,14 @@ Known gaps:
 - **Language model is separate.** The optional cleanup model needs Ollama (or another server) installed on its own. The app can ask Ollama to download a model, but it cannot install Ollama.
 - **Command Mode needs the language model.** Without it, a command shows an error.
 - **Clipboard restore covers text only.** If you had an image or files on the clipboard, they are not put back after a paste.
-- **Mac Fn key.** It cannot be used as a shortcut. The Mac default is Ctrl+Alt.
+- **Mac Fn key.** It cannot be used as a shortcut. The default on every system is Right Shift.
 - **Unsigned installers.** Windows will warn about an unknown publisher. The macOS app is signed with Speechify's own certificate, not an Apple Developer ID, so the first time you open it macOS asks you to allow it under System Settings › Privacy & Security › Open Anyway. Updates after that keep the Accessibility permission.
 - **Not built yet:** retrying a dictation from History, dragging or docking the bar, a scratchpad shortcut, mouse-button shortcuts, IDE file tagging, and detecting playing media before muting. The mute option mutes all system output while you dictate.
 
 ## What it does
 
 **Dictation**
-- Push-to-talk, hands-free (double-tap or shortcut plus Space), and a click on the bar.
+- Push-to-talk on Right Shift, hands-free by double-tapping it (or with a shortcut), and a click on the bar.
 - Dictations up to 20 minutes, with a warning at 19.
 - Paste last, copy last, and cancel with Undo.
 - Optional sounds, optional muting of system audio, pick your microphone.
@@ -47,22 +47,23 @@ Details and examples are in [docs/features.md](docs/features.md).
 
 ## Using it
 
-Default shortcuts (change them in Settings):
+Default shortcuts. To change one, click Record next to it in Settings and press the new keys.
 
 | Action | Windows and Linux | macOS |
 | --- | --- | --- |
-| Push to talk (hold) | Ctrl+Meta | Ctrl+Alt |
-| Hands-free | Ctrl+Meta+Space | Ctrl+Alt+Space |
+| Push to talk (hold) | Right Shift | Right Shift |
+| Hands-free | Double-tap Right Shift | Double-tap Right Shift |
 | Command Mode | Ctrl+Meta+Alt | Ctrl+Alt+Meta |
 | Paste last dictation | Alt+Shift+Z | Ctrl+Meta+V |
 | Copy last dictation | Alt+Shift+X | Ctrl+Meta+C |
 | Cancel | Esc | Esc |
 
-Meta is the Windows key on Windows, Super on Linux and Command on a Mac.
+Meta is the Windows key on Windows, Super on Linux and Command on a Mac. A shortcut can name one side of a modifier (Right Shift, Left Ctrl, Right Alt, Left Meta); plain Shift, Ctrl, Alt or Meta means either side. Upgrading keeps the shortcuts you already have.
 
 - **Hold** the push-to-talk shortcut, speak, let go. A press shorter than half a second is a tap and records nothing.
 - **Double-tap** push-to-talk, or press the hands-free shortcut, to keep recording without holding. Press any dictation shortcut again (or the stop button on the bar) to finish.
-- **Hold push-to-talk, then add Space** to switch to hands-free without letting go.
+- **Hold push-to-talk, then add the hands-free shortcut's extra key** (for example Ctrl+Meta, then Space, with Ctrl+Meta+Space as hands-free) to switch without letting go.
+- **Shortcuts made only of modifiers** (Right Shift, Ctrl+Meta) open the microphone once held alone for 150 ms, or on a clean tap. The chime and the bar wait until half a second after the press. If another key joins before then, as in Shift+A or Ctrl+Meta+D, it was typing or another app's shortcut: the recording is dropped without a sound.
 - **Esc** throws the recording away. The bar offers Undo, which transcribes it after all.
 - **Command Mode:** select text, hold the command shortcut, say what to do ("make this shorter"), let go.
 - `speechify --toggle` starts or stops dictation in the running app. `speechify --cancel` cancels.

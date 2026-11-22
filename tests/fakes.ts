@@ -177,6 +177,7 @@ export function fakeApi(): FakeApi {
   return {
     getSettings: vi.fn(async () => settings()),
     saveSettings: vi.fn(async () => undefined),
+    pauseShortcuts: vi.fn(async () => undefined),
     getStatus: vi.fn(async () => status()),
     checkUpdate: vi.fn(async (): Promise<Update | null> => null),
     installUpdate: vi.fn(async () => undefined),

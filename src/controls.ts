@@ -154,3 +154,130 @@ export function number(
     : input;
   return field(id, binding, control, error);
 }
+
+// Keyboard codes for modifiers: the plain name, then the name with its side.
+const MODIFIERS: Record<string, [string, string]> = {
+  ControlLeft: ["Ctrl", "Left Ctrl"],
+  ControlRight: ["Ctrl", "Right Ctrl"],
+  AltLeft: ["Alt", "Left Alt"],
+  AltRight: ["Alt", "Right Alt"],
+  ShiftLeft: ["Shift", "Left Shift"],
+  ShiftRight: ["Shift", "Right Shift"],
+  MetaLeft: ["Meta", "Left Meta"],
+  MetaRight: ["Meta", "Right Meta"],
+};
+const ORDER = ["Ctrl", "Alt", "Shift", "Meta"];
+
+/**
+ * Names the keys held together, by `KeyboardEvent.code`, the way shortcut
+ * settings write them. A modifier pressed alone keeps its side, so Right
+ * Shift stays free of the left one; in a combination either side works
+ * (Alt+Shift+Z). Keys a shortcut cannot use keep their code, and the shell
+ * rejects them with its own reason.
+ */
+export function chordName(codes: string[]): string {
+  const sides = codes.map((code) => MODIFIERS[code]);
+  if (codes.length === 1 && sides[0]) return sides[0][1];
+  const modifiers = new Set(sides.map((side) => side?.[0]));
+  const others = codes
+    .filter((code) => !MODIFIERS[code])
+    .map((code) => code.replace(/^Key(?=[A-Z]$)|^Digit(?=\d$)/, ""));
+  return [...ORDER.filter((name) => modifiers.has(name)), ...others].join("+");
+}
+
+/**
+ * A shortcut setting, entered by pressing it: Record, then the keys. It is
+ * taken when the first key is let go. Global shortcuts are paused meanwhile,
+ * so pressing the current one does not start dictation.
+ */
+export function shortcut(
+  store: SettingsStore,
+  settings: Settings,
+  binding: Binding<string> & { pause: (paused: boolean) => Promise<void> },
+): HTMLElement {
+  const id = nextId("shortcut");
+  const error = errorSlot();
+  const keys = h("span", { className: "shortcut-keys", "aria-live": "polite" });
+  const record = h("button", {
+    type: "button",
+    id,
+    className: "btn",
+    "aria-describedby": describedBy(id, binding),
+  });
+  const clear = h("button", {
+    type: "button",
+    className: "btn danger-quiet",
+    textContent: "Clear",
+    "aria-label": `Clear ${binding.label}`,
+  });
+  const show = (value: string) => {
+    keys.replaceChildren(
+      ...(value ? value.split("+").map((key) => h("kbd", { textContent: key })) : ["Off"]),
+    );
+  };
+  let saved = "";
+  const commit = bind(
+    store,
+    settings,
+    binding,
+    (value) => {
+      saved = value;
+      show(value);
+    },
+    error,
+  );
+
+  let held: string[] | null = null;
+  const pause = (paused: boolean) => void binding.pause(paused).catch(() => undefined);
+  const stop = () => {
+    const recording = held !== null;
+    held = null;
+    window.removeEventListener("keydown", down, true);
+    window.removeEventListener("keyup", up, true);
+    record.textContent = "Record";
+    record.setAttribute("aria-pressed", "false");
+    if (recording) pause(false);
+  };
+  const down = (event: KeyboardEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!held || !event.code || held.includes(event.code)) return;
+    held.push(event.code);
+    show(chordName(held));
+  };
+  const up = (event: KeyboardEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    // Only a key that is part of the shortcut ends it: Enter can start
+    // recording and be let go a moment later.
+    if (!held?.includes(event.code)) return;
+    const value = chordName(held);
+    stop();
+    void commit(value);
+  };
+  record.addEventListener("click", () => {
+    if (held) {
+      stop();
+      show(saved);
+      return;
+    }
+    held = [];
+    error.hidden = true;
+    record.textContent = "Press keys…";
+    record.setAttribute("aria-pressed", "true");
+    keys.replaceChildren("Listening…");
+    window.addEventListener("keydown", down, true);
+    window.addEventListener("keyup", up, true);
+    pause(true);
+  });
+  // Clicking elsewhere or leaving the window gives up.
+  record.addEventListener("blur", () => {
+    if (!held) return;
+    stop();
+    show(saved);
+  });
+  clear.addEventListener("click", () => void commit(""));
+  stop();
+  const control = h("span", { className: "shortcut" }, [keys, record, clear]);
+  return field(id, binding, control, error);
+}

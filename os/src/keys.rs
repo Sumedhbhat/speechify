@@ -66,8 +66,8 @@ impl Keyboard {
     }
 
     /// The keys currently held, by the names the shortcut settings use
-    /// ("Ctrl", "Meta", "Space", "A", "F5"). Left and right modifiers are
-    /// one key. Keys with no name here are reported as "Other".
+    /// ("Left Ctrl", "Right Shift", "Space", "A", "F5"). Modifiers carry
+    /// their side. Keys with no name here are reported as "Other".
     pub fn pressed(&self) -> Vec<String> {
         let Some(state) = &self.state else {
             return vec![];
@@ -89,10 +89,14 @@ impl Keyboard {
 
 fn key_name(code: &str) -> String {
     match code {
-        "LControl" | "RControl" | "Control_L" | "Control_R" => "Ctrl".into(),
-        "LShift" | "RShift" | "Shift_L" | "Shift_R" => "Shift".into(),
-        "LAlt" | "RAlt" | "LOption" | "ROption" | "Alt_L" | "Alt_R" | "ISO_Level3_Shift" => "Alt".into(),
-        "LMeta" | "RMeta" | "Command" | "RCommand" | "Super_L" | "Super_R" | "Meta_L" | "Meta_R" => "Meta".into(),
+        "LControl" | "Control_L" => "Left Ctrl".into(),
+        "RControl" | "Control_R" => "Right Ctrl".into(),
+        "LShift" | "Shift_L" => "Left Shift".into(),
+        "RShift" | "Shift_R" => "Right Shift".into(),
+        "LAlt" | "LOption" | "Alt_L" => "Left Alt".into(),
+        "RAlt" | "ROption" | "Alt_R" | "ISO_Level3_Shift" => "Right Alt".into(),
+        "LMeta" | "Command" | "Super_L" | "Meta_L" => "Left Meta".into(),
+        "RMeta" | "RCommand" | "Super_R" | "Meta_R" => "Right Meta".into(),
         "space" => "Space".into(),
         "Return" => "Enter".into(),
         "Caps_Lock" => "CapsLock".into(),
@@ -172,13 +176,16 @@ mod tests {
     #[test]
     fn key_codes_map_to_shortcut_names() {
         for (code, name) in [
-            ("LControl", "Ctrl"),
-            ("RControl", "Ctrl"),
-            ("RShift", "Shift"),
-            ("LAlt", "Alt"),
-            ("ROption", "Alt"),
-            ("LMeta", "Meta"),
-            ("Command", "Meta"),
+            ("LControl", "Left Ctrl"),
+            ("RControl", "Right Ctrl"),
+            ("LShift", "Left Shift"),
+            ("RShift", "Right Shift"),
+            ("LAlt", "Left Alt"),
+            ("ROption", "Right Alt"),
+            ("LMeta", "Left Meta"),
+            ("RMeta", "Right Meta"),
+            ("Command", "Left Meta"),
+            ("RCommand", "Right Meta"),
             ("Space", "Space"),
             ("Escape", "Escape"),
             ("CapsLock", "CapsLock"),
@@ -195,12 +202,13 @@ mod tests {
             ("Keypad", "Other"),
             ("F", "F"),
             ("Fx", "Other"),
-            ("Control_L", "Ctrl"),
-            ("Shift_R", "Shift"),
-            ("Super_L", "Meta"),
-            ("Meta_R", "Meta"),
-            ("Alt_R", "Alt"),
-            ("ISO_Level3_Shift", "Alt"),
+            ("Control_L", "Left Ctrl"),
+            ("Shift_L", "Left Shift"),
+            ("Shift_R", "Right Shift"),
+            ("Super_L", "Left Meta"),
+            ("Meta_R", "Right Meta"),
+            ("Alt_R", "Right Alt"),
+            ("ISO_Level3_Shift", "Right Alt"),
             ("Return", "Enter"),
             ("Caps_Lock", "CapsLock"),
             ("space", "Space"),

@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { number, select, text, toggle } from "../src/controls";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { chordName, number, select, shortcut, text, toggle } from "../src/controls";
 import type { Settings } from "../src/api";
 import { change, makeDeps, settle } from "./fakes";
 
@@ -167,5 +167,139 @@ describe("number", () => {
     });
     expect(el.querySelector(".with-unit")).toBeNull();
     expect(el.querySelector("input")!.step).toBe("1");
+  });
+});
+
+describe("chordName", () => {
+  it("keeps the side of a modifier pressed alone", () => {
+    expect(chordName(["ShiftRight"])).toBe("Right Shift");
+    expect(chordName(["ControlLeft"])).toBe("Left Ctrl");
+    expect(chordName(["AltRight"])).toBe("Right Alt");
+    expect(chordName(["MetaLeft"])).toBe("Left Meta");
+  });
+
+  it("names combinations with either side, modifiers first", () => {
+    expect(chordName(["KeyZ", "ShiftRight", "AltLeft"])).toBe("Alt+Shift+Z");
+    expect(chordName(["MetaLeft", "ControlRight", "Space"])).toBe("Ctrl+Meta+Space");
+    expect(chordName(["ShiftLeft", "ShiftRight"])).toBe("Shift");
+    expect(chordName(["ControlLeft", "Digit5"])).toBe("Ctrl+5");
+    expect(chordName(["F13"])).toBe("F13");
+    expect(chordName(["Escape"])).toBe("Escape");
+  });
+
+  it("leaves keys a shortcut cannot use for the shell to reject", () => {
+    expect(chordName(["ControlLeft", "ArrowLeft"])).toBe("Ctrl+ArrowLeft");
+    expect(chordName(["KeyAB"])).toBe("KeyAB");
+  });
+});
+
+describe("shortcut", () => {
+  const pause = vi.fn(async (_paused: boolean) => undefined);
+
+  function press(type: "keydown" | "keyup", code: string, repeat = false) {
+    const event = new KeyboardEvent(type, { code, repeat, cancelable: true });
+    window.dispatchEvent(event);
+    return event;
+  }
+
+  function recorder(get: (s: Settings) => string = (s) => s.hotkeys.push_to_talk) {
+    const el = mount(
+      shortcut(ctx.deps.settings, current, {
+        label: "Push to talk",
+        hint: "Hold to dictate.",
+        pause,
+        get,
+        set: (s, v) => (s.hotkeys.push_to_talk = v),
+      }),
+    );
+    const [record, clear] = [...el.querySelectorAll("button")];
+    return { el, record: record!, clear: clear!, keys: () => el.querySelector(".shortcut-keys")! };
+  }
+
+  const saved = () => (ctx.api.saveSettings.mock.lastCall![0] as Settings).hotkeys.push_to_talk;
+
+  beforeEach(() => pause.mockClear());
+
+  it("shows the keys, labelled, and does not pause until recording", () => {
+    const { el, record, clear, keys } = recorder();
+    expect([...keys().querySelectorAll("kbd")].map((k) => k.textContent)).toEqual([
+      "Ctrl",
+      "Meta",
+      "Space",
+    ]);
+    expect(el.querySelector("label")!.htmlFor).toBe(record.id);
+    expect(record.getAttribute("aria-describedby")).toBe(el.querySelector(".hint")!.id);
+    expect(record.textContent).toBe("Record");
+    expect(record.getAttribute("aria-pressed")).toBe("false");
+    expect(clear.getAttribute("aria-label")).toBe("Clear Push to talk");
+    expect(pause).not.toHaveBeenCalled();
+  });
+
+  it("records the keys held when the first one is let go", async () => {
+    const { record, keys } = recorder();
+    record.click();
+    expect(pause).toHaveBeenLastCalledWith(true);
+    expect(record.textContent).toBe("Press keys…");
+    expect(record.getAttribute("aria-pressed")).toBe("true");
+    expect(keys().textContent).toBe("Listening…");
+    // Enter can start recording and be let go just after: it is not part of it.
+    expect(press("keyup", "Enter").defaultPrevented).toBe(true);
+    expect(press("keydown", "AltLeft").defaultPrevented).toBe(true);
+    press("keydown", "AltLeft", true);
+    press("keydown", "");
+    press("keydown", "ShiftRight");
+    press("keydown", "KeyZ");
+    expect(keys().textContent).toBe("AltShiftZ");
+    press("keyup", "KeyZ");
+    await settle();
+    expect(saved()).toBe("Alt+Shift+Z");
+    expect(pause).toHaveBeenLastCalledWith(false);
+    expect(record.textContent).toBe("Record");
+    // Keys after recording are left alone.
+    expect(press("keydown", "KeyA").defaultPrevented).toBe(false);
+  });
+
+  it("gives up when clicked again or left, keeping the saved shortcut", async () => {
+    const { record, keys } = recorder();
+    record.click();
+    press("keydown", "ShiftLeft");
+    record.click();
+    expect(pause).toHaveBeenLastCalledWith(false);
+    expect(keys().textContent).toBe("CtrlMetaSpace");
+    record.click();
+    record.dispatchEvent(new FocusEvent("blur"));
+    expect(pause).toHaveBeenCalledTimes(4);
+    expect(keys().textContent).toBe("CtrlMetaSpace");
+    record.dispatchEvent(new FocusEvent("blur"));
+    expect(pause).toHaveBeenCalledTimes(4);
+    await settle();
+    expect(ctx.api.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("clears to off, and survives the shell refusing to pause", async () => {
+    const { record, clear, keys } = recorder();
+    clear.click();
+    await settle();
+    expect(saved()).toBe("");
+    expect(keys().textContent).toBe("Off");
+    pause.mockRejectedValueOnce("gone");
+    record.click();
+    press("keydown", "ShiftRight");
+    press("keyup", "ShiftRight");
+    await settle();
+    expect(saved()).toBe("Right Shift");
+  });
+
+  it("hides an old error when recording again", async () => {
+    ctx.api.saveSettings.mockRejectedValueOnce("Unknown key “ArrowUp”");
+    const { el, record } = recorder();
+    record.click();
+    press("keydown", "ArrowUp");
+    press("keyup", "ArrowUp");
+    await settle();
+    const error = el.querySelector<HTMLElement>(".field-error")!;
+    expect(error.hidden).toBe(false);
+    record.click();
+    expect(error.hidden).toBe(true);
   });
 });
