@@ -6,8 +6,8 @@ import type { Api, Events } from "./deps";
 import { errorText, h, icon } from "./ui";
 
 export interface BarDeps {
-  api: Pick<Api, "barAction" | "copyText">;
-  events: Pick<Events, "bar" | "level">;
+  api: Pick<Api, "barAction" | "barHit" | "copyText">;
+  events: Pick<Events, "bar" | "level" | "barHover">;
   frame: (callback: (time: number) => void) => number;
   cancelFrame: (id: number) => void;
   reducedMotion: () => boolean;
@@ -32,6 +32,31 @@ export function createBar(root: HTMLElement, deps: BarDeps): { show(bar: Bar): v
   let level = 0;
   let smooth = 0;
   let generation = 0;
+  // Set once the shell tracks the pointer; until then CSS :hover is used.
+  let hovered = false;
+  let reported = "";
+
+  // Tells the shell what can be clicked, so clicks anywhere else in the
+  // transparent window reach the app underneath.
+  const reportHit = () => {
+    const rects = [pill, above.firstElementChild]
+      .filter((el): el is Element => el instanceof Element)
+      .map((el) => el.getBoundingClientRect())
+      .filter((rect) => rect.width > 0 && rect.height > 0)
+      .map((rect) => [rect.left, rect.top, rect.width, rect.height].map(Math.round));
+    const key = JSON.stringify(rects);
+    if (key === reported) return;
+    reported = key;
+    void deps.api.barHit(rects).catch(() => undefined);
+  };
+  if (typeof ResizeObserver !== "undefined") {
+    const observer = new ResizeObserver(reportHit);
+    observer.observe(pill);
+    observer.observe(above);
+  }
+  // Card and notice slide in, and the pill pops; report where they settle.
+  root.addEventListener("animationend", reportHit);
+  root.addEventListener("transitionend", reportHit);
 
   const act = (action: BarAction) => void deps.api.barAction(action).catch(() => undefined);
   // One pending timer at a time: a second Copy must not leave an older
@@ -143,6 +168,7 @@ export function createBar(root: HTMLElement, deps: BarDeps): { show(bar: Bar): v
     deps.cancelFrame(frameId);
     above.replaceChildren();
     pill.className = `pill ${bar.state}`;
+    pill.classList.toggle("hover", hovered);
     live.textContent = "";
 
     switch (bar.state) {
@@ -175,19 +201,27 @@ export function createBar(root: HTMLElement, deps: BarDeps): { show(bar: Bar): v
       }
       case "card":
         pill.className = "pill idle";
+        pill.classList.toggle("hover", hovered);
         pill.replaceChildren(idlePill());
         above.replaceChildren(card(bar.text, bar.message));
         break;
       case "notice":
         pill.className = "pill idle";
+        pill.classList.toggle("hover", hovered);
         pill.replaceChildren(idlePill());
         above.replaceChildren(notice(bar.message, bar.error, bar.undo));
         later(bar.error ? ERROR_MS : NOTICE_MS, idle);
         break;
     }
+    reportHit();
   }
 
   void deps.events.bar(show);
+  void deps.events.barHover((over) => {
+    root.classList.add("tracked");
+    hovered = over;
+    pill.classList.toggle("hover", over);
+  });
   void deps.events.level((value) => (level = Math.max(0, Math.min(1, value))));
   idle();
   return { show };

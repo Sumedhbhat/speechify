@@ -222,4 +222,68 @@ describe("bar", () => {
     vi.advanceTimersByTime(10_000);
     expect(pill().className).toBe("pill listening");
   });
+
+  it("takes hover from the shell once it tracks the pointer", () => {
+    setup();
+    expect(root.classList.contains("tracked")).toBe(false);
+    emit("barHover", true);
+    expect(root.classList.contains("tracked")).toBe(true);
+    expect(pill().className).toBe("pill idle hover");
+    // A new state keeps the pointer's hover.
+    emit("bar", { state: "card", text: "Hi", message: "" });
+    expect(pill().className).toBe("pill idle hover");
+    emit("bar", { state: "notice", message: "x", error: false, undo: false });
+    expect(pill().className).toBe("pill idle hover");
+    emit("barHover", false);
+    expect(pill().className).toBe("pill idle");
+    emit("bar", { state: "processing" });
+    expect(pill().className).toBe("pill processing");
+  });
+
+  it("tells the shell only where the pill and card are", async () => {
+    const observed: Element[] = [];
+    let resized = () => undefined as unknown;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          resized = callback;
+        }
+        observe(el: Element) {
+          observed.push(el);
+        }
+      },
+    );
+    const box = (left: number, top: number, width: number, height: number) =>
+      ({ left, top, width, height }) as DOMRect;
+    const rect = vi.spyOn(Element.prototype, "getBoundingClientRect");
+    rect.mockImplementation(function (this: Element) {
+      if (this.classList.contains("pill")) return box(82.4, 30, 56, 10);
+      if (this.classList.contains("card")) return box(12, 8, 416, 80);
+      return box(0, 0, 0, 0);
+    });
+    setup();
+    expect(observed.length).toBe(2);
+    expect(api.barHit).toHaveBeenLastCalledWith([[82, 30, 56, 10]]);
+
+    api.barHit.mockRejectedValueOnce("gone");
+    emit("bar", { state: "card", text: "Hi", message: "" });
+    await settle();
+    expect(api.barHit).toHaveBeenLastCalledWith([
+      [82, 30, 56, 10],
+      [12, 8, 416, 80],
+    ]);
+
+    // Unchanged areas are not sent again, whatever asks.
+    const calls = api.barHit.mock.calls.length;
+    resized();
+    root.firstElementChild!.dispatchEvent(new Event("animationend", { bubbles: true }));
+    root.firstElementChild!.dispatchEvent(new Event("transitionend", { bubbles: true }));
+    expect(api.barHit.mock.calls.length).toBe(calls);
+
+    // A hidden card takes no clicks.
+    emit("bar", { state: "notice", message: "x", error: false, undo: false });
+    expect(api.barHit).toHaveBeenLastCalledWith([[82, 30, 56, 10]]);
+    vi.unstubAllGlobals();
+  });
 });

@@ -3,8 +3,10 @@
 use crate::worker::{Msg, Shared};
 use speechify_core::app::Bar;
 use speechify_core::hotkey::Bind;
+use speechify_core::pointer::{self, Seen};
 use speechify_core::session::Event;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager};
@@ -85,6 +87,103 @@ pub fn place_bar(app: &AppHandle, bar: &Bar) {
         ));
     }
     bar_visible(&window, true);
+}
+
+/// Where the bar page draws something clickable; the page reports it
+/// whenever its layout changes.
+#[derive(Default)]
+pub struct BarHit(Mutex<Vec<pointer::Area>>);
+
+impl BarHit {
+    pub fn set(&self, areas: Vec<pointer::Area>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = areas;
+    }
+
+    fn over(&self, pointer: (f64, f64), origin: (f64, f64), scale: f64) -> bool {
+        pointer::over(
+            &self.0.lock().unwrap_or_else(|e| e.into_inner()),
+            pointer,
+            origin,
+            scale,
+        )
+    }
+}
+
+/// How often the bar checks where the pointer is.
+const TRACK_EVERY: Duration = Duration::from_millis(40);
+
+/// Lets clicks reach the apps under the bar except over what it shows (see
+/// `speechify_core::pointer`), and tells the page when the pointer is on it.
+/// The page shows its hover state from this instead of CSS `:hover`: a
+/// window that never takes focus does not reliably hear the pointer leave.
+///
+/// Wayland does not tell apps where the pointer is, so there the window
+/// keeps taking clicks and the page falls back to CSS `:hover`.
+pub fn track_bar(app: &AppHandle) {
+    if speechify_os::is_wayland() {
+        return;
+    }
+    app.manage(BarHit::default());
+    let app = app.clone();
+    let _ = std::thread::Builder::new().name("bar-pointer".into()).spawn(move || {
+        let mut tracker = pointer::Tracker::default();
+        loop {
+            std::thread::sleep(TRACK_EVERY);
+            let Some(window) = app.get_webview_window("bar") else {
+                continue;
+            };
+            let seen = if !window.is_visible().unwrap_or(false) {
+                Seen::Hidden
+            } else if let (Ok(cursor), Ok(origin), Ok(scale)) =
+                (app.cursor_position(), window.outer_position(), window.scale_factor())
+            {
+                let origin = (origin.x as f64, origin.y as f64);
+                Seen::Pointer(app.state::<BarHit>().over((cursor.x, cursor.y), origin, scale))
+            } else {
+                Seen::Unknown
+            };
+            if let Some(change) = tracker.update(seen) {
+                let _ = window.set_ignore_cursor_events(change.pass_through);
+                if let Some(hover) = change.hover {
+                    let _ = app.emit_to("bar", "bar-hover", hover);
+                }
+            }
+        }
+    });
+}
+
+/// Keeps a click on the bar from bringing Speechify to the front on a Mac,
+/// which would raise the main window over the app being dictated into.
+/// AppKit's non-activating panels use this; it is skipped if AppKit lacks it.
+#[cfg(target_os = "macos")]
+pub fn bar_never_activates(app: &AppHandle) {
+    use std::ffi::{c_char, c_void};
+    #[link(name = "objc")]
+    extern "C" {
+        fn sel_registerName(name: *const c_char) -> *const c_void;
+        fn objc_msgSend();
+    }
+    let Some(window) = app.get_webview_window("bar") else {
+        return;
+    };
+    let target = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        let Ok(ns_window) = target.ns_window() else { return };
+        unsafe {
+            // objc_msgSend is called through a pointer cast to each method's
+            // exact signature; BOOL is one byte on both Mac architectures.
+            type Responds = unsafe extern "C" fn(*mut c_void, *const c_void, *const c_void) -> i8;
+            type SetBool = unsafe extern "C" fn(*mut c_void, *const c_void, i8);
+            let send = objc_msgSend as unsafe extern "C" fn();
+            let responds = std::mem::transmute::<unsafe extern "C" fn(), Responds>(send);
+            let set = std::mem::transmute::<unsafe extern "C" fn(), SetBool>(send);
+            let check = sel_registerName(c"respondsToSelector:".as_ptr());
+            let prevents = sel_registerName(c"_setPreventsActivation:".as_ptr());
+            if responds(ns_window, check, prevents) != 0 {
+                set(ns_window, prevents, 1);
+            }
+        }
+    });
 }
 
 pub fn show_bar(app: &AppHandle, bar: &Bar) {

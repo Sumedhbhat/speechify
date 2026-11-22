@@ -106,8 +106,12 @@ button:focus-visible {
   box-shadow: inset 0 0 0 1px var(--bar-edge);
 }
 
-.pill.idle:hover,
-.pill.idle:focus-within {
+/* The shell reports the pointer once it tracks it (.tracked + .hover); a
+   window that never takes focus can miss the pointer leaving, which would
+   leave CSS :hover stuck on. Wayland has no tracking, so it keeps :hover. */
+:not(.tracked) > .bar-stack > .pill.idle:hover,
+.pill.idle.hover,
+.pill.idle:has(:focus-visible) {
   min-width: 150px;
   height: 30px;
   opacity: 1;
@@ -132,15 +136,18 @@ button:focus-visible {
   transition: opacity 160ms var(--ease);
 }
 
-.pill.idle:hover .pill-idle .icon,
-.pill.idle:hover .pill-hint,
-.pill.idle:focus-within .pill-idle .icon,
-.pill.idle:focus-within .pill-hint {
+:not(.tracked) > .bar-stack > .pill.idle:hover .pill-idle .icon,
+:not(.tracked) > .bar-stack > .pill.idle:hover .pill-hint,
+.pill.idle.hover .pill-idle .icon,
+.pill.idle.hover .pill-hint,
+.pill.idle:has(:focus-visible) .pill-idle .icon,
+.pill.idle:has(:focus-visible) .pill-hint {
+  display: inline-flex;
   opacity: 1;
 }
 
-.pill.idle:not(:hover):not(:focus-within) .pill-idle .icon,
-.pill.idle:not(:hover):not(:focus-within) .pill-hint {
+.pill.idle .pill-idle .icon,
+.pill.idle .pill-hint {
   display: none;
 }
 
