@@ -22,13 +22,6 @@ function shown(item: Dictation): string {
 
 type Cleanup = { chip: string; className: string; detail: string };
 
-/**
- * Whether the language model's answer was used. A clean-up time with no
- * rewrite means the model was asked and its answer was not used. No time
- * does not prove the model was never asked: a failure in under a
- * millisecond, or a live dictation whose blocks were all cleaned up while it
- * was spoken, stores none. So the last case claims only the outcome.
- */
 function cleanup(item: Dictation): Cleanup {
   if (item.rewritten) {
     return {
