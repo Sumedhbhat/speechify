@@ -12,8 +12,10 @@ source "$llm_dir/env.sh"
 server=$!
 trap 'kill "$server" 2>/dev/null || true' EXIT
 
+ready=false
 for _ in $(seq 1 300); do
   if curl -sf "http://127.0.0.1:$port/health" > /dev/null; then
+    ready=true
     break
   fi
   if ! kill -0 "$server" 2>/dev/null; then
@@ -24,4 +26,11 @@ for _ in $(seq 1 300); do
   sleep 1
 done
 
+if [ "$ready" != true ]; then
+  cat "$llm_dir/server.log" >&2
+  echo "The language model server was not ready after 5 minutes" >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$output")"
 PERF_LLM_URL="http://127.0.0.1:$port/v1" "$perf" bench/scenarios.json "$output"

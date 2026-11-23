@@ -1,4 +1,5 @@
 import hashlib
+import json
 import shutil
 import stat
 import sys
@@ -22,12 +23,8 @@ SERVERS = {
         "23729000408c6968faf5e322afc99319d3b8c576ba872ef7663d9b89810090f3",
     ),
 }
-MODEL = (
-    "gemma-3-4b-it-Q4_K_M.gguf",
-    "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/"
-    "d0976223747697cb51e056d85c532013931fe52e/gemma-3-4b-it-Q4_K_M.gguf",
-    "882e8d2db44dc554fb0ea5077cb7e4bc49e7342a1f0da57901c0802ea21a0863",
-)
+REGISTRY = "https://registry.ollama.ai/v2"
+DEFAULTS = Path(__file__).resolve().parent.parent / "core" / "defaults.json"
 
 
 def digest(path):
@@ -42,7 +39,7 @@ def fetch(url, path, expected):
     if path.exists() and digest(path) == expected:
         return
     part = path.with_name(path.name + ".part")
-    with urllib.request.urlopen(url, timeout=120) as response, open(part, "wb") as out:
+    with urllib.request.urlopen(urllib.request.Request(url), timeout=120) as response, open(part, "wb") as out:
         shutil.copyfileobj(response, out, 1 << 20)
     if digest(part) != expected:
         part.unlink()
@@ -72,13 +69,25 @@ def main():
     name = "llama-server.exe" if platform == "win32" else "llama-server"
     server = next(server_dir.rglob(name))
     server.chmod(server.stat().st_mode | stat.S_IXUSR)
-    model_name, model_url, model_sha = MODEL
-    model = dest / model_name
-    fetch(model_url, model, model_sha)
+    tag = json.loads(DEFAULTS.read_text(encoding="utf-8"))["cleanup_model"]
+    name, _, version = tag.partition(":")
+    if "/" not in name:
+        name = f"library/{name}"
+    request = urllib.request.Request(
+        f"{REGISTRY}/{name}/manifests/{version or 'latest'}",
+        headers={"Accept": "application/vnd.docker.distribution.manifest.v2+json"},
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        manifest = json.load(response)
+    layer = next(item for item in manifest["layers"] if item["mediaType"] == "application/vnd.ollama.image.model")
+    model_sha = layer["digest"].removeprefix("sha256:")
+    model = dest / f"{model_sha}.gguf"
+    fetch(f"{REGISTRY}/{name}/blobs/{layer['digest']}", model, model_sha)
     (dest / "env.sh").write_text(
         f'export PERF_LLAMA_SERVER="{server.as_posix()}"\n'
         f'export PERF_LLM_FILE="{model.as_posix()}"\n'
-        f'export PERF_LLM_MODEL="{model_name.removesuffix(".gguf")}"\n',
+        f'export PERF_LLM_MODEL="{tag}"\n'
+        f'export PERF_LLM_DIGEST="{layer["digest"]}"\n',
         encoding="utf-8",
     )
 

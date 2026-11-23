@@ -28,30 +28,8 @@ env:
   TEST_STREAM_MODEL_SHA256: 930e4622ad3a24158b91406c30c977fa6a26b34cb32d6ac3e57cfb23383a869e
 
 jobs:
-  results-commit:
-    name: Check for a results-only commit
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      checks: read
-    outputs:
-      reuse: ${{ steps.check.outputs.reuse }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 2
-          persist-credentials: false
-      - name: Reuse the checks of the measured commit if HEAD only adds its results
-        id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/check-results-commit.sh >> "$GITHUB_OUTPUT"
-
   test:
     name: Test (${{ matrix.os }})
-    needs: results-commit
-    if: ${{ !cancelled() }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -70,60 +48,51 @@ jobs:
             platform: windows
             python: python
             exe: .exe
-    env:
-      FULL: ${{ needs.results-commit.outputs.reuse != 'true' }}
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: env.FULL == 'true'
         with:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: env.FULL == 'true'
         with:
           node-version: '24.21.0'
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install Linux build prerequisites
-        if: env.FULL == 'true' && runner.os == 'Linux'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libx11-dev libxtst-dev libxi-dev
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        if: env.FULL == 'true'
         with:
           path: .build/models
           key: test-models-${{ env.TEST_MODEL_SHA256 }}-${{ env.TEST_TOKEN_MODEL_SHA256 }}-${{ env.TEST_STREAM_MODEL_SHA256 }}
       - name: Fetch the speech runtime and the test model
-        if: env.FULL == 'true'
         run: bash scripts/fetch-test-fixtures.sh "${{ matrix.python }}"
       - name: Frontend
-        if: env.FULL == 'true'
         run: |
           npm ci
           npm run build
           npm test
       - name: Formatting and lints
-        if: env.FULL == 'true' && runner.os == 'Linux'
+        if: runner.os == 'Linux'
         run: |
           npm run format:check
           cargo fmt --all --check
           cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Rust tests
-        if: env.FULL == 'true'
         run: |
           source .build/test-env.sh
           cargo test --workspace --locked
       - name: Build the app
-        if: env.FULL == 'true'
         run: cargo build -p speechify --locked
       - name: Build the performance binary
-        if: env.FULL == 'true' && github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request'
         run: cargo build --release --locked -p speechify-bench --bin perf
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: env.FULL == 'true' && github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request'
         with:
           name: perf-bin-${{ matrix.platform }}
           path: target/release/perf${{ matrix.exe }}
@@ -168,11 +137,16 @@ jobs:
           key: test-models-${{ env.TEST_MODEL_SHA256 }}-${{ env.TEST_TOKEN_MODEL_SHA256 }}-${{ env.TEST_STREAM_MODEL_SHA256 }}
       - name: Fetch the speech runtime and the test models
         run: bash scripts/fetch-test-fixtures.sh "${{ matrix.python }}"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .build/default-models
+          key: default-models-${{ hashFiles('core/defaults.json', 'core/src/catalog.rs') }}
       - name: Fetch the language model server and model
         run: '"${{ matrix.python }}" scripts/fetch-perf-llm.py .build/llm'
       - name: Measure speed and run the scenarios
         env:
           PERF_PLATFORM: ${{ matrix.platform }}
+          PERF_MODELS_DIR: .build/default-models
         run: |
           chmod +x ".build/perf-bin/perf${{ matrix.exe }}"
           source .build/test-env.sh
@@ -192,49 +166,42 @@ jobs:
 
   coverage-gate:
     name: Tauri full coverage gate
-    needs: [results-commit, test]
+    needs: test
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      FULL: ${{ needs.results-commit.outputs.reuse != 'true' }}
     steps:
       - name: Require passing tests on every platform
         env:
           TEST_RESULT: ${{ needs.test.result }}
         run: test "$TEST_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: env.FULL == 'true'
         with:
           fetch-depth: 0
           persist-credentials: false
       - name: Require performance results to come from CI
-        if: env.FULL == 'true' && github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: bash scripts/check-results-authors.sh "$BASE_SHA" "$HEAD_SHA"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: env.FULL == 'true'
         with:
           node-version: '24.21.0'
           cache: npm
           cache-dependency-path: package-lock.json
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        if: env.FULL == 'true'
         with:
           path: .build/models
           key: test-models-${{ env.TEST_MODEL_SHA256 }}-${{ env.TEST_TOKEN_MODEL_SHA256 }}-${{ env.TEST_STREAM_MODEL_SHA256 }}
       - name: Install coverage tools
-        if: env.FULL == 'true'
         run: |
           cargo install cargo-llvm-cov --version 0.9.1 --locked
           npm ci
       - name: Require full coverage of the core and the interface
-        if: env.FULL == 'true'
         run: bash scripts/coverage.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always() && env.FULL == 'true'
+        if: always()
         with:
           name: coverage
           path: coverage/
@@ -249,7 +216,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      actions: write
+      statuses: write
     env:
       PR: ${{ github.event.pull_request.number }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -306,6 +273,12 @@ jobs:
           else
             echo "The branch moved on since this run started; the next run records its own results."
           fi
-      - name: Run CI on the results commit
+      - name: Carry the passing checks over to the results commit
         if: steps.record.outputs.pushed == 'true'
-        run: gh workflow run ci.yml --ref "$HEAD_REF"
+        run: |
+          sha="$(git rev-parse HEAD)"
+          for check in "Test (ubuntu-24.04)" "Test (macos-15)" "Test (windows-2025)" "Tauri full coverage gate"; do
+            jq -n --arg context "$check" --arg url "$RUN_URL" --arg description "Passed on ${HEAD_SHA::7}; this commit only adds its results" \
+              '{state: "success", context: $context, target_url: $url, description: $description}' |
+              gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$sha" --input - > /dev/null
+          done

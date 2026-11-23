@@ -78,8 +78,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      actions: write
-      checks: read
+      statuses: write
     uses: ./.github/workflows/ci.yml
 
   package:

@@ -1,6 +1,7 @@
 //! The speech models the app can download, pinned by revision and checksum.
 
 use crate::http::Http;
+use crate::settings::DEFAULTS;
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -189,22 +190,30 @@ pub fn plan(devices: &[Device]) -> Plan {
         .max_by_key(|device| device.memory_mb);
     match card {
         Some(card) => Plan {
-            speech_model: "whisper-large-v3-turbo",
-            teacher_model: "whisper-large-v3",
+            speech_model: &DEFAULTS.speech_model,
+            teacher_model: &DEFAULTS.teacher_speech_model,
             rewrite: true,
             reason: format!(
-                "Found {} with {} GB: using Whisper turbo on it",
+                "Found {} with {} GB: using {} on it",
                 card.name,
-                card.memory_mb / 1000
+                card.memory_mb / 1000,
+                label(&DEFAULTS.speech_model)
             ),
         },
         None => Plan {
-            speech_model: "parakeet-tdt-0.6b-v3",
-            teacher_model: "whisper-large-v3-turbo",
+            speech_model: &DEFAULTS.cpu_speech_model,
+            teacher_model: &DEFAULTS.cpu_teacher_speech_model,
             rewrite: false,
-            reason: "No graphics card with enough memory: using Parakeet, the fastest model on a CPU".into(),
+            reason: format!(
+                "No graphics card with enough memory: using {}, the fastest model on a CPU",
+                label(&DEFAULTS.cpu_speech_model)
+            ),
         },
     }
+}
+
+fn label(id: &str) -> String {
+    find(id).map_or_else(|_| id.to_string(), |model| model.name)
 }
 
 /// On the very first start, before any settings exist, chooses the models
@@ -318,19 +327,31 @@ mod tests {
         let laptop = plan(&[cpu.clone(), rtx.clone()]);
         assert_eq!(
             (laptop.speech_model, laptop.teacher_model, laptop.rewrite),
-            ("whisper-large-v3-turbo", "whisper-large-v3", true)
+            (
+                DEFAULTS.speech_model.as_str(),
+                DEFAULTS.teacher_speech_model.as_str(),
+                true
+            )
         );
         assert_eq!(
             laptop.reason,
-            "Found NVIDIA GeForce RTX 4060 Laptop GPU with 8 GB: using Whisper turbo on it"
+            format!(
+                "Found NVIDIA GeForce RTX 4060 Laptop GPU with 8 GB: using {} on it",
+                find(&DEFAULTS.speech_model).unwrap().name
+            )
         );
+        assert_eq!(label("not-in-the-catalog"), "not-in-the-catalog");
         assert!(plan(&[rtx, bigger]).reason.contains("RTX 4070"));
         // Integrated graphics, a small card or no card at all: Parakeet, no cleanup model.
         for machine in [vec![cpu.clone()], vec![cpu.clone(), igpu], vec![cpu, small], vec![]] {
             let chosen = plan(&machine);
             assert_eq!(
                 (chosen.speech_model, chosen.teacher_model, chosen.rewrite),
-                ("parakeet-tdt-0.6b-v3", "whisper-large-v3-turbo", false)
+                (
+                    DEFAULTS.cpu_speech_model.as_str(),
+                    DEFAULTS.cpu_teacher_speech_model.as_str(),
+                    false
+                )
             );
             assert!(chosen.reason.starts_with("No graphics card"));
         }

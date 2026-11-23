@@ -61,35 +61,44 @@ A new pull request run cancels the one it supersedes. Release runs always finish
 On pull requests, `ci.yml` also measures performance. The jobs run in this order:
 
 1. **Test (ubuntu-24.04, macos-15, windows-2025)** also builds the `perf` binary (`bench/src/bin/perf.rs`) in release mode and uploads it.
-2. **Measure (linux, macos, windows)** starts once every Test job has finished. Each one takes the binary built on its own platform and runs `scripts/perf-run.sh`, which:
-   - times the whole dictation pipeline (voice detector, recognition, formatting) on `jfk.wav` with the two test models: the load time, then the median of 5 warm runs;
-   - times the rule formatter over every scenario;
-   - runs each scenario in `bench/scenarios.json` twice: through the rules alone, and through the cleanup model with the real system prompt (`core/src/prompts/cleanup.txt`), vetting and fallback.
+2. **Measure (linux, macos, windows)** starts once every Test job has finished. Each one takes the binary built on its own platform and runs `scripts/perf-run.sh`, which measures three things:
+   - **Transcription**: speech to raw text on `jfk.wav` with the default speech model. It reports the load time, the median time to text over 3 warm runs, the speed relative to real time, and the share of words wrong.
+   - **Cleanup**: raw text to the typed text. It reports the rule formatter's time over every scenario, and the language model's typical and slowest call times. It also counts how many of the model's answers the app rejected, using the rules instead.
+   - **Scenarios**: each case in `bench/scenarios.json` runs through the rules alone and through the default language model, with the real system prompt (`core/src/prompts/cleanup.txt`), vetting and fallback. Results are grouped by `kind`: corrections, repetition, lists, paragraphs, fillers, formatting, and keep as said.
 
-   The cleanup model is gemma-3-4b-it Q4_K_M, the same weights as the app's default `gemma3:4b`. llama.cpp `b12211` serves it on the CPU. `scripts/fetch-perf-llm.py` pins both by SHA-256. CI gives each request 180 seconds instead of the app's 6, so the prompt is judged on its answers, not on how fast the runner is.
-3. **Performance report** waits for every Measure job and for the coverage gate. It merges the three results into one table, compares them with the latest results file on `main`, and posts one comment on the pull request, updated on every push. The comment:
-   - marks timing changes beyond ±15% (and beyond a small absolute floor);
+   The language model runs on the CPU under llama.cpp `b12211`, which `scripts/fetch-perf-llm.py` pins by SHA-256. CI gives each request 180 seconds instead of the app's 6, and sends short dictations to the model too, so the prompt is judged on its answers rather than on how fast the runner is.
+3. **Performance report** waits for every Measure job and for the coverage gate. It merges the three platforms into one comment on the pull request, updated on every push, with a section each for Transcription, Cleanup and Scenarios. The comment:
+   - compares every number with the latest results file on `main` and marks changes beyond ±15% (and beyond a small absolute floor);
    - lists scenarios that started or stopped passing;
    - shows every failing scenario, with what was said and what came out;
    - ends with a JSON summary for tools to read.
+
+   Rows are named for what they measure, not for a model, so changing a default keeps them comparable. The footer names the models, and says when `main` was measured with different ones.
 
    When every Measure job and the coverage gate passed, it commits the merged results to the pull request branch as `bench/perf/results/pr-<number>.json`, authored by `github-actions[bot]`. Merging the pull request brings that file to `main`, and later pull requests compare with the most recently added results file there. Each pull request writes its own file, so two open pull requests never conflict over results.
 
 None of this fails a pull request over a slower number or a worse scenario. The comment reports them.
 
+### Default models
+
+`core/defaults.json` holds the models the app starts with and the ones CI measures:
+
+- `speech_model`: the speech model on a machine with a graphics card. It is also the model in `Settings::default()`, and the one Transcription measures.
+- `cpu_speech_model`: what first start picks without a graphics card.
+- `streaming_model`
+- `cleanup_model`: the Ollama tag for cleanup, which Cleanup and Scenarios use.
+- `teacher_speech_model` and `cpu_teacher_speech_model`: the nightly review's speech models, with and without a graphics card.
+- `teacher_cleanup_model`: the nightly review's cleanup model.
+
+Speech models are catalog ids (`core/src/catalog.rs`), and CI downloads them through the catalog with its pinned checksum. For the cleanup model, `scripts/fetch-perf-llm.py` reads the Ollama tag, looks it up in Ollama's registry, and downloads the same weights Ollama would, checked against the digest the registry gives. Ollama tags can move, so the results record that digest. Changing a default changes the app and the next CI measurement together. The catalog test fails if a speech default is not in the catalog.
+
 After the results commit lands, pull before you push again: the branch now has a commit you do not have locally.
 
-A commit pushed with the workflow token starts no workflows, so the results commit would have no required checks. Performance report therefore starts `ci.yml` again for it through `workflow_dispatch`. In that run, **Check for a results-only commit** looks at three things:
+A commit pushed with the workflow token starts no workflows, and GitHub ignores checks from a `workflow_dispatch` run when it applies required checks. So once Performance report has pushed the results commit, it posts a passing commit status on it for each required check name (`Test (…)` and `Tauri full coverage gate`). It does this only after it has seen every Test job and the coverage gate pass on the commit it measured. The results commit adds one data file to that commit.
 
-- whether the head commit is from `github-actions[bot]`;
-- whether it changes nothing but `bench/perf/results/*.json`;
-- whether `Tauri full coverage gate` passed on the commit before it.
+Only CI writes `bench/perf/results`. The coverage gate fails a pull request if any results file differs from the version `github-actions[bot]` last committed on that branch.
 
-If all three hold, the Test jobs and the coverage gate pass without repeating their steps. Otherwise everything runs.
-
-Only CI writes `bench/perf/results`. The coverage gate fails a pull request that has a commit touching that folder unless `github-actions[bot]` wrote it.
-
-`release.yml` grants its `Tests` job the permissions that `ci.yml`'s jobs ask for, because a reusable workflow cannot ask for more than its caller. On pushes, the jobs that use them (Performance report and the results check) are skipped or read nothing.
+`release.yml` grants its `Tests` job the permissions that `ci.yml`'s jobs ask for, because a reusable workflow cannot ask for more than its caller. On pushes, Performance report, the only job that uses them, is skipped.
 
 Scenario checks, all optional: `equals` (exact text), `contains` (each entry a phrase, or a list of alternatives), `absent` (phrases that must not remain, matched as whole words), `list` (`numbered`, `bullets` or `none`) with `items`, `paragraphs` (blocks separated by a blank line) and `min_lines`. `category` is `work` (the default, typing into Slack), `email`, `code` or `personal`. Some scenarios describe behaviour the app does not have yet, such as bullet points for items that are listed without being counted. They fail until it does, and the comment shows when that changes.
 

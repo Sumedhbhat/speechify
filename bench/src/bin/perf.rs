@@ -1,13 +1,13 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 use speechify_core::{
-    audio,
+    audio, catalog,
     context::{Category, Target},
     diff,
     llm::{Chat, Rewriter},
     native::{Detector, Engine, DETECTOR_FILE},
     pipeline::{self, Outcome, Request, RewriteCircuit},
-    settings::Settings,
+    settings::{Settings, DEFAULTS},
     store::{Clock, Store},
     Result,
 };
@@ -20,7 +20,7 @@ use std::{
 
 const JFK: &str =
     "And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.";
-const RUNS: usize = 5;
+const RUNS: usize = 3;
 const RULE_PASSES: usize = 50;
 const CLOCK: Clock = Clock {
     now: 1_794_355_200,
@@ -114,7 +114,7 @@ fn destination(category: &str) -> (Target, Category) {
     )
 }
 
-fn speech(runtime: &Path, model: &Path) -> Result<Value> {
+fn transcription(runtime: &Path, model: &Path) -> Result<Value> {
     let pcm = audio::decode_wav(include_bytes!("../../../core/tests/fixtures/jfk.wav"))?;
     let start = Instant::now();
     let engine = Engine::open(runtime, model, "cpu")?;
@@ -135,7 +135,7 @@ fn speech(runtime: &Path, model: &Path) -> Result<Value> {
         let outcome = pipeline::run(&request, &settings, &store, &mut engine, None)?;
         let elapsed = ms(start);
         match outcome {
-            Outcome::Text { paste, .. } => Ok((elapsed, paste)),
+            Outcome::Text { record, .. } => Ok((elapsed, record.raw)),
             other => Err(format!("The test clip gave {other:?}")),
         }
     };
@@ -145,15 +145,14 @@ fn speech(runtime: &Path, model: &Path) -> Result<Value> {
         runs.push(once()?.0);
     }
     let audio_s = pcm.len() as f64 / 16_000.0;
-    let dictation_ms = median(&runs);
+    let time_ms = median(&runs);
     Ok(json!({
-        "model": model.file_stem().and_then(|s| s.to_str()).unwrap_or_default(),
         "load_ms": load_ms,
         "first_ms": first_ms,
-        "dictation_ms": dictation_ms,
+        "time_ms": time_ms,
         "runs_ms": runs,
         "audio_s": audio_s,
-        "realtime_factor": dictation_ms / 1000.0 / audio_s,
+        "realtime": audio_s * 1000.0 / time_ms,
         "wer": diff::wer(JFK, &text),
         "text": text,
     }))
@@ -192,10 +191,7 @@ fn failures(text: &str, checks: &Checks) -> Vec<String> {
             Value::Array(items) => items.iter().filter_map(Value::as_str).collect(),
             other => other.as_str().into_iter().collect(),
         };
-        if !options
-            .iter()
-            .any(|option| text.to_lowercase().contains(&option.to_lowercase()))
-        {
+        if !options.iter().any(|option| find(text, option)) {
             failed.push(format!("missing {}", options.join(" or ")));
         }
     }
@@ -255,11 +251,7 @@ fn rules(scenarios: &[Scenario]) -> (Value, Vec<Value>) {
             json!({"text": text, "passed": failed.is_empty(), "failures": failed})
         })
         .collect();
-    let passed = rows.iter().filter(|r| r["passed"] == true).count();
-    (
-        json!({"pass_ms": median(&passes), "passed": passed, "total": rows.len()}),
-        rows,
-    )
+    (json!({"pass_ms": median(&passes)}), rows)
 }
 
 fn language_model(scenarios: &[Scenario], url: &str, model: &str) -> (Value, Vec<Value>) {
@@ -271,6 +263,7 @@ fn language_model(scenarios: &[Scenario], url: &str, model: &str) -> (Value, Vec
     let mut settings = settings();
     settings.rewrite.enabled = true;
     settings.rewrite.model = model.into();
+    settings.rewrite.min_words = 0;
     let store = Store::memory();
     let compose = |s: &Scenario| {
         let (target, category) = destination(&s.category);
@@ -309,16 +302,11 @@ fn language_model(scenarios: &[Scenario], url: &str, model: &str) -> (Value, Vec
             })
         })
         .collect();
-    let passed = rows.iter().filter(|r| r["passed"] == true).count();
     let summary = json!({
-        "model": model,
         "median_ms": median(&latencies),
         "p90_ms": percentile(&latencies, 0.9),
         "calls": latencies.len(),
-        "rewritten": rows.iter().filter(|r| r["rewritten"] == true).count(),
-        "fallbacks": rows.iter().filter(|r| !r["fallback"].is_null()).count(),
-        "passed": passed,
-        "total": rows.len(),
+        "rejected": rows.iter().filter(|r| !r["fallback"].is_null()).count(),
     });
     (summary, rows)
 }
@@ -331,12 +319,16 @@ fn run() -> Result<()> {
     let scenarios: Vec<Scenario> =
         serde_json::from_slice(&fs::read(cases).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     let runtime = env_path("SPEECHIFY_NATIVE_DIR")?;
-    let mut speech_rows = vec![];
-    for name in ["SPEECHIFY_TEST_MODEL", "SPEECHIFY_TEST_TOKEN_MODEL"] {
-        let row = speech(&runtime, &env_path(name)?)?;
-        eprintln!("speech {} {:.0} ms", row["model"], row["dictation_ms"]);
-        speech_rows.push(row);
-    }
+    let speech = catalog::find(&DEFAULTS.speech_model)?;
+    let models_dir = env::var_os("PERF_MODELS_DIR").map_or_else(|| PathBuf::from(".build/models"), PathBuf::from);
+    let speech_path = if catalog::installed(&models_dir, &speech) {
+        catalog::path(&models_dir, &speech)
+    } else {
+        eprintln!("downloading {}", speech.id);
+        catalog::download(&models_dir, &speech, &mut |_, _| true)?
+    };
+    let heard = transcription(&runtime, &speech_path)?;
+    eprintln!("transcription {:.0} ms", heard["time_ms"]);
     let (rules_summary, rule_rows) = rules(&scenarios);
     let llm = match (env::var("PERF_LLM_URL"), env::var("PERF_LLM_MODEL")) {
         (Ok(url), Ok(model)) if !url.is_empty() => Some(language_model(&scenarios, &url, &model)),
@@ -361,14 +353,21 @@ fn run() -> Result<()> {
         env::var("ImageVersion").unwrap_or_default()
     );
     let report = json!({
-        "schema": 1,
+        "schema": 2,
         "platform": env::var("PERF_PLATFORM").unwrap_or_else(|_| env::consts::OS.into()),
         "arch": env::consts::ARCH,
         "cpus": std::thread::available_parallelism().map_or(0, |n| n.get()),
         "image": image.trim(),
-        "speech": speech_rows,
-        "rules": rules_summary,
-        "llm": llm.as_ref().map(|(summary, _)| summary),
+        "models": {
+            "speech": speech.id,
+            "cleanup": env::var("PERF_LLM_MODEL").ok().filter(|_| llm.is_some()),
+            "cleanup_digest": env::var("PERF_LLM_DIGEST").ok().filter(|_| llm.is_some()),
+        },
+        "transcription": heard,
+        "cleanup": {
+            "rules_ms": rules_summary["pass_ms"],
+            "llm": llm.as_ref().map(|(summary, _)| summary),
+        },
         "scenarios": rows,
     });
     fs::write(output, serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?).map_err(|e| e.to_string())

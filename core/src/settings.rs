@@ -1,6 +1,22 @@
 //! User settings. Every field has a default so older files keep loading.
 
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Defaults {
+    pub speech_model: String,
+    pub cpu_speech_model: String,
+    pub streaming_model: String,
+    pub cleanup_model: String,
+    pub teacher_speech_model: String,
+    pub cpu_teacher_speech_model: String,
+    pub teacher_cleanup_model: String,
+}
+
+pub static DEFAULTS: LazyLock<Defaults> =
+    LazyLock::new(|| serde_json::from_str(include_str!("../defaults.json")).expect("core/defaults.json"));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -140,14 +156,14 @@ impl Speech {
 impl Default for Speech {
     fn default() -> Self {
         Self {
-            model: "whisper-large-v3-turbo".into(),
+            model: DEFAULTS.speech_model.clone(),
             device: "auto".into(),
             language: "en".into(),
             remote_url: String::new(),
             remote_key: String::new(),
             remote_model: "whisper-large-v3-turbo".into(),
             streaming: false,
-            streaming_model: "parakeet-unified-en-0.6b".into(),
+            streaming_model: DEFAULTS.streaming_model.clone(),
         }
     }
 }
@@ -175,7 +191,7 @@ impl Default for Rewrite {
             enabled: true,
             url: "http://127.0.0.1:11434".into(),
             key: String::new(),
-            model: "gemma3:4b".into(),
+            model: DEFAULTS.cleanup_model.clone(),
             timeout_ms: 6000,
             min_words: 6,
         }
@@ -201,8 +217,8 @@ impl Default for Teacher {
         Self {
             enabled: true,
             hour: 2,
-            speech_model: "whisper-large-v3".into(),
-            rewrite_model: "qwen3.5:9b-q4_K_M".into(),
+            speech_model: DEFAULTS.teacher_speech_model.clone(),
+            rewrite_model: DEFAULTS.teacher_cleanup_model.clone(),
             learn_after: 2,
             batch: 200,
         }

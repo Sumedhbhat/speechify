@@ -4,7 +4,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 MARKER = "<!-- speechify-performance -->"
+SCHEMA = 2
 PLATFORMS = [("linux", "Linux"), ("macos", "macOS"), ("windows", "Windows")]
+KINDS = ["corrections", "repetition", "lists", "paragraphs", "fillers", "formatting", "keep as said"]
 NOISE = 0.15
 
 
@@ -12,27 +14,12 @@ def load_platforms(directory):
     found = {}
     for path in sorted(Path(directory).rglob("*.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict) and data.get("schema") == 1 and "platform" in data:
+        if isinstance(data, dict) and data.get("schema") == SCHEMA and "platform" in data:
             found[data["platform"]] = data
     return found
 
 
-def metrics(platform):
-    rows = []
-    for speech in platform.get("speech", []):
-        name = speech["model"]
-        seconds = round(speech["audio_s"])
-        rows.append((f"Dictation, {name} ({seconds} s clip)", speech["dictation_ms"], 20.0))
-        rows.append((f"Model load, {name}", speech["load_ms"], 20.0))
-    rows.append(("Formatter, all scenarios once", platform["rules"]["pass_ms"], 0.2))
-    llm = platform.get("llm")
-    if llm:
-        rows.append((f"Cleanup model, median call ({llm['model']})", llm["median_ms"], 200.0))
-        rows.append(("Cleanup model, slowest 10% of calls", llm["p90_ms"], 200.0))
-    return rows
-
-
-def duration(value):
+def ms(value):
     if value >= 10_000:
         return f"{value / 1000:.1f} s"
     if value >= 100:
@@ -40,69 +27,123 @@ def duration(value):
     return f"{value:.2f} ms"
 
 
-def change(now, before, floor):
-    if before is None or before <= 0:
+def times(value):
+    return f"{value:.2f}× real time" if value < 10 else f"{value:.0f}× real time"
+
+
+def percent(value):
+    return f"{value * 100:.1f}%"
+
+
+def transcription(platform):
+    t = platform["transcription"]
+    return [
+        ("Load the speech model", t["load_ms"], ms, "time", 20.0),
+        ("Time to text", t["time_ms"], ms, "time", 20.0),
+        ("Speed", t["realtime"], times, "rate", 0.5),
+        ("Words wrong", t["wer"], percent, "error", 0.005),
+    ]
+
+
+def cleanup(platform):
+    c = platform["cleanup"]
+    rows = [("Rules, every scenario once", c["rules_ms"], ms, "time", 0.2)]
+    llm = c.get("llm")
+    if llm:
+        rows += [
+            ("Language model, typical call", llm["median_ms"], ms, "time", 200.0),
+            ("Language model, slowest 10% of calls", llm["p90_ms"], ms, "time", 200.0),
+            ("Answers rejected, rules used instead", llm["rejected"], lambda v: f"{v:.0f}/{llm['calls']}", "count", 0.5),
+        ]
+    return rows
+
+
+def change(now, before, kind, floor):
+    if before is None:
         return "", None
-    ratio = now / before - 1
-    if abs(ratio) > NOISE and abs(now - before) > floor:
-        flag = "slower" if ratio > 0 else "faster"
+    worse = {"time": now > before, "rate": now < before, "error": now > before, "count": now > before}[kind]
+    if kind in ("error", "count"):
+        delta = now - before
+        text = f" ({delta * 100:+.1f} pts)" if kind == "error" else f" ({delta:+.0f})"
+        flagged = abs(delta) > floor
     else:
-        flag = None
-    mark = {"slower": " ⚠️", "faster": " 🟢"}.get(flag, "")
-    return f" ({ratio:+.0%}{mark})", flag
+        ratio = now / before - 1 if before else 0
+        text = f" ({ratio:+.0%})"
+        flagged = abs(ratio) > NOISE and abs(now - before) > floor
+    if not flagged or now == before:
+        return (text if now != before else ""), None
+    return text.replace(")", " ⚠️)" if worse else " 🟢)"), "worse" if worse else "better"
 
 
-def passing(platform, path):
-    return {s["id"] for s in platform.get("scenarios", []) if (s.get(path) or {}).get("passed")}
-
-
-def scenario_ids(platform, path):
-    return [s["id"] for s in platform.get("scenarios", []) if s.get(path) is not None]
-
-
-def speed_table(current, baseline, flags):
+def metric_table(section, current, baseline, flags):
     columns = [(key, label) for key, label in PLATFORMS if key in current]
     names = []
     for key, _ in columns:
-        for name, _, _ in metrics(current[key]):
-            if name not in names:
-                names.append(name)
+        for row in section(current[key]):
+            if row[0] not in names:
+                names.append(row[0])
     lines = ["| | " + " | ".join(label for _, label in columns) + " |", "| --- |" + " ---: |" * len(columns)]
     for name in names:
         cells = []
         for key, label in columns:
-            now = {n: (v, f) for n, v, f in metrics(current[key])}.get(name)
-            before = {n: v for n, v, _ in metrics(baseline[key])}.get(name) if key in baseline else None
+            now = {row[0]: row for row in section(current[key])}.get(name)
+            before = {row[0]: row[1] for row in section(baseline[key])}.get(name) if key in baseline else None
             if now is None:
                 cells.append("—")
                 continue
-            text, flag = change(now[0], before, now[1])
-            if flag:
-                flags.append((flag, f"{name} on {label}"))
-            cells.append(duration(now[0]) + text)
+            _, value, show, kind, floor = now
+            text, flag = change(value, before, kind, floor)
+            if flag == "worse":
+                flags.append(f"{name} on {label}")
+            cells.append(show(value) + text)
         lines.append(f"| {name} | " + " | ".join(cells) + " |")
     return lines
+
+
+def tally(platform, path):
+    counts = {}
+    for s in platform.get("scenarios", []):
+        result = s.get(path)
+        if result is None:
+            continue
+        passed, total = counts.get(s["kind"], (0, 0))
+        counts[s["kind"]] = (passed + bool(result["passed"]), total + 1)
+    return counts
+
+
+def kinds(*platforms):
+    seen = {s["kind"] for p in platforms for s in p.get("scenarios", [])}
+    return [k for k in KINDS if k in seen] + sorted(seen - set(KINDS))
 
 
 def scenario_table(current, baseline):
     columns = [(key, label) for key, label in PLATFORMS if key in current]
-    lines = ["| | " + " | ".join(label for _, label in columns) + " |", "| --- |" + " ---: |" * len(columns)]
-    for path, name in [("rules", "Rules only"), ("llm", "With the cleanup model")]:
+    lines = [
+        "| | " + " | ".join(f"{label}: rules / with model" for _, label in columns) + " |",
+        "| --- |" + " ---: |" * len(columns),
+    ]
+    for kind in kinds(*current.values()):
         cells = []
         for key, _ in columns:
-            ids = scenario_ids(current[key], path)
-            if not ids:
-                cells.append("—")
-                continue
-            count = len(passing(current[key], path) & set(ids))
-            cell = f"{count}/{len(ids)}"
-            if key in baseline and scenario_ids(baseline[key], path):
-                before = len(passing(baseline[key], path))
-                if count != before:
-                    cell += f" ({count - before:+d})"
-            cells.append(cell)
-        lines.append(f"| {name} | " + " | ".join(cells) + " |")
+            parts = []
+            for path in ("rules", "llm"):
+                passed, total = tally(current[key], path).get(kind, (0, 0))
+                if not total:
+                    parts.append("—")
+                    continue
+                cell = f"{passed}/{total}"
+                if key in baseline:
+                    before = tally(baseline[key], path).get(kind)
+                    if before and before[0] != passed:
+                        cell += f" ({passed - before[0]:+d})"
+                parts.append(cell)
+            cells.append(" / ".join(parts))
+        lines.append(f"| {kind.capitalize()} | " + " | ".join(cells) + " |")
     return lines
+
+
+def results(platform, path):
+    return {s["id"]: s[path]["passed"] for s in platform.get("scenarios", []) if s.get(path)}
 
 
 def flips(current, baseline):
@@ -110,87 +151,99 @@ def flips(current, baseline):
     for key, label in PLATFORMS:
         if key not in current or key not in baseline:
             continue
-        for path, name in [("rules", "rules only"), ("llm", "cleanup model")]:
-            if not scenario_ids(baseline[key], path) or not scenario_ids(current[key], path):
-                continue
-            now, before = passing(current[key], path), passing(baseline[key], path)
-            shared = set(scenario_ids(current[key], path)) & set(scenario_ids(baseline[key], path))
-            for scenario in sorted(shared):
-                if (scenario in now) != (scenario in before):
-                    state = "now passes" if scenario in now else "now fails"
+        for path, name in [("rules", "rules only"), ("llm", "with the language model")]:
+            now, before = results(current[key], path), results(baseline[key], path)
+            for scenario in sorted(now.keys() & before.keys()):
+                if now[scenario] != before[scenario]:
+                    state = "now passes" if now[scenario] else "now fails"
                     changes.setdefault((scenario, name, state), []).append(label)
-    lines = []
-    for (scenario, name, state), labels in sorted(changes.items()):
-        mark = "🟢" if state == "now passes" else "❌"
-        lines.append(f"- {mark} `{scenario}` {state} with {name} on {', '.join(labels)}")
-    return lines
+    return [
+        f"- {'🟢' if state == 'now passes' else '❌'} `{scenario}` {state} {name} on {', '.join(labels)}"
+        for (scenario, name, state), labels in sorted(changes.items())
+    ]
 
 
 def failures(current):
     rows = {}
     for key, label in PLATFORMS:
-        for scenario in current.get(key, {}).get("scenarios", []):
-            for path, name in [("rules", "rules"), ("llm", "model")]:
-                result = scenario.get(path)
+        for s in current.get(key, {}).get("scenarios", []):
+            for path, name in [("rules", "rules"), ("llm", "with model")]:
+                result = s.get(path)
                 if not result or result["passed"]:
                     continue
-                entry = (scenario["id"], name, result["text"], "; ".join(result["failures"]))
-                rows.setdefault(entry, (scenario["kind"], scenario["raw"], []))[2].append(label)
-    lines = ["| Scenario | Path | Platforms | Said | Got | Why |", "| --- | --- | --- | --- | --- | --- |"]
-    for (scenario, name, text, why), (kind, raw, labels) in sorted(rows.items()):
+                entry = (s["kind"], s["id"], name, result["text"], "; ".join(result["failures"]))
+                rows.setdefault(entry, (s["raw"], []))[1].append(label)
+    if not rows:
+        return []
+    lines = ["| Kind | Scenario | Path | Platforms | Said | Got | Why |", "| --- | --- | --- | --- | --- | --- | --- |"]
+    order = {k: i for i, k in enumerate(KINDS)}
+    for (kind, scenario, name, text, why), (raw, labels) in sorted(
+        rows.items(), key=lambda item: (order.get(item[0][0], 99), item[0][1:])
+    ):
         got = text.replace("\n", "⏎").replace("|", "\\|") or "(nothing)"
-        lines.append(f"| `{scenario}` ({kind}) | {name} | {', '.join(labels)} | {raw} | {got} | {why} |")
-    return lines if rows else []
+        lines.append(f"| {kind} | `{scenario}` | {name} | {', '.join(labels)} | {raw} | {got} | {why} |")
+    return lines
 
 
 def summary(current):
     out = {}
     for key, platform in current.items():
         out[key] = {
-            "metrics_ms": {name: round(value, 3) for name, value, _ in metrics(platform)},
-            "failing": {
-                path: sorted(set(scenario_ids(platform, path)) - passing(platform, path))
+            "transcription": {name: round(value, 4) for name, value, *_ in transcription(platform)},
+            "cleanup": {name: round(value, 4) for name, value, *_ in cleanup(platform)},
+            "scenarios_failing": {
+                path: sorted(id for id, passed in results(platform, path).items() if not passed)
                 for path in ("rules", "llm")
-                if scenario_ids(platform, path)
+                if results(platform, path)
             },
         }
     return out
 
 
-def render(current, baseline_doc, pr, run_url, results_path):
+def models(platforms):
+    for platform in platforms.values():
+        return platform.get("models", {})
+    return {}
+
+
+def render(current, baseline_doc, run_url, results_path):
     baseline = (baseline_doc or {}).get("platforms", {})
-    lines = [MARKER, "## Performance and cleanup scenarios", ""]
+    lines = [MARKER, "## Performance", ""]
     if baseline_doc:
         source = f"#{baseline_doc['pr']}" if baseline_doc.get("pr") else "main"
         sha = (baseline_doc.get("head_sha") or "")[:7]
         lines.append(f"Compared with the latest results on `main` (from {source}, `{sha}`).")
     else:
-        lines.append("There are no results on `main` yet, so nothing is compared. This run becomes the baseline once it is merged.")
+        lines.append("There are no comparable results on `main` yet. This run becomes the baseline once it is merged.")
     lines.append(
         f"Timings come from shared GitHub runners: changes within ±{NOISE:.0%} are usually noise, "
-        "so only larger ones are marked (⚠️ slower, 🟢 faster)."
+        "so only larger ones are marked (⚠️ worse, 🟢 better)."
     )
     missing = [label for key, label in PLATFORMS if key not in current]
     if missing:
         lines += ["", f"⚠️ No results from {', '.join(missing)}: that job failed or was cancelled."]
+    seconds = next((round(p["transcription"]["audio_s"]) for p in current.values()), 0)
     flags = []
-    lines += ["", "### Speed", ""] + speed_table(current, baseline, flags)
-    lines += ["", "### Scenarios passed", ""] + scenario_table(current, baseline)
+    lines += ["", "### 1. Transcription", "", f"Speech to raw text, for one recording of {seconds} s.", ""]
+    lines += metric_table(transcription, current, baseline, flags)
+    lines += ["", "### 2. Cleanup", "", "Raw text to the text that gets typed.", ""]
+    lines += metric_table(cleanup, current, baseline, flags)
+    lines += ["", "### 3. Scenarios", "", "Scenarios passed in each group, by the rules alone and with the language model.", ""]
+    lines += scenario_table(current, baseline)
     changed = flips(current, baseline)
     if changed:
-        lines += ["", "### Changes from main", ""] + changed
-    slower = [what for flag, what in flags if flag == "slower"]
+        lines += ["", "#### Changes from main", ""] + changed
     lines += ["", "### Verdict", ""]
-    regressions = [line for line in changed if "now fails" in line]
+    worse = [line for line in changed if "now fails" in line]
     if not baseline_doc:
-        lines.append("No baseline to compare with yet.")
-    elif not slower and not regressions:
+        lines.append("Nothing to compare with yet.")
+    elif not flags and not worse:
         lines.append("No regressions beyond the noise margin.")
     else:
-        if slower:
-            lines.append(f"Slower than main: {'; '.join(slower)}.")
-        if regressions:
-            lines.append(f"{len(regressions)} scenario result(s) got worse; see Changes from main.")
+        if flags:
+            lines.append(f"Worse than main: {'; '.join(flags)}.")
+        if worse:
+            lines.append(f"{len(worse)} scenario result(s) got worse; see Changes from main.")
     failing = failures(current)
     if failing:
         lines += ["", "<details><summary>Scenarios that fail on this branch</summary>", ""] + failing + ["", "</details>"]
@@ -204,9 +257,23 @@ def render(current, baseline_doc, pr, run_url, results_path):
         "",
         "</details>",
         "",
-        f"Scenarios: `bench/scenarios.json`. Cleanup prompt: `core/src/prompts/cleanup.txt`. "
-        f"After every check passes, CI records these results in `{results_path}`.",
     ]
+    used = models(current)
+    footer = (
+        f"Models are the defaults in `core/defaults.json`: speech `{used.get('speech')}`, "
+        f"language model `{used.get('cleanup')}`."
+    )
+    before = models(baseline)
+    if baseline_doc and before and (before.get("speech"), before.get("cleanup_digest")) != (
+        used.get("speech"),
+        used.get("cleanup_digest"),
+    ):
+        footer += f" `main` was measured with speech `{before.get('speech')}`, language model `{before.get('cleanup')}`."
+    lines.append(footer)
+    lines.append(
+        "Scenarios: `bench/scenarios.json`. Cleanup prompt: `core/src/prompts/cleanup.txt`. "
+        f"Once every check passes, CI records these results in `{results_path}`."
+    )
     if run_url:
         lines.append(f"[Run]({run_url})")
     return "\n".join(lines) + "\n"
@@ -225,9 +292,11 @@ def main():
     current = load_platforms(args.results)
     baseline = None
     if args.baseline and Path(args.baseline).is_file():
-        baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+        loaded = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+        if loaded.get("schema") == SCHEMA:
+            baseline = loaded
     record = {
-        "schema": 1,
+        "schema": SCHEMA,
         "pr": args.pr,
         "head_sha": args.head_sha,
         "recorded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -236,7 +305,7 @@ def main():
     }
     Path(args.out_json).write_text(json.dumps(record, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     results_path = f"bench/perf/results/pr-{args.pr}.json"
-    Path(args.out_md).write_text(render(current, baseline, args.pr, args.run_url, results_path), encoding="utf-8")
+    Path(args.out_md).write_text(render(current, baseline, args.run_url, results_path), encoding="utf-8")
 
 
 if __name__ == "__main__":
