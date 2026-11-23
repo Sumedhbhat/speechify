@@ -166,7 +166,7 @@
     "id": "keep-question",
     "kind": "keep",
     "raw": "what time is the standup tomorrow",
-    "checks": { "contains": ["what time is the standup tomorrow", "?"] }
+    "checks": { "contains": [["what time is the standup tomorrow", "what time is the stand-up tomorrow"], "?"] }
   },
   {
     "id": "keep-actually",

@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-check="$1"
 bot="41898282+github-actions[bot]@users.noreply.github.com"
+reuse() {
+  echo "$2" >&2
+  echo "reuse=$1"
+  exit 0
+}
 
-if [ "$(git log -1 --format=%ae HEAD)" != "$bot" ]; then
-  echo "HEAD was not written by the results job, so it needs the full CI run." >&2
-  exit 1
+if [ "${GITHUB_EVENT_NAME:-}" != workflow_dispatch ]; then
+  reuse false "Not a dispatched run, so everything runs."
 fi
-changed="$(git diff --name-only HEAD^ HEAD)"
-if [ -z "$changed" ] || grep -v '^bench/perf/results/[^/]*\.json$' <<< "$changed"; then
-  echo "HEAD changes more than performance results, so it needs the full CI run." >&2
-  exit 1
+if [ "$(git log -1 --format=%ae HEAD)" != "$bot" ]; then
+  reuse false "HEAD was not written by the performance job, so everything runs."
+fi
+changed="$(git diff --name-only HEAD^ HEAD 2> /dev/null || true)"
+if [ -z "$changed" ] || grep -qv '^bench/perf/results/[^/]*\.json$' <<< "$changed"; then
+  reuse false "HEAD changes more than performance results, so everything runs."
 fi
 parent="$(git rev-parse HEAD^)"
-conclusion="$(bash scripts/wait-for-checks.sh "$parent" "$check")"
+conclusion="$(gh api "repos/$GITHUB_REPOSITORY/commits/$parent/check-runs?check_name=Tauri%20full%20coverage%20gate&app_id=15368&filter=latest" \
+  --jq '[.check_runs[] | select(.status == "completed")] | sort_by(.completed_at) | last | .conclusion // ""' || true)"
 if [ "$conclusion" != success ]; then
-  echo "$check concluded $conclusion on ${parent::7}, the commit these results were measured on." >&2
-  exit 1
+  reuse false "The coverage gate on ${parent::7} is '${conclusion:-missing}', so everything runs."
 fi
-echo "$check passed on ${parent::7}, and HEAD only adds performance results."
+reuse true "HEAD only adds performance results, and every check passed on ${parent::7}."

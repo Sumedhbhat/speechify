@@ -28,8 +28,30 @@ env:
   TEST_STREAM_MODEL_SHA256: 930e4622ad3a24158b91406c30c977fa6a26b34cb32d6ac3e57cfb23383a869e
 
 jobs:
+  results-commit:
+    name: Check for a results-only commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      reuse: ${{ steps.check.outputs.reuse }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Reuse the checks of the measured commit if HEAD only adds its results
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/check-results-commit.sh >> "$GITHUB_OUTPUT"
+
   test:
     name: Test (${{ matrix.os }})
+    needs: results-commit
+    if: ${{ !cancelled() }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -37,11 +59,98 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
+            platform: linux
             python: python3
+            exe: ''
           - os: macos-15
+            platform: macos
             python: python3
+            exe: ''
           - os: windows-2025
+            platform: windows
             python: python
+            exe: .exe
+    env:
+      FULL: ${{ needs.results-commit.outputs.reuse != 'true' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.FULL == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: env.FULL == 'true'
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install Linux build prerequisites
+        if: env.FULL == 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libx11-dev libxtst-dev libxi-dev
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: env.FULL == 'true'
+        with:
+          path: .build/models
+          key: test-models-${{ env.TEST_MODEL_SHA256 }}-${{ env.TEST_TOKEN_MODEL_SHA256 }}-${{ env.TEST_STREAM_MODEL_SHA256 }}
+      - name: Fetch the speech runtime and the test model
+        if: env.FULL == 'true'
+        run: bash scripts/fetch-test-fixtures.sh "${{ matrix.python }}"
+      - name: Frontend
+        if: env.FULL == 'true'
+        run: |
+          npm ci
+          npm run build
+          npm test
+      - name: Formatting and lints
+        if: env.FULL == 'true' && runner.os == 'Linux'
+        run: |
+          npm run format:check
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Rust tests
+        if: env.FULL == 'true'
+        run: |
+          source .build/test-env.sh
+          cargo test --workspace --locked
+      - name: Build the app
+        if: env.FULL == 'true'
+        run: cargo build -p speechify --locked
+      - name: Build the performance binary
+        if: env.FULL == 'true' && github.event_name == 'pull_request'
+        run: cargo build --release --locked -p speechify-bench --bin perf
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: env.FULL == 'true' && github.event_name == 'pull_request'
+        with:
+          name: perf-bin-${{ matrix.platform }}
+          path: target/release/perf${{ matrix.exe }}
+          retention-days: 3
+
+  measure:
+    name: Measure (${{ matrix.platform }})
+    needs: test
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            python: python3
+            exe: ''
+          - os: macos-15
+            platform: macos
+            python: python3
+            exe: ''
+          - os: windows-2025
+            platform: windows
+            python: python
+            exe: .exe
     defaults:
       run:
         shell: bash
@@ -49,79 +158,154 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          node-version: '24.21.0'
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - name: Install Linux build prerequisites
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libx11-dev libxtst-dev libxi-dev
+          name: perf-bin-${{ matrix.platform }}
+          path: .build/perf-bin
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .build/models
           key: test-models-${{ env.TEST_MODEL_SHA256 }}-${{ env.TEST_TOKEN_MODEL_SHA256 }}-${{ env.TEST_STREAM_MODEL_SHA256 }}
-      - name: Fetch the speech runtime and the test model
+      - name: Fetch the speech runtime and the test models
         run: bash scripts/fetch-test-fixtures.sh "${{ matrix.python }}"
-      - name: Frontend
+      - name: Fetch the language model server and model
+        run: '"${{ matrix.python }}" scripts/fetch-perf-llm.py .build/llm'
+      - name: Measure speed and run the scenarios
+        env:
+          PERF_PLATFORM: ${{ matrix.platform }}
         run: |
-          npm ci
-          npm run build
-          npm test
-      - name: Formatting and lints
-        if: runner.os == 'Linux'
-        run: |
-          npm run format:check
-          cargo fmt --all --check
-          cargo clippy --workspace --all-targets --locked -- -D warnings
-      - name: Rust tests
-        run: |
+          chmod +x ".build/perf-bin/perf${{ matrix.exe }}"
           source .build/test-env.sh
-          cargo test --workspace --locked
-      - name: Build the app
-        run: cargo build -p speechify --locked
+          mkdir -p .build/perf
+          bash scripts/perf-run.sh ".build/perf-bin/perf${{ matrix.exe }}" .build/llm ".build/perf/${{ matrix.platform }}.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: perf-${{ matrix.platform }}
+          path: .build/perf/${{ matrix.platform }}.json
+          retention-days: 30
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: perf-${{ matrix.platform }}-server-log
+          path: .build/llm/server.log
+          retention-days: 7
 
   coverage-gate:
     name: Tauri full coverage gate
-    needs: test
+    needs: [results-commit, test]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      FULL: ${{ needs.results-commit.outputs.reuse != 'true' }}
     steps:
       - name: Require passing tests on every platform
         env:
           TEST_RESULT: ${{ needs.test.result }}
         run: test "$TEST_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.FULL == 'true'
         with:
           fetch-depth: 0
           persist-credentials: false
       - name: Require performance results to come from CI
-        if: github.event_name == 'pull_request'
+        if: env.FULL == 'true' && github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: bash scripts/check-results-authors.sh "$BASE_SHA" "$HEAD_SHA"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: env.FULL == 'true'
         with:
           node-version: '24.21.0'
           cache: npm
           cache-dependency-path: package-lock.json
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: env.FULL == 'true'
         with:
           path: .build/models
           key: test-models-${{ env.TEST_MODEL_SHA256 }}-${{ env.TEST_TOKEN_MODEL_SHA256 }}-${{ env.TEST_STREAM_MODEL_SHA256 }}
       - name: Install coverage tools
+        if: env.FULL == 'true'
         run: |
           cargo install cargo-llvm-cov --version 0.9.1 --locked
           npm ci
       - name: Require full coverage of the core and the interface
+        if: env.FULL == 'true'
         run: bash scripts/coverage.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+        if: always() && env.FULL == 'true'
         with:
           name: coverage
           path: coverage/
           retention-days: 14
+
+  performance:
+    name: Performance report
+    needs: [measure, coverage-gate]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      PR: ${{ github.event.pull_request.number }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: perf-*
+          path: .build/perf/platforms
+      - name: Find the latest results on main
+        run: |
+          latest="$(git log -1 --format= --name-only --diff-filter=AM "$BASE_SHA" -- 'bench/perf/results/*.json' | sed '/^$/d' | head -n 1)"
+          if [ -n "$latest" ]; then
+            git show "$BASE_SHA:$latest" > .build/perf/baseline.json
+            echo "Comparing with $latest"
+          fi
+      - name: Build the table
+        run: |
+          python3 bench/perf_report.py .build/perf/platforms --baseline .build/perf/baseline.json \
+            --pr "$PR" --head-sha "$HEAD_SHA" --run-url "$RUN_URL" \
+            --out-json .build/perf/record.json --out-md .build/perf/comment.md
+          cat .build/perf/comment.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Comment on the pull request
+        if: env.SAME_REPO == 'true'
+        run: |
+          id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- speechify-performance -->"))) | .id' | head -n 1)"
+          body="$(jq -Rs '{body: .}' .build/perf/comment.md)"
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" --input - <<< "$body" > /dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --input - <<< "$body" > /dev/null
+          fi
+      - name: Record the results in the pull request
+        id: record
+        if: env.SAME_REPO == 'true' && needs.measure.result == 'success' && needs.coverage-gate.result == 'success'
+        run: |
+          file="bench/perf/results/pr-$PR.json"
+          mkdir -p bench/perf/results
+          cp .build/perf/record.json "$file"
+          git add "$file"
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Record performance results for ${HEAD_SHA::7}"
+          if git push origin "HEAD:refs/heads/$HEAD_REF"; then
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "The branch moved on since this run started; the next run records its own results."
+          fi
+      - name: Run CI on the results commit
+        if: steps.record.outputs.pushed == 'true'
+        run: gh workflow run ci.yml --ref "$HEAD_REF"

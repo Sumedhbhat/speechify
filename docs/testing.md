@@ -58,17 +58,38 @@ A new pull request run cancels the one it supersedes. Release runs always finish
 
 ## Performance and cleanup scenarios
 
-`.github/workflows/performance.yml` runs on every pull request. It never fails a pull request over a slower number or a worse scenario. It reports them in a comment.
+On pull requests, `ci.yml` also measures performance. The jobs run in this order:
 
-- **Measure (linux, macos, windows)**: builds `speechify-bench`'s `perf` binary in release mode on `ubuntu-24.04`, `macos-15` and `windows-2025`, then runs `scripts/perf-run.sh`. That times the whole dictation pipeline (voice detector, recognition, formatting) on `jfk.wav` with the two test models (load time, then the median of 5 warm runs), times the rule formatter over every scenario, and runs each scenario in `bench/scenarios.json` twice: through the rules alone, and through the cleanup model with the real system prompt (`core/src/prompts/cleanup.txt`), vetting and fallback. The cleanup model is gemma-3-4b-it Q4_K_M (the app's default `gemma3:4b`), served on the CPU by llama.cpp `b12211`. Both are pinned by SHA-256 in `scripts/fetch-perf-llm.py`. CI uses a 180-second request budget instead of the app's 6 seconds, so the prompt is judged on its answers rather than on runner speed.
-- **Performance report**: merges the three results, compares them with the latest results file on `main`, and posts one comment on the pull request, updated on every push. The comment marks timing changes beyond ±15% (and beyond a small absolute floor), lists scenarios that started or stopped passing, shows every failing scenario with what was said and what came out, and ends with a JSON summary for tools to read.
-- **Record performance results**: waits for `Tauri full coverage gate` to pass on the same commit, then commits the merged results to the pull request branch as `bench/perf/results/pr-<number>.json`, authored by `github-actions[bot]`. Merging the pull request brings that file to `main`, and the most recently added results file on `main` is what later pull requests compare with. Each pull request writes its own file, so two open pull requests never conflict over results.
+1. **Test (ubuntu-24.04, macos-15, windows-2025)** also builds the `perf` binary (`bench/src/bin/perf.rs`) in release mode and uploads it.
+2. **Measure (linux, macos, windows)** starts once every Test job has finished. Each one takes the binary built on its own platform and runs `scripts/perf-run.sh`, which:
+   - times the whole dictation pipeline (voice detector, recognition, formatting) on `jfk.wav` with the two test models: the load time, then the median of 5 warm runs;
+   - times the rule formatter over every scenario;
+   - runs each scenario in `bench/scenarios.json` twice: through the rules alone, and through the cleanup model with the real system prompt (`core/src/prompts/cleanup.txt`), vetting and fallback.
 
-After the results commit lands, pull before you push again: the branch has a commit you do not have locally.
+   The cleanup model is gemma-3-4b-it Q4_K_M, the same weights as the app's default `gemma3:4b`. llama.cpp `b12211` serves it on the CPU. `scripts/fetch-perf-llm.py` pins both by SHA-256. CI gives each request 180 seconds instead of the app's 6, so the prompt is judged on its answers, not on how fast the runner is.
+3. **Performance report** waits for every Measure job and for the coverage gate. It merges the three results into one table, compares them with the latest results file on `main`, and posts one comment on the pull request, updated on every push. The comment:
+   - marks timing changes beyond ±15% (and beyond a small absolute floor);
+   - lists scenarios that started or stopped passing;
+   - shows every failing scenario, with what was said and what came out;
+   - ends with a JSON summary for tools to read.
 
-A commit pushed with the workflow token starts no workflows, so the results commit would have no required checks. `Record performance results` starts `.github/workflows/ci-results.yml` for it. That workflow's jobs have the required check names. Each one passes only if the head commit is from `github-actions[bot]`, changes nothing but `bench/perf/results/*.json`, and the same check passed on the commit before it. GitHub only starts `workflow_dispatch` workflows that already exist on `main`, so this works from the first pull request after the one that added it.
+   When every Measure job and the coverage gate passed, it commits the merged results to the pull request branch as `bench/perf/results/pr-<number>.json`, authored by `github-actions[bot]`. Merging the pull request brings that file to `main`, and later pull requests compare with the most recently added results file there. Each pull request writes its own file, so two open pull requests never conflict over results.
 
-Only CI writes `bench/perf/results`. `Tauri full coverage gate` fails a pull request with a commit touching that folder unless `github-actions[bot]` wrote it.
+None of this fails a pull request over a slower number or a worse scenario. The comment reports them.
+
+After the results commit lands, pull before you push again: the branch now has a commit you do not have locally.
+
+A commit pushed with the workflow token starts no workflows, so the results commit would have no required checks. Performance report therefore starts `ci.yml` again for it through `workflow_dispatch`. In that run, **Check for a results-only commit** looks at three things:
+
+- whether the head commit is from `github-actions[bot]`;
+- whether it changes nothing but `bench/perf/results/*.json`;
+- whether `Tauri full coverage gate` passed on the commit before it.
+
+If all three hold, the Test jobs and the coverage gate pass without repeating their steps. Otherwise everything runs.
+
+Only CI writes `bench/perf/results`. The coverage gate fails a pull request that has a commit touching that folder unless `github-actions[bot]` wrote it.
+
+`release.yml` grants its `Tests` job the permissions that `ci.yml`'s jobs ask for, because a reusable workflow cannot ask for more than its caller. On pushes, the jobs that use them (Performance report and the results check) are skipped or read nothing.
 
 Scenario checks, all optional: `equals` (exact text), `contains` (each entry a phrase, or a list of alternatives), `absent` (phrases that must not remain, matched as whole words), `list` (`numbered`, `bullets` or `none`) with `items`, `paragraphs` (blocks separated by a blank line) and `min_lines`. `category` is `work` (the default, typing into Slack), `email`, `code` or `personal`. Some scenarios describe behaviour the app does not have yet, such as bullet points for items that are listed without being counted. They fail until it does, and the comment shows when that changes.
 

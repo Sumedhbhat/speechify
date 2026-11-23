@@ -75,6 +75,11 @@ jobs:
   tests:
     name: Tests
     if: github.event_name == 'push'
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+      checks: read
     uses: ./.github/workflows/ci.yml
 
   package:
