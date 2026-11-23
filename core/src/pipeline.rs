@@ -233,9 +233,14 @@ fn prepare(raw: &str, to: &Destination, (circuit, now_ms): (&RewriteCircuit, u64
         out.text = text;
         return Err(Some(out));
     }
-    let by_rules = format::format(&heard, &options(to, &rules, whole));
-    // A block counts the words before it: the threshold is for the dictation.
     let spoken = heard.split_whitespace().count() + said;
+    let mut restarts = Edits::default();
+    if !category.literal() {
+        heard = format::repair_restarts(&heard, &mut restarts);
+    }
+    let mut by_rules = format::format(&heard, &options(to, &rules, whole));
+    by_rules.edits.backtracks += restarts.backtracks;
+    // A block counts the words before it: the threshold is for the dictation.
     let long_enough = spoken >= settings.rewrite.min_words;
     if settings.rewrite.enabled && long_enough && rewriter.is_some() {
         if circuit.cooling(now_ms) {
@@ -1292,6 +1297,46 @@ mod tests {
         let seen = llm.seen.borrow();
         assert!(seen[0].0.contains("Destination: Work messages") && seen[0].0.contains("RAW: uh ping me"));
         assert!(seen[0].1.contains("typing into Slack"));
+    }
+
+    #[test]
+    fn a_restarted_phrase_is_repaired_before_the_model_sees_it() {
+        let store = Store::memory();
+        let mut settings = Settings::default();
+        let said = "let's merge the latest branch, latest master branch into this branch, please";
+        let meant = "let's merge the latest master branch into this branch, please";
+        let llm = Scripted::new(vec![Ok(
+            "Let's merge the latest master branch into this branch, please.".into(),
+        )]);
+        let audio = tone(3000, 0.3);
+        let (paste, record, _) = text(run(
+            &request(&audio, "Slack"),
+            &settings,
+            &store,
+            &mut Fixed::new(&[said]),
+            Some(&llm),
+        ));
+        assert_eq!(paste, "Let's merge the latest master branch into this branch, please. ");
+        assert!(record.rewritten && record.fixes >= 1);
+        assert!(llm.seen.borrow()[0].1.contains(&format!("<<<\n{meant}\n>>>")));
+        settings.rewrite.enabled = false;
+        let (paste, record, _) = text(run(
+            &request(&audio, "Slack"),
+            &settings,
+            &store,
+            &mut Fixed::new(&[said]),
+            None,
+        ));
+        assert_eq!(paste, "Let's merge the latest master branch into this branch, please. ");
+        assert_eq!(record.fixes, 1);
+        let (paste, _, _) = text(run(
+            &request(&audio, "Windows Terminal"),
+            &settings,
+            &store,
+            &mut Fixed::new(&["run the tests, run the integration tests"]),
+            None,
+        ));
+        assert_eq!(paste, "run the tests, run the integration tests");
     }
 
     #[test]
