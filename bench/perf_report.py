@@ -10,9 +10,14 @@ KINDS = ["corrections", "repetition", "lists", "paragraphs", "fillers", "formatt
 NOISE = 0.15
 
 
+def attempt(path):
+    suffix = path.parent.name.rsplit("-", 1)[-1]
+    return int(suffix) if suffix.isdigit() else 0
+
+
 def load_platforms(directory):
     found = {}
-    for path in sorted(Path(directory).rglob("*.json")):
+    for path in sorted(Path(directory).rglob("*.json"), key=lambda p: (attempt(p), str(p))):
         data = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(data, dict) and data.get("schema") == SCHEMA and "platform" in data:
             found[data["platform"]] = data

@@ -154,13 +154,13 @@ jobs:
           bash scripts/perf-run.sh ".build/perf-bin/perf${{ matrix.exe }}" .build/llm ".build/perf/${{ matrix.platform }}.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: perf-${{ matrix.platform }}
+          name: perf-result-${{ matrix.platform }}-${{ github.run_attempt }}
           path: .build/perf/${{ matrix.platform }}.json
           retention-days: 30
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
-          name: perf-${{ matrix.platform }}-server-log
+          name: perf-server-log-${{ matrix.platform }}-${{ github.run_attempt }}
           path: .build/llm/server.log
           retention-days: 7
 
@@ -232,7 +232,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: perf-*
+          pattern: perf-result-*
           path: .build/perf/platforms
       - name: Find the latest results on main
         run: |
