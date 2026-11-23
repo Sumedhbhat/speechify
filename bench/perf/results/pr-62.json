@@ -1,20 +1,20 @@
 {
  "schema": 2,
  "pr": 62,
- "head_sha": "853da884c9a52064f366f7d5ed29c44b175cb397",
- "recorded_at": "2026-11-23T18:03:15Z",
- "run_url": "https://github.com/Sumedhbhat/speechify/actions/runs/45227151931",
+ "head_sha": "86b5f1a0f2ccd1b31a03bdc8226b49f3388a1bd4",
+ "recorded_at": "2026-11-23T21:36:52Z",
+ "run_url": "https://github.com/Sumedhbhat/speechify/actions/runs/45265445148",
  "platforms": {
   "linux": {
    "arch": "x86_64",
    "cleanup": {
     "llm": {
      "calls": 31,
-     "median_ms": 16170.528271999998,
-     "p90_ms": 18027.682714000002,
+     "median_ms": 16349.589049999999,
+     "p90_ms": 18320.098737,
      "rejected": 3
     },
-    "rules_ms": 1.030198
+    "rules_ms": 1.033085
    },
    "cpus": 4,
    "image": "ubuntu24 20261116.376.1",
@@ -32,7 +32,7 @@
       "answer": "let’s meet at 3 tomorrow:",
       "failures": [],
       "fallback": null,
-      "ms": 15566.878681,
+      "ms": 16148.245483,
       "passed": true,
       "rewritten": true,
       "text": "Let’s meet at 3 tomorrow:"
@@ -53,7 +53,7 @@
        "still has \"no wait\""
       ],
       "fallback": null,
-      "ms": 16251.468513,
+      "ms": 16494.083788,
       "passed": false,
       "rewritten": true,
       "text": "Send the invoice to Priya, no wait, send it to Priya."
@@ -76,7 +76,7 @@
        "still has \"sorry\""
       ],
       "fallback": null,
-      "ms": 15939.725201,
+      "ms": 16136.935253000001,
       "passed": false,
       "rewritten": true,
       "text": "The deadline for the report is Monday, sorry."
@@ -95,7 +95,7 @@
       "answer": "book a table for six people",
       "failures": [],
       "fallback": null,
-      "ms": 15558.934783,
+      "ms": 15646.897084999999,
       "passed": true,
       "rewritten": true,
       "text": "Book a table for six people."
@@ -118,7 +118,7 @@
        "still has \"or rather\""
       ],
       "fallback": null,
-      "ms": 16345.554848,
+      "ms": 16782.29662,
       "passed": false,
       "rewritten": true,
       "text": "We should store the sessions in PostgreSQL or rather in Redis for now."
@@ -140,7 +140,7 @@
        "still has \"5\""
       ],
       "fallback": null,
-      "ms": 16170.528271999998,
+      "ms": 16659.245001,
       "passed": false,
       "rewritten": true,
       "text": "Call me back at 5 pm if that works."
@@ -163,7 +163,7 @@
        "still has \"latest branch\""
       ],
       "fallback": null,
-      "ms": 16465.713609000002,
+      "ms": 16656.147505,
       "passed": false,
       "rewritten": true,
       "text": "The latest branch, the latest master branch has the fix for the crash."
@@ -184,7 +184,7 @@
       "answer": "I think the plan is fine",
       "failures": [],
       "fallback": null,
-      "ms": 15425.733100000001,
+      "ms": 15523.560674,
       "passed": true,
       "rewritten": true,
       "text": "I think the plan is fine."
@@ -203,7 +203,7 @@
       "answer": "Can you send me the final report by tonight?",
       "failures": [],
       "fallback": null,
-      "ms": 15901.151802999999,
+      "ms": 16057.164696000002,
       "passed": true,
       "rewritten": true,
       "text": "Can you send me the final report by tonight?"
@@ -222,7 +222,7 @@
       "answer": "we need to fix the login page bug before the release",
       "failures": [],
       "fallback": null,
-      "ms": 16159.594476999999,
+      "ms": 16331.072911,
       "passed": true,
       "rewritten": true,
       "text": "We need to fix the login page bug before the release."
@@ -245,7 +245,7 @@
        "expected exactly \"He had had enough, very very much.\""
       ],
       "fallback": null,
-      "ms": 15915.894083,
+      "ms": 15665.319219,
       "passed": false,
       "rewritten": true,
       "text": "He had enough, very much."
@@ -266,7 +266,7 @@
        "expected numbered list, got none"
       ],
       "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 18027.682714000002,
+      "ms": 18266.059628,
       "passed": false,
       "rewritten": false,
       "text": "My plan for today is one buy milk two call mom three pay the bills."
@@ -289,7 +289,7 @@
        "expected numbered list, got none"
       ],
       "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 17485.079482,
+      "ms": 17749.327731,
       "passed": false,
       "rewritten": false,
       "text": "First we review the code second we run the tests and third we deploy to staging."
@@ -310,7 +310,7 @@
       "answer": "1. Install the app:\n2. Sign in:\n3. Pick a model:",
       "failures": [],
       "fallback": null,
-      "ms": 17427.826571,
+      "ms": 17444.829797000002,
       "passed": true,
       "rewritten": true,
       "text": "1. Install the app:\n2. Sign in:\n3. Pick a model:"
@@ -335,7 +335,7 @@
        "expected bullets list, got none"
       ],
       "fallback": null,
-      "ms": 17357.063084,
+      "ms": 17432.172605000003,
       "passed": false,
       "rewritten": true,
       "text": "Things to pack for the trip: sunscreen, a hat, two water bottles, and some snacks."
@@ -358,7 +358,7 @@
        "expected bullets list, got none"
       ],
       "fallback": null,
-      "ms": 17351.545066,
+      "ms": 17501.293798,
       "passed": false,
       "rewritten": true,
       "text": "Agenda for tomorrow’s meeting: budget review, the hiring plan, and the product roadmap:"
@@ -381,7 +381,7 @@
        "expected bullets list, got none"
       ],
       "fallback": null,
-      "ms": 17992.237696,
+      "ms": 18320.098737,
       "passed": false,
       "rewritten": true,
       "text": "This release has a few changes: a new settings page, faster startup, and a fix for the crash on wake."
@@ -404,7 +404,7 @@
        "expected bullets list, got none"
       ],
       "fallback": null,
-      "ms": 15358.131416999999,
+      "ms": 15448.800025,
       "passed": false,
       "rewritten": true,
       "text": "Bullet rice bullet tea bullet sugar."
@@ -423,7 +423,7 @@
       "answer": "the summer programme begins tomorrow and runs for two weeks:",
       "failures": [],
       "fallback": null,
-      "ms": 16017.079482,
+      "ms": 16303.102933000002,
       "passed": true,
       "rewritten": true,
       "text": "The summer programme begins tomorrow and runs for two weeks:"
@@ -442,7 +442,7 @@
       "answer": "I bought milk and eggs on the way home today",
       "failures": [],
       "fallback": null,
-      "ms": 15991.327341,
+      "ms": 16061.313155,
       "passed": true,
       "rewritten": true,
       "text": "I bought milk and eggs on the way home today."
@@ -463,7 +463,7 @@
        "expected 3 paragraphs, got 1"
       ],
       "fallback": null,
-      "ms": 16476.592469,
+      "ms": 16587.563769,
       "passed": false,
       "rewritten": true,
       "text": "Hi team: the build is green and ready to ship. Thanks."
@@ -484,7 +484,7 @@
        "expected at least 3 lines, got 1"
       ],
       "fallback": null,
-      "ms": 18424.690847,
+      "ms": 18678.345825,
       "passed": false,
       "rewritten": true,
       "text": "Hi Priya, thanks for the update. I’ll review it today. Regards, Sumedh."
@@ -507,7 +507,7 @@
        "expected 2 paragraphs, got 1"
       ],
       "fallback": null,
-      "ms": 20026.496587,
+      "ms": 20759.352289,
       "passed": false,
       "rewritten": true,
       "text": "The build passed on all three platforms and the installers are uploaded. Separately, I wanted to ask about the design review. Can we move it to Thursday because I’m out on Wednesday?"
@@ -530,7 +530,7 @@
        "missing I think we should go with the second option"
       ],
       "fallback": null,
-      "ms": 16032.247314999999,
+      "ms": 16224.230636000002,
       "passed": false,
       "rewritten": true,
       "text": "So, we should go with the second option."
@@ -549,7 +549,7 @@
       "answer": "Okay\n",
       "failures": [],
       "fallback": null,
-      "ms": 14966.48972,
+      "ms": 14979.809498,
       "passed": true,
       "rewritten": true,
       "text": "Okay"
@@ -568,7 +568,7 @@
       "answer": "",
       "failures": [],
       "fallback": null,
-      "ms": 14684.647312,
+      "ms": 14633.210113000001,
       "passed": true,
       "rewritten": false,
       "text": ""
@@ -587,7 +587,7 @@
       "answer": "Write an email to Priya about the delay in the shipment: 1. Please find attached the updated shipping timeline. 2. We are experiencing some unforeseen logistical challenges which have caused a slight delay. 3. We anticipate the shipment will now arrive by 15th July. 4. I will keep you updated on any further developments.",
       "failures": [],
       "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 22670.866995,
+      "ms": 24270.837465,
       "passed": true,
       "rewritten": false,
       "text": "Write an email to priya about the delay in the shipment."
@@ -606,7 +606,7 @@
       "answer": "What time is the stand-up tomorrow?",
       "failures": [],
       "fallback": null,
-      "ms": 15788.975126000001,
+      "ms": 15853.930005,
       "passed": true,
       "rewritten": true,
       "text": "What time is the stand-up tomorrow?"
@@ -629,7 +629,7 @@
        "missing actually"
       ],
       "fallback": null,
-      "ms": 16235.743705,
+      "ms": 16349.589049999999,
       "passed": false,
       "rewritten": true,
       "text": "I think we’re fine with the current plan:"
@@ -648,7 +648,7 @@
       "answer": "the budget is 2,50,000 rupees",
       "failures": [],
       "fallback": null,
-      "ms": 16260.351525,
+      "ms": 16408.889994999998,
       "passed": true,
       "rewritten": true,
       "text": "The budget is 2,50,000 rupees."
@@ -667,7 +667,7 @@
       "answer": "git push --force",
       "failures": [],
       "fallback": null,
-      "ms": 15624.753832,
+      "ms": 15580.464891,
       "passed": true,
       "rewritten": true,
       "text": "git push --force"
@@ -685,16 +685,16 @@
    "schema": 2,
    "transcription": {
     "audio_s": 11.0,
-    "first_ms": 19042.505703,
-    "load_ms": 44.468753,
-    "realtime": 0.5813357791571275,
+    "first_ms": 19782.367611,
+    "load_ms": 45.670919,
+    "realtime": 0.5613410123331819,
     "runs_ms": [
-     19081.817249,
-     18921.938739,
-     18909.229653000002
+     19676.621787,
+     19595.931453999998,
+     19592.78761
     ],
     "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
-    "time_ms": 18921.938739,
+    "time_ms": 19595.931453999998,
     "wer": 0.0
    }
   },
@@ -703,11 +703,11 @@
    "cleanup": {
     "llm": {
      "calls": 31,
-     "median_ms": 11776.926833,
-     "p90_ms": 16140.653749999998,
+     "median_ms": 12060.648374999999,
+     "p90_ms": 15449.046125,
      "rejected": 3
     },
-    "rules_ms": 0.6561250000000001
+    "rules_ms": 1.780459
    },
    "cpus": 3,
    "image": "macos15 20261118.0550.1",
@@ -725,7 +725,7 @@
       "answer": "let’s meet at 3 tomorrow:",
       "failures": [],
       "fallback": null,
-      "ms": 9842.354708,
+      "ms": 14797.8845,
       "passed": true,
       "rewritten": true,
       "text": "Let’s meet at 3 tomorrow:"
@@ -744,7 +744,7 @@
       "answer": "send the invoice to Priya",
       "failures": [],
       "fallback": null,
-      "ms": 9153.831542,
+      "ms": 11789.860542,
       "passed": true,
       "rewritten": true,
       "text": "Send the invoice to Priya."
@@ -767,7 +767,7 @@
        "still has \"sorry\""
       ],
       "fallback": null,
-      "ms": 9763.820292,
+      "ms": 13416.635041,
       "passed": false,
       "rewritten": true,
       "text": "The deadline for the report is Monday, sorry."
@@ -786,7 +786,7 @@
       "answer": "book a table for six people",
       "failures": [],
       "fallback": null,
-      "ms": 8521.672125000001,
+      "ms": 15449.046125,
       "passed": true,
       "rewritten": true,
       "text": "Book a table for six people."
@@ -809,7 +809,7 @@
        "still has \"or rather\""
       ],
       "fallback": null,
-      "ms": 9130.694207999999,
+      "ms": 15672.030708,
       "passed": false,
       "rewritten": true,
       "text": "We should store the sessions in PostgreSQL or rather in Redis for now."
@@ -831,7 +831,7 @@
        "still has \"5\""
       ],
       "fallback": null,
-      "ms": 8759.369459,
+      "ms": 12655.151583,
       "passed": false,
       "rewritten": true,
       "text": "Call me back at 5 pm if that works."
@@ -854,7 +854,7 @@
        "still has \"latest branch\""
       ],
       "fallback": null,
-      "ms": 7847.13475,
+      "ms": 13016.398125,
       "passed": false,
       "rewritten": true,
       "text": "The latest branch, the latest master branch has the fix for the crash."
@@ -877,7 +877,7 @@
        "expected exactly \"I think the plan is fine.\""
       ],
       "fallback": null,
-      "ms": 11587.249666,
+      "ms": 12060.648374999999,
       "passed": false,
       "rewritten": true,
       "text": "I think the plan is fine:"
@@ -896,7 +896,7 @@
       "answer": "Can you send me the final report by tonight?",
       "failures": [],
       "fallback": null,
-      "ms": 8672.8135,
+      "ms": 12287.208375,
       "passed": true,
       "rewritten": true,
       "text": "Can you send me the final report by tonight?"
@@ -915,7 +915,7 @@
       "answer": "we need to fix the login page bug before the release",
       "failures": [],
       "fallback": null,
-      "ms": 7812.243958999999,
+      "ms": 11918.492834,
       "passed": true,
       "rewritten": true,
       "text": "We need to fix the login page bug before the release."
@@ -938,7 +938,7 @@
        "expected exactly \"He had had enough, very very much.\""
       ],
       "fallback": null,
-      "ms": 10291.248042,
+      "ms": 11672.045792,
       "passed": false,
       "rewritten": true,
       "text": "He had enough, very much."
@@ -959,7 +959,7 @@
        "expected numbered list, got none"
       ],
       "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 11262.835958,
+      "ms": 12521.40625,
       "passed": false,
       "rewritten": false,
       "text": "My plan for today is one buy milk two call mom three pay the bills."
@@ -982,7 +982,7 @@
        "expected numbered list, got none"
       ],
       "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 13369.418208000001,
+      "ms": 12445.196083,
       "passed": false,
       "rewritten": false,
       "text": "First we review the code second we run the tests and third we deploy to staging."
@@ -1003,7 +1003,7 @@
       "answer": "1. Install the app:\n2. Sign in:\n3. Pick a model:",
       "failures": [],
       "fallback": null,
-      "ms": 15157.638959,
+      "ms": 11372.508583,
       "passed": true,
       "rewritten": true,
       "text": "1. Install the app:\n2. Sign in:\n3. Pick a model:"
@@ -1028,7 +1028,7 @@
        "expected bullets list, got none"
       ],
       "fallback": null,
-      "ms": 13558.720917,
+      "ms": 12308.74,
       "passed": false,
       "rewritten": true,
       "text": "Things to pack for the trip: sunscreen, a hat, two water bottles, and some snacks."
@@ -1051,7 +1051,7 @@
        "expected bullets list, got none"
       ],
       "fallback": null,
-      "ms": 11776.926833,
+      "ms": 11288.808167,
       "passed": false,
       "rewritten": true,
       "text": "Agenda for tomorrow’s meeting: budget review, the hiring plan, and the product roadmap."
@@ -1074,7 +1074,7 @@
        "expected bullets list, got none"
       ],
       "fallback": null,
-      "ms": 12410.729084,
+      "ms": 13018.251291,
       "passed": false,
       "rewritten": true,
       "text": "This release has a few changes: a new settings page, faster startup, and a fix for the crash on wake."
@@ -1097,7 +1097,7 @@
        "expected bullets list, got none"
       ],
       "fallback": null,
-      "ms": 11568.219084,
+      "ms": 10176.01025,
       "passed": false,
       "rewritten": true,
       "text": "Bullet rice bullet tea bullet sugar."
@@ -1116,7 +1116,7 @@
       "answer": "the summer programme begins tomorrow and runs for two weeks:",
       "failures": [],
       "fallback": null,
-      "ms": 14783.706125,
+      "ms": 10524.731,
       "passed": true,
       "rewritten": true,
       "text": "The summer programme begins tomorrow and runs for two weeks:"
@@ -1135,7 +1135,7 @@
       "answer": "I bought milk and eggs on the way home today",
       "failures": [],
       "fallback": null,
-      "ms": 11304.540167000001,
+      "ms": 11131.095625,
       "passed": true,
       "rewritten": true,
       "text": "I bought milk and eggs on the way home today."
@@ -1156,7 +1156,7 @@
        "expected 3 paragraphs, got 1"
       ],
       "fallback": null,
-      "ms": 11315.189124999999,
+      "ms": 12143.895209,
       "passed": false,
       "rewritten": true,
       "text": "Hi team: the build is green and ready to ship. Thanks."
@@ -1177,7 +1177,7 @@
        "expected at least 3 lines, got 1"
       ],
       "fallback": null,
-      "ms": 13719.972583,
+      "ms": 13452.001541,
       "passed": false,
       "rewritten": true,
       "text": "Hi Priya, thanks for the update. I’ll review it today. Regards, Sumedh."
@@ -1200,7 +1200,7 @@
        "expected 2 paragraphs, got 1"
       ],
       "fallback": null,
-      "ms": 16877.653166999997,
+      "ms": 16453.77875,
       "passed": false,
       "rewritten": true,
       "text": "The build passed on all three platforms and the installers are uploaded. Separately, I wanted to ask about the design review. Can we move it to Thursday because I’m out on Wednesday?"
@@ -1221,7 +1221,7 @@
       "answer": "I think we should go with the second option",
       "failures": [],
       "fallback": null,
-      "ms": 14414.26525,
+      "ms": 11163.573124999999,
       "passed": true,
       "rewritten": true,
       "text": "I think we should go with the second option."
@@ -1240,7 +1240,7 @@
       "answer": "Okay\n",
       "failures": [],
       "fallback": null,
-      "ms": 13045.347333,
+      "ms": 9786.172333,
       "passed": true,
       "rewritten": true,
       "text": "Okay"
@@ -1259,7 +1259,7 @@
       "answer": "",
       "failures": [],
       "fallback": null,
-      "ms": 12694.167292,
+      "ms": 9661.412957999999,
       "passed": true,
       "rewritten": false,
       "text": ""
@@ -1278,7 +1278,7 @@
       "answer": "Write an email to Priya about the delay in the shipment: 1. Please find attached the updated shipping timeline. 2. We are experiencing some unforeseen logistical challenges which have caused a slight delay. 3. We anticipate the shipment will now arrive by 15th July. 4. I will keep you updated on any further developments.",
       "failures": [],
       "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 33292.209459,
+      "ms": 15561.202625,
       "passed": true,
       "rewritten": false,
       "text": "Write an email to priya about the delay in the shipment."
@@ -1297,7 +1297,7 @@
       "answer": "What time is the stand-up tomorrow?",
       "failures": [],
       "fallback": null,
-      "ms": 17363.223208,
+      "ms": 10029.401167,
       "passed": true,
       "rewritten": true,
       "text": "What time is the stand-up tomorrow?"
@@ -1320,7 +1320,7 @@
        "missing actually"
       ],
       "fallback": null,
-      "ms": 14931.252791,
+      "ms": 11720.174125,
       "passed": false,
       "rewritten": true,
       "text": "I think we’re fine with the current plan:"
@@ -1339,7 +1339,7 @@
       "answer": "the budget is 2,50,000 rupees",
       "failures": [],
       "fallback": null,
-      "ms": 14463.360292000001,
+      "ms": 10848.847708,
       "passed": true,
       "rewritten": true,
       "text": "The budget is 2,50,000 rupees."
@@ -1358,7 +1358,7 @@
       "answer": "git push --force",
       "failures": [],
       "fallback": null,
-      "ms": 16140.653749999998,
+      "ms": 10270.637875,
       "passed": true,
       "rewritten": true,
       "text": "git push --force"
@@ -1376,16 +1376,16 @@
    "schema": 2,
    "transcription": {
     "audio_s": 11.0,
-    "first_ms": 31356.348749999997,
-    "load_ms": 1918.9177499999998,
-    "realtime": 0.8084892745614757,
+    "first_ms": 26969.204917,
+    "load_ms": 821.6692089999999,
+    "realtime": 0.6053145169981831,
     "runs_ms": [
-     14112.125375,
-     12898.798916,
-     13605.622667
+     18172.371042000002,
+     17773.259792,
+     18388.758416
     ],
     "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
-    "time_ms": 13605.622667,
+    "time_ms": 18172.371042000002,
     "wer": 0.0
    }
   },
@@ -1394,11 +1394,11 @@
    "cleanup": {
     "llm": {
      "calls": 31,
-     "median_ms": 9439.267600000001,
-     "p90_ms": 10899.5204,
+     "median_ms": 9013.472399999999,
+     "p90_ms": 10207.9866,
      "rejected": 3
     },
-    "rules_ms": 1.0304
+    "rules_ms": 1.0009000000000001
    },
    "cpus": 4,
    "image": "win25-vs2026 20261116.315.1",
@@ -1416,7 +1416,7 @@
       "answer": "Let’s meet at 3 tomorrow.",
       "failures": [],
       "fallback": null,
-      "ms": 9376.3065,
+      "ms": 8735.3996,
       "passed": true,
       "rewritten": true,
       "text": "Let’s meet at 3 tomorrow."
@@ -1437,7 +1437,7 @@
        "still has \"no wait\""
       ],
       "fallback": null,
-      "ms": 10035.7026,
+      "ms": 9092.1498,
       "passed": false,
       "rewritten": true,
       "text": "Send the invoice to Priya, no wait, send it to Priya."
@@ -1460,7 +1460,7 @@
        "still has \"sorry\""
       ],
       "fallback": null,
-      "ms": 9664.991600000001,
+      "ms": 9349.3195,
       "passed": false,
       "rewritten": true,
       "text": "The deadline for the report is Monday, sorry."
@@ -1479,7 +1479,7 @@
       "answer": "book a table for six people",
       "failures": [],
       "fallback": null,
-      "ms": 9105.1154,
+      "ms": 9108.1679,
       "passed": true,
       "rewritten": true,
       "text": "Book a table for six people."
@@ -1502,7 +1502,7 @@
        "still has \"or rather\""
       ],
       "fallback": null,
-      "ms": 9619.606600000001,
+      "ms": 10207.9866,
       "passed": false,
       "rewritten": true,
       "text": "We should store the sessions in PostgreSQL or rather in Redis for now."
@@ -1524,7 +1524,7 @@
        "still has \"5\""
       ],
       "fallback": null,
-      "ms": 9157.184000000001,
+      "ms": 9068.898799999999,
       "passed": false,
       "rewritten": true,
       "text": "Call me back at 5 pm if that works."
@@ -1547,7 +1547,7 @@
        "still has \"latest branch\""
       ],
       "fallback": null,
-      "ms": 9543.4758,
+      "ms": 9040.6283,
       "passed": false,
       "rewritten": true,
       "text": "The latest branch, the latest master branch has the fix for the crash."
@@ -1570,7 +1570,7 @@
        "expected exactly \"I think the plan is fine.\""
       ],
       "fallback": null,
-      "ms": 9165.339899999999,
+      "ms": 8471.1769,
       "passed": false,
       "rewritten": true,
       "text": "I think the plan is fine:"
@@ -1589,7 +1589,7 @@
       "answer": "Can you send me the final report by tonight?",
       "failures": [],
       "fallback": null,
-      "ms": 9439.267600000001,
+      "ms": 8846.9182,
       "passed": true,
       "rewritten": true,
       "text": "Can you send me the final report by tonight?"
@@ -1608,7 +1608,7 @@
       "answer": "We need to fix the login page bug before the release.",
       "failures": [],
       "fallback": null,
-      "ms": 9830.6939,
+      "ms": 9013.472399999999,
       "passed": true,
       "rewritten": true,
       "text": "We need to fix the login page bug before the release."
@@ -1631,7 +1631,7 @@
        "expected exactly \"He had had enough, very very much.\""
       ],
       "fallback": null,
-      "ms": 9334.2417,
+      "ms": 8559.5542,
       "passed": false,
       "rewritten": true,
       "text": "He had enough, very much."
@@ -1652,7 +1652,7 @@
        "expected numbered list, got none"
       ],
       "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 10899.5204,
+      "ms": 10175.1477,
       "passed": false,
       "rewritten": false,
       "text": "My plan for today is one buy milk two call mom three pay the bills."
@@ -1675,7 +1675,7 @@
        "expected numbered list, got none"
       ],
       "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 10319.0656,
+      "ms": 9733.0559,
       "passed": false,
       "rewritten": false,
       "text": "First we review the code second we run the tests and third we deploy to staging."
@@ -1696,7 +1696,7 @@
       "answer": "1. Install the app:\n2. Sign in:\n3. Pick a model:",
       "failures": [],
       "fallback": null,
-      "ms": 10376.4653,
+      "ms": 9544.8819,
       "passed": true,
       "rewritten": true,
       "text": "1. Install the app:\n2. Sign in:\n3. Pick a model:"
@@ -1721,7 +1721,7 @@
        "expected bullets list, got none"
       ],
       "fallback": null,
-      "ms": 10315.680799999998,
+      "ms": 9749.157500000001,
       "passed": false,
       "rewritten": true,
       "text": "Things to pack for the trip: sunscreen, a hat, two water bottles, and some snacks."
@@ -1744,7 +1744,7 @@
        "expected bullets list, got none"
       ],
       "fallback": null,
-      "ms": 10340.2555,
+      "ms": 9465.8019,
       "passed": false,
       "rewritten": true,
       "text": "Agenda for tomorrow’s meeting: budget review, the hiring plan, and the product roadmap."
@@ -1767,7 +1767,7 @@
        "expected bullets list, got none"
       ],
       "fallback": null,
-      "ms": 10985.9495,
+      "ms": 10234.2935,
       "passed": false,
       "rewritten": true,
       "text": "This release has a few changes: a new settings page, faster startup, and a fix for the crash on wake."
@@ -1790,7 +1790,7 @@
        "expected bullets list, got none"
       ],
       "fallback": null,
-      "ms": 8783.2981,
+      "ms": 8360.8075,
       "passed": false,
       "rewritten": true,
       "text": "Bullet rice bullet tea bullet sugar."
@@ -1809,7 +1809,7 @@
       "answer": "the summer programme begins tomorrow and runs for two weeks:",
       "failures": [],
       "fallback": null,
-      "ms": 9124.457,
+      "ms": 8777.2708,
       "passed": true,
       "rewritten": true,
       "text": "The summer programme begins tomorrow and runs for two weeks:"
@@ -1828,7 +1828,7 @@
       "answer": "I bought milk and eggs on the way home today",
       "failures": [],
       "fallback": null,
-      "ms": 8693.8945,
+      "ms": 8583.3707,
       "passed": true,
       "rewritten": true,
       "text": "I bought milk and eggs on the way home today."
@@ -1849,7 +1849,7 @@
        "expected 3 paragraphs, got 1"
       ],
       "fallback": null,
-      "ms": 9131.975699999999,
+      "ms": 8902.468799999999,
       "passed": false,
       "rewritten": true,
       "text": "Hi team: the build is green and ready to ship. Thanks."
@@ -1870,7 +1870,7 @@
        "expected at least 3 lines, got 1"
       ],
       "fallback": null,
-      "ms": 10326.4047,
+      "ms": 9973.6132,
       "passed": false,
       "rewritten": true,
       "text": "Hi Priya, thanks for the update. I’ll review it today. Regards, Sumedh."
@@ -1893,7 +1893,7 @@
        "expected 2 paragraphs, got 1"
       ],
       "fallback": null,
-      "ms": 11625.4655,
+      "ms": 11497.2889,
       "passed": false,
       "rewritten": true,
       "text": "The build passed on all three platforms and the installers are uploaded. Separately, I wanted to ask about the design review. Can we move it to Thursday because I’m out on Wednesday?"
@@ -1914,7 +1914,7 @@
       "answer": "I think we should go with the second option",
       "failures": [],
       "fallback": null,
-      "ms": 9279.2312,
+      "ms": 8556.849100000001,
       "passed": true,
       "rewritten": true,
       "text": "I think we should go with the second option."
@@ -1933,7 +1933,7 @@
       "answer": "Okay\n",
       "failures": [],
       "fallback": null,
-      "ms": 9761.6548,
+      "ms": 7779.4607,
       "passed": true,
       "rewritten": true,
       "text": "Okay"
@@ -1952,7 +1952,7 @@
       "answer": "EMPTY\n",
       "failures": [],
       "fallback": null,
-      "ms": 8951.523500000001,
+      "ms": 7771.8456,
       "passed": true,
       "rewritten": false,
       "text": ""
@@ -1971,7 +1971,7 @@
       "answer": "Write an email to Priya about the delay in the shipment: 1. Please find an update on the shipment delay. 2. We are experiencing some unforeseen logistical challenges. 3. We anticipate a revised delivery timeline within 48 hours. We will keep you updated.",
       "failures": [],
       "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 13192.8812,
+      "ms": 12194.7735,
       "passed": true,
       "rewritten": false,
       "text": "Write an email to priya about the delay in the shipment."
@@ -1990,7 +1990,7 @@
       "answer": "What time is the stand-up tomorrow?",
       "failures": [],
       "fallback": null,
-      "ms": 8684.6266,
+      "ms": 8314.954800000001,
       "passed": true,
       "rewritten": true,
       "text": "What time is the stand-up tomorrow?"
@@ -2013,7 +2013,7 @@
        "missing actually"
       ],
       "fallback": null,
-      "ms": 8735.5767,
+      "ms": 8809.7492,
       "passed": false,
       "rewritten": true,
       "text": "I think we’re fine with the current plan:"
@@ -2032,7 +2032,7 @@
       "answer": "the budget is 2,50,000 rupees",
       "failures": [],
       "fallback": null,
-      "ms": 8973.6894,
+      "ms": 8842.598300000001,
       "passed": true,
       "rewritten": true,
       "text": "The budget is 2,50,000 rupees."
@@ -2051,7 +2051,7 @@
       "answer": "git push --force",
       "failures": [],
       "fallback": null,
-      "ms": 8227.4951,
+      "ms": 8221.1649,
       "passed": true,
       "rewritten": true,
       "text": "git push --force"
@@ -2069,16 +2069,16 @@
    "schema": 2,
    "transcription": {
     "audio_s": 11.0,
-    "first_ms": 15750.5444,
-    "load_ms": 95.78689999999999,
-    "realtime": 0.7011907136239723,
+    "first_ms": 14652.7009,
+    "load_ms": 95.1862,
+    "realtime": 0.7622475264686642,
     "runs_ms": [
-     15564.4043,
-     15750.4168,
-     15687.6008
+     14431.0078,
+     14407.7845,
+     14458.1944
     ],
     "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
-    "time_ms": 15687.6008,
+    "time_ms": 14431.0078,
     "wer": 0.0
    }
   }
