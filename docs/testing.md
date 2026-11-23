@@ -56,6 +56,35 @@ A habit the code follows: a line that can only run when a test is about to fail 
 
 A new pull request run cancels the one it supersedes. Release runs always finish.
 
+## Performance and cleanup scenarios
+
+`.github/workflows/performance.yml` runs on every pull request. It never fails a pull request over a slower number or a worse scenario. It reports them in a comment.
+
+- **Measure (linux, macos, windows)**: builds `speechify-bench`'s `perf` binary in release mode on `ubuntu-24.04`, `macos-15` and `windows-2025`, then runs `scripts/perf-run.sh`. That times the whole dictation pipeline (voice detector, recognition, formatting) on `jfk.wav` with the two test models (load time, then the median of 5 warm runs), times the rule formatter over every scenario, and runs each scenario in `bench/scenarios.json` twice: through the rules alone, and through the cleanup model with the real system prompt (`core/src/prompts/cleanup.txt`), vetting and fallback. The cleanup model is gemma-3-4b-it Q4_K_M (the app's default `gemma3:4b`), served on the CPU by llama.cpp `b12211`. Both are pinned by SHA-256 in `scripts/fetch-perf-llm.py`. CI uses a 180-second request budget instead of the app's 6 seconds, so the prompt is judged on its answers rather than on runner speed.
+- **Performance report**: merges the three results, compares them with the latest results file on `main`, and posts one comment on the pull request, updated on every push. The comment marks timing changes beyond ±15% (and beyond a small absolute floor), lists scenarios that started or stopped passing, shows every failing scenario with what was said and what came out, and ends with a JSON summary for tools to read.
+- **Record performance results**: waits for `Tauri full coverage gate` to pass on the same commit, then commits the merged results to the pull request branch as `bench/perf/results/pr-<number>.json`, authored by `github-actions[bot]`. Merging the pull request brings that file to `main`, and the most recently added results file on `main` is what later pull requests compare with. Each pull request writes its own file, so two open pull requests never conflict over results.
+
+After the results commit lands, pull before you push again: the branch has a commit you do not have locally.
+
+A commit pushed with the workflow token starts no workflows, so the results commit would have no required checks. `Record performance results` starts `.github/workflows/ci-results.yml` for it. That workflow's jobs have the required check names. Each one passes only if the head commit is from `github-actions[bot]`, changes nothing but `bench/perf/results/*.json`, and the same check passed on the commit before it. GitHub only starts `workflow_dispatch` workflows that already exist on `main`, so this works from the first pull request after the one that added it.
+
+Only CI writes `bench/perf/results`. `Tauri full coverage gate` fails a pull request with a commit touching that folder unless `github-actions[bot]` wrote it.
+
+Scenario checks, all optional: `equals` (exact text), `contains` (each entry a phrase, or a list of alternatives), `absent` (phrases that must not remain, matched as whole words), `list` (`numbered`, `bullets` or `none`) with `items`, `paragraphs` (blocks separated by a blank line) and `min_lines`. `category` is `work` (the default, typing into Slack), `email`, `code` or `personal`. Some scenarios describe behaviour the app does not have yet, such as bullet points for items that are listed without being counted. They fail until it does, and the comment shows when that changes.
+
+To run it locally (Linux):
+
+```
+bash scripts/fetch-test-fixtures.sh
+python3 scripts/fetch-perf-llm.py .build/llm
+cargo build --release --locked -p speechify-bench --bin perf
+source .build/test-env.sh
+bash scripts/perf-run.sh target/release/perf .build/llm .build/perf/linux.json
+python3 bench/perf_report.py .build/perf --pr 0 --head-sha local --out-json .build/perf/record.json --out-md .build/perf/comment.md
+```
+
+Without `PERF_LLM_URL`, `target/release/perf bench/scenarios.json OUT.json` skips the cleanup model and runs everything else.
+
 ## Things to know
 
 - Passing here is not the same as working on a person's desktop. The automated tests have passed on Linux, and the Windows and macOS test jobs run in CI, but nobody has used the app by hand on Windows or macOS yet. See the status section of the [README](../README.md).

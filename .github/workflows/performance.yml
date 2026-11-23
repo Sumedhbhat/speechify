@@ -1,0 +1,178 @@
+name: Performance
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: performance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TEST_MODEL_URL: https://huggingface.co/handy-computer/whisper-tiny.en-gguf/resolve/9dd46e00ef0577e354e658c07b3ac5580e9cd211/whisper-tiny.en-Q8_0.gguf
+  TEST_MODEL_SHA256: e8c9b73c06344307d8b346e07fbe93dd88d894627854bcff31523f1ce44394fa
+  TEST_TOKEN_MODEL_URL: https://huggingface.co/handy-computer/parakeet-tdt_ctc-110m-gguf/resolve/1c3f0d5378fdd358905cc410a93ed9e64f52d170/parakeet-tdt_ctc-110m-Q4_K_M.gguf
+  TEST_TOKEN_MODEL_SHA256: 486414fd90185a8c8a4ced7c123cfb133ff4f7958426c6b8bd9049946b56b448
+  TEST_STREAM_MODEL_URL: https://huggingface.co/handy-computer/moonshine-streaming-tiny-gguf/resolve/4125c28c22a76494162094ab3566387cd92fb2f5/moonshine-streaming-tiny-Q8_0.gguf
+  TEST_STREAM_MODEL_SHA256: 930e4622ad3a24158b91406c30c977fa6a26b34cb32d6ac3e57cfb23383a869e
+
+jobs:
+  measure:
+    name: Measure (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-24.04
+            python: python3
+          - platform: macos
+            os: macos-15
+            python: python3
+          - platform: windows
+            os: windows-2025
+            python: python
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .build/models
+          key: test-models-${{ env.TEST_MODEL_SHA256 }}-${{ env.TEST_TOKEN_MODEL_SHA256 }}-${{ env.TEST_STREAM_MODEL_SHA256 }}
+      - name: Fetch the speech runtime and the test models
+        run: bash scripts/fetch-test-fixtures.sh "${{ matrix.python }}"
+      - name: Fetch the language model server and model
+        run: '"${{ matrix.python }}" scripts/fetch-perf-llm.py .build/llm'
+      - name: Build
+        run: cargo build --release --locked -p speechify-bench --bin perf
+      - name: Measure speed and run the scenarios
+        env:
+          PERF_PLATFORM: ${{ matrix.platform }}
+        run: |
+          source .build/test-env.sh
+          mkdir -p .build/perf
+          bash scripts/perf-run.sh target/release/perf .build/llm ".build/perf/${{ matrix.platform }}.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: perf-${{ matrix.platform }}
+          path: .build/perf/${{ matrix.platform }}.json
+          retention-days: 30
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: perf-${{ matrix.platform }}-server-log
+          path: .build/llm/server.log
+          retention-days: 7
+
+  report:
+    name: Performance report
+    needs: measure
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      PR: ${{ github.event.pull_request.number }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: perf-*
+          path: .build/perf/platforms
+      - name: Find the latest results on main
+        run: |
+          latest="$(git log -1 --format= --name-only --diff-filter=AM "$BASE_SHA" -- 'bench/perf/results/*.json' | sed '/^$/d' | head -n 1)"
+          if [ -n "$latest" ]; then
+            git show "$BASE_SHA:$latest" > .build/perf/baseline.json
+            echo "Comparing with $latest"
+          fi
+      - name: Compare
+        run: |
+          python3 bench/perf_report.py .build/perf/platforms --baseline .build/perf/baseline.json \
+            --pr "$PR" --head-sha "$HEAD_SHA" --run-url "$RUN_URL" \
+            --out-json .build/perf/record.json --out-md .build/perf/comment.md
+          cat .build/perf/comment.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: perf-record
+          path: .build/perf/record.json
+          retention-days: 30
+      - name: Comment on the pull request
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- speechify-performance -->"))) | .id' | head -n 1)"
+          body="$(jq -Rs '{body: .}' .build/perf/comment.md)"
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" --input - <<< "$body" > /dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --input - <<< "$body" > /dev/null
+          fi
+
+  record:
+    name: Record performance results
+    needs: [measure, report]
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      checks: read
+      actions: write
+    env:
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+      - name: Wait for CI to pass on this commit
+        id: ci
+        run: |
+          conclusion="$(bash scripts/wait-for-checks.sh "$HEAD_SHA" "Tauri full coverage gate")"
+          echo "CI concluded $conclusion"
+          echo "passed=$([ "$conclusion" = success ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: steps.ci.outputs.passed == 'true'
+        with:
+          name: perf-record
+          path: .build/perf
+      - name: Commit the results to the pull request
+        id: commit
+        if: steps.ci.outputs.passed == 'true'
+        run: |
+          file="bench/perf/results/pr-$PR.json"
+          mkdir -p bench/perf/results
+          cp .build/perf/record.json "$file"
+          git add "$file"
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Record performance results for ${HEAD_SHA::7}"
+          if ! git push origin "HEAD:refs/heads/$HEAD_REF"; then
+            echo "The branch moved on since this run started; the next run records its own results."
+            exit 0
+          fi
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+      - name: Run the required checks on the results commit
+        if: steps.commit.outputs.pushed == 'true'
+        run: gh workflow run ci-results.yml --ref "$HEAD_REF"
