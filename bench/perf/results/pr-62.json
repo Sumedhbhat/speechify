@@ -1,23 +1,23 @@
 {
  "schema": 2,
  "pr": 62,
- "head_sha": "1ee1de42a27b610e3595935eb5fa699dae4e9097",
- "recorded_at": "2026-11-24T01:21:08Z",
- "run_url": "https://github.com/Sumedhbhat/speechify/actions/runs/45271491271",
+ "head_sha": "cdd62c261d16f02c252f7f3f483bd16d395801bd",
+ "recorded_at": "2026-11-24T02:50:55Z",
+ "run_url": "https://github.com/Sumedhbhat/speechify/actions/runs/45304416139",
  "platforms": {
   "linux": {
    "arch": "x86_64",
    "cleanup": {
     "llm": {
      "calls": 31,
-     "median_ms": 6980.8680030000005,
-     "p90_ms": 8602.358197000001,
+     "median_ms": 16132.017374000001,
+     "p90_ms": 17877.84256,
      "rejected": 3
     },
-    "rules_ms": 0.751352
+    "rules_ms": 1.029463
    },
    "cpus": 4,
-   "image": "ubuntu24 20261116.133.1",
+   "image": "ubuntu24 20261116.376.1",
    "models": {
     "cleanup": "gemma3:4b",
     "cleanup_digest": "sha256:f06e91e18fc74295d0c781bf91622508c75655e2c18ed869d52447ffe1e667e1",
@@ -32,1390 +32,10 @@
       "answer": "let’s meet at 3 tomorrow:",
       "failures": [],
       "fallback": null,
-      "ms": 6801.8353210000005,
+      "ms": 15661.974956,
       "passed": true,
       "rewritten": true,
       "text": "Let’s meet at 3 tomorrow:"
-     },
-     "raw": "let's meet at 2 actually 3 tomorrow",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "Let's meet at 3 tomorrow."
-     }
-    },
-    {
-     "id": "correction-person",
-     "kind": "corrections",
-     "llm": {
-      "answer": "send the invoice to Priya",
-      "failures": [],
-      "fallback": null,
-      "ms": 6221.62038,
-      "passed": true,
-      "rewritten": true,
-      "text": "Send the invoice to Priya."
-     },
-     "raw": "send the invoice to Rahul no wait send it to Priya",
-     "rules": {
-      "failures": [
-       "missing invoice"
-      ],
-      "passed": false,
-      "text": "Send it to Priya."
-     }
-    },
-    {
-     "id": "correction-day",
-     "kind": "corrections",
-     "llm": {
-      "answer": "the deadline for the report is Monday, sorry",
-      "failures": [
-       "still has \"sorry\""
-      ],
-      "fallback": null,
-      "ms": 6756.860396,
-      "passed": false,
-      "rewritten": true,
-      "text": "The deadline for the report is Monday, sorry."
-     },
-     "raw": "the deadline for the report is Friday sorry I mean Monday",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "The deadline for the report is Monday."
-     }
-    },
-    {
-     "id": "correction-scratch-that",
-     "kind": "corrections",
-     "llm": {
-      "answer": "book a table for six people",
-      "failures": [],
-      "fallback": null,
-      "ms": 6344.080675,
-      "passed": true,
-      "rewritten": true,
-      "text": "Book a table for six people."
-     },
-     "raw": "book a table for four people scratch that make it six people",
-     "rules": {
-      "failures": [
-       "missing table"
-      ],
-      "passed": false,
-      "text": "Make it six people."
-     }
-    },
-    {
-     "id": "correction-or-rather",
-     "kind": "corrections",
-     "llm": {
-      "answer": "we should store the sessions in PostgreSQL or rather in Redis for now",
-      "failures": [
-       "still has \"or rather\""
-      ],
-      "fallback": null,
-      "ms": 7320.792968,
-      "passed": false,
-      "rewritten": true,
-      "text": "We should store the sessions in PostgreSQL or rather in Redis for now."
-     },
-     "raw": "we should store the sessions in postgres or rather in redis for now",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "We should store the sessions in redis for now."
-     }
-    },
-    {
-     "id": "correction-number",
-     "kind": "corrections",
-     "llm": {
-      "answer": "Call me back at 5 pm if that works.",
-      "failures": [
-       "missing 6",
-       "still has \"5\""
-      ],
-      "fallback": null,
-      "ms": 7034.364033,
-      "passed": false,
-      "rewritten": true,
-      "text": "Call me back at 5 pm if that works."
-     },
-     "raw": "call me back at 5 pm no 6 pm if that works",
-     "rules": {
-      "failures": [
-       "still has \"5\""
-      ],
-      "passed": false,
-      "text": "Call me back at 5 pm no 6 pm if that works."
-     }
-    },
-    {
-     "id": "repeat-restart",
-     "kind": "repetition",
-     "llm": {
-      "answer": "the latest branch, the latest master branch has the fix for the crash",
-      "failures": [
-       "still has \"latest branch\""
-      ],
-      "fallback": null,
-      "ms": 7439.825993,
-      "passed": false,
-      "rewritten": true,
-      "text": "The latest branch, the latest master branch has the fix for the crash."
-     },
-     "raw": "the latest branch, latest master branch has the fix for the crash",
-     "rules": {
-      "failures": [
-       "still has \"latest branch\""
-      ],
-      "passed": false,
-      "text": "The latest branch, latest master branch has the fix for the crash."
-     }
-    },
-    {
-     "id": "repeat-stutter",
-     "kind": "repetition",
-     "llm": {
-      "answer": "I think the plan is fine",
-      "failures": [],
-      "fallback": null,
-      "ms": 6300.543661,
-      "passed": true,
-      "rewritten": true,
-      "text": "I think the plan is fine."
-     },
-     "raw": "I I think the the plan is is fine",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "I think the plan is fine."
-     }
-    },
-    {
-     "id": "repeat-more-detail",
-     "kind": "repetition",
-     "llm": {
-      "answer": "Can you send me the final report by tonight?",
-      "failures": [],
-      "fallback": null,
-      "ms": 6869.809723,
-      "passed": true,
-      "rewritten": true,
-      "text": "Can you send me the final report by tonight?"
-     },
-     "raw": "can you send me the report, the final report by tonight",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "Can you send me the final report by tonight."
-     }
-    },
-    {
-     "id": "repeat-login-bug",
-     "kind": "repetition",
-     "llm": {
-      "answer": "We need to fix the login page bug before the release.",
-      "failures": [],
-      "fallback": null,
-      "ms": 7130.283622,
-      "passed": true,
-      "rewritten": true,
-      "text": "We need to fix the login page bug before the release."
-     },
-     "raw": "we need to fix the login, the login page bug before the release",
-     "rules": {
-      "failures": [
-       "still has \"the login,\""
-      ],
-      "passed": false,
-      "text": "We need to fix the login, the login page bug before the release."
-     }
-    },
-    {
-     "id": "repeat-deliberate",
-     "kind": "repetition",
-     "llm": {
-      "answer": "He had enough, very much.",
-      "failures": [
-       "expected exactly \"He had had enough, very very much.\""
-      ],
-      "fallback": null,
-      "ms": 6436.111155,
-      "passed": false,
-      "rewritten": true,
-      "text": "He had enough, very much."
-     },
-     "raw": "He had had enough, very very much.",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "He had had enough, very very much."
-     }
-    },
-    {
-     "id": "list-counted",
-     "kind": "lists",
-     "llm": {
-      "answer": "My plan for today is:\n1. Buy milk\n2. Call Mom\n3. Pay the bills",
-      "failures": [
-       "expected numbered list, got none"
-      ],
-      "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 8594.151996,
-      "passed": false,
-      "rewritten": false,
-      "text": "My plan for today is one buy milk two call mom three pay the bills."
-     },
-     "raw": "my plan for today is one buy milk two call mom three pay the bills",
-     "rules": {
-      "failures": [
-       "expected numbered list, got none"
-      ],
-      "passed": false,
-      "text": "My plan for today is one buy milk two call mom three pay the bills."
-     }
-    },
-    {
-     "id": "list-ordinals",
-     "kind": "lists",
-     "llm": {
-      "answer": "1. Review the code:\n2. Run the tests:\n3. Deploy to staging:",
-      "failures": [
-       "expected numbered list, got none"
-      ],
-      "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 8317.67518,
-      "passed": false,
-      "rewritten": false,
-      "text": "First we review the code second we run the tests and third we deploy to staging."
-     },
-     "raw": "first we review the code second we run the tests and third we deploy to staging",
-     "rules": {
-      "failures": [
-       "expected numbered list, got none"
-      ],
-      "passed": false,
-      "text": "First we review the code second we run the tests and third we deploy to staging."
-     }
-    },
-    {
-     "id": "list-steps",
-     "kind": "lists",
-     "llm": {
-      "answer": "1. Install the app:\n2. Sign in:\n3. Pick a model:",
-      "failures": [],
-      "fallback": null,
-      "ms": 8202.85032,
-      "passed": true,
-      "rewritten": true,
-      "text": "1. Install the app:\n2. Sign in:\n3. Pick a model:"
-     },
-     "raw": "there are three steps step one install the app step two sign in step three pick a model",
-     "rules": {
-      "failures": [
-       "still has \"app step\"",
-       "still has \"in step\"",
-       "still has \"steps step\""
-      ],
-      "passed": false,
-      "text": "There are three steps step:\n1. Install the app step\n2. Sign in step\n3. Pick a model"
-     }
-    },
-    {
-     "id": "points-packing",
-     "kind": "lists",
-     "llm": {
-      "answer": "Things to pack for the trip: sunscreen, a hat, two water bottles, and some snacks.",
-      "failures": [
-       "expected bullets list, got none"
-      ],
-      "fallback": null,
-      "ms": 8291.198574999999,
-      "passed": false,
-      "rewritten": true,
-      "text": "Things to pack for the trip: sunscreen, a hat, two water bottles, and some snacks."
-     },
-     "raw": "things to pack for the trip sunscreen a hat two water bottles and some snacks",
-     "rules": {
-      "failures": [
-       "expected bullets list, got none"
-      ],
-      "passed": false,
-      "text": "Things to pack for the trip sunscreen a hat two water bottles and some snacks."
-     }
-    },
-    {
-     "id": "points-agenda",
-     "kind": "lists",
-     "llm": {
-      "answer": "Agenda for tomorrow’s meeting: budget review, the hiring plan, and the product roadmap.",
-      "failures": [
-       "expected bullets list, got none"
-      ],
-      "fallback": null,
-      "ms": 8168.428072999999,
-      "passed": false,
-      "rewritten": true,
-      "text": "Agenda for tomorrow’s meeting: budget review, the hiring plan, and the product roadmap."
-     },
-     "raw": "agenda for tomorrow's meeting budget review the hiring plan and the product roadmap",
-     "rules": {
-      "failures": [
-       "expected bullets list, got none"
-      ],
-      "passed": false,
-      "text": "Agenda for tomorrow's meeting budget review the hiring plan and the product roadmap."
-     }
-    },
-    {
-     "id": "points-release",
-     "kind": "lists",
-     "llm": {
-      "answer": "this release has a few changes: a new settings page, faster startup, and a fix for the crash on wake.",
-      "failures": [
-       "expected bullets list, got none"
-      ],
-      "fallback": null,
-      "ms": 8804.444332,
-      "passed": false,
-      "rewritten": true,
-      "text": "This release has a few changes: a new settings page, faster startup, and a fix for the crash on wake."
-     },
-     "raw": "this release has a few changes a new settings page faster startup and a fix for the crash on wake",
-     "rules": {
-      "failures": [
-       "expected bullets list, got none"
-      ],
-      "passed": false,
-      "text": "This release has a few changes a new settings page faster startup and a fix for the crash on wake."
-     }
-    },
-    {
-     "id": "points-spoken",
-     "kind": "lists",
-     "llm": {
-      "answer": "bullet rice bullet tea bullet sugar",
-      "failures": [
-       "expected bullets list, got none"
-      ],
-      "fallback": null,
-      "ms": 6271.378159,
-      "passed": false,
-      "rewritten": true,
-      "text": "Bullet rice bullet tea bullet sugar."
-     },
-     "raw": "bullet rice bullet tea bullet sugar",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "- Rice\n- Tea\n- Sugar"
-     }
-    },
-    {
-     "id": "prose-not-a-list",
-     "kind": "keep as said",
-     "llm": {
-      "answer": "the summer programme begins tomorrow and runs for two weeks:",
-      "failures": [],
-      "fallback": null,
-      "ms": 6980.8680030000005,
-      "passed": true,
-      "rewritten": true,
-      "text": "The summer programme begins tomorrow and runs for two weeks:"
-     },
-     "raw": "the summer programme begins tomorrow and runs for two weeks",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "The summer programme begins tomorrow and runs for two weeks."
-     }
-    },
-    {
-     "id": "prose-two-things",
-     "kind": "keep as said",
-     "llm": {
-      "answer": "I bought milk and eggs on the way home today",
-      "failures": [],
-      "fallback": null,
-      "ms": 6834.928470000001,
-      "passed": true,
-      "rewritten": true,
-      "text": "I bought milk and eggs on the way home today."
-     },
-     "raw": "I bought milk and eggs on the way home today",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "I bought milk and eggs on the way home today."
-     }
-    },
-    {
-     "id": "paragraph-spoken",
-     "kind": "paragraphs",
-     "llm": {
-      "answer": "Hi team: the build is green and ready to ship. Thanks",
-      "failures": [
-       "expected 3 paragraphs, got 1"
-      ],
-      "fallback": null,
-      "ms": 7346.392567,
-      "passed": false,
-      "rewritten": true,
-      "text": "Hi team: the build is green and ready to ship. Thanks."
-     },
-     "raw": "hi team new paragraph the build is green and ready to ship new paragraph thanks",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "Hi team\n\nThe build is green and ready to ship\n\nThanks."
-     }
-    },
-    {
-     "id": "paragraph-email",
-     "kind": "paragraphs",
-     "llm": {
-      "answer": "Hi Priya, thanks for the update. I’ll review it today. Regards, Sumedh",
-      "failures": [
-       "expected at least 3 lines, got 1"
-      ],
-      "fallback": null,
-      "ms": 8602.358197000001,
-      "passed": false,
-      "rewritten": true,
-      "text": "Hi Priya, thanks for the update. I’ll review it today. Regards, Sumedh."
-     },
-     "raw": "hi priya comma new line thanks for the update I'll review it today new line regards sumedh",
-     "rules": {
-      "failures": [
-       "missing Hi Priya,"
-      ],
-      "passed": false,
-      "text": "Hi priya\nThanks for the update I'll review it today\nRegards sumedh."
-     }
-    },
-    {
-     "id": "paragraph-topic-change",
-     "kind": "paragraphs",
-     "llm": {
-      "answer": "the build passed on all three platforms and the installers are uploaded. separately, I wanted to ask about the design review. can we move it to Thursday because I’m out on Wednesday?",
-      "failures": [
-       "expected 2 paragraphs, got 1"
-      ],
-      "fallback": null,
-      "ms": 11250.262927,
-      "passed": false,
-      "rewritten": true,
-      "text": "The build passed on all three platforms and the installers are uploaded. Separately, I wanted to ask about the design review. Can we move it to Thursday because I’m out on Wednesday?"
-     },
-     "raw": "the build passed on all three platforms and the installers are uploaded. separately I wanted to ask about the design review. can we move it to thursday because I'm out on wednesday",
-     "rules": {
-      "failures": [
-       "expected 2 paragraphs, got 1"
-      ],
-      "passed": false,
-      "text": "The build passed on all three platforms and the installers are uploaded. Separately I wanted to ask about the design review. Can we move it to thursday because I'm out on wednesday."
-     }
-    },
-    {
-     "id": "filler-start",
-     "kind": "fillers",
-     "llm": {
-      "answer": "I think we should go with the second option",
-      "failures": [],
-      "fallback": null,
-      "ms": 6752.669675,
-      "passed": true,
-      "rewritten": true,
-      "text": "I think we should go with the second option."
-     },
-     "raw": "um so uh I think we should go with the second option",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "So I think we should go with the second option."
-     }
-    },
-    {
-     "id": "filler-short",
-     "kind": "fillers",
-     "llm": {
-      "answer": "Okay\n",
-      "failures": [],
-      "fallback": null,
-      "ms": 5734.034533,
-      "passed": true,
-      "rewritten": true,
-      "text": "Okay"
-     },
-     "raw": "Erm. Okay",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "Okay"
-     }
-    },
-    {
-     "id": "filler-only",
-     "kind": "fillers",
-     "llm": {
-      "answer": "EMPTY\n",
-      "failures": [],
-      "fallback": null,
-      "ms": 5731.596729,
-      "passed": true,
-      "rewritten": false,
-      "text": ""
-     },
-     "raw": "uh um",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": ""
-     }
-    },
-    {
-     "id": "keep-instruction",
-     "kind": "keep as said",
-     "llm": {
-      "answer": "Write an email to Priya about the delay in the shipment: 1. Please find below the update on the shipment. 2. We are experiencing a slight delay due to unforeseen circumstances. 3. We anticipate the shipment will now arrive by 15th July. 4. We apologise for any inconvenience this may cause.",
-      "failures": [],
-      "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 14928.214565,
-      "passed": true,
-      "rewritten": false,
-      "text": "Write an email to priya about the delay in the shipment."
-     },
-     "raw": "write an email to priya about the delay in the shipment",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "Write an email to priya about the delay in the shipment."
-     }
-    },
-    {
-     "id": "keep-question",
-     "kind": "formatting",
-     "llm": {
-      "answer": "What time is the stand-up tomorrow?",
-      "failures": [],
-      "fallback": null,
-      "ms": 6713.682757,
-      "passed": true,
-      "rewritten": true,
-      "text": "What time is the stand-up tomorrow?"
-     },
-     "raw": "what time is the standup tomorrow",
-     "rules": {
-      "failures": [
-       "missing ?"
-      ],
-      "passed": false,
-      "text": "What time is the standup tomorrow."
-     }
-    },
-    {
-     "id": "keep-actually",
-     "kind": "keep as said",
-     "llm": {
-      "answer": "I think we’re fine with the current plan",
-      "failures": [
-       "missing actually"
-      ],
-      "fallback": null,
-      "ms": 6847.637694,
-      "passed": false,
-      "rewritten": true,
-      "text": "I think we’re fine with the current plan."
-     },
-     "raw": "actually I think we're fine with the current plan",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "Actually I think we're fine with the current plan."
-     }
-    },
-    {
-     "id": "numbers-indian",
-     "kind": "formatting",
-     "llm": {
-      "answer": "the budget is 2,50,000 rupees",
-      "failures": [],
-      "fallback": null,
-      "ms": 7282.87042,
-      "passed": true,
-      "rewritten": true,
-      "text": "The budget is 2,50,000 rupees."
-     },
-     "raw": "the budget is two lakh fifty thousand rupees",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "The budget is ₹2,50,000."
-     }
-    },
-    {
-     "id": "code-flags",
-     "kind": "formatting",
-     "llm": {
-      "answer": "git push --force",
-      "failures": [],
-      "fallback": null,
-      "ms": 6048.949858,
-      "passed": true,
-      "rewritten": true,
-      "text": "git push --force"
-     },
-     "raw": "git push dash dash force",
-     "rules": {
-      "failures": [
-       "expected exactly \"git push --force\""
-      ],
-      "passed": false,
-      "text": "git push dash dash force"
-     }
-    }
-   ],
-   "schema": 2,
-   "transcription": {
-    "audio_s": 11.0,
-    "first_ms": 14023.063596,
-    "load_ms": 30.982368,
-    "realtime": 0.7896380536053689,
-    "runs_ms": [
-     13915.452084,
-     13939.788374000002,
-     13930.433
-    ],
-    "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
-    "time_ms": 13930.433,
-    "wer": 0.0
-   }
-  },
-  "macos": {
-   "arch": "aarch64",
-   "cleanup": {
-    "llm": {
-     "calls": 31,
-     "median_ms": 8672.674708,
-     "p90_ms": 10249.962667,
-     "rejected": 3
-    },
-    "rules_ms": 0.6995
-   },
-   "cpus": 3,
-   "image": "macos15 20261118.0550.1",
-   "models": {
-    "cleanup": "gemma3:4b",
-    "cleanup_digest": "sha256:f06e91e18fc74295d0c781bf91622508c75655e2c18ed869d52447ffe1e667e1",
-    "speech": "whisper-large-v3-turbo"
-   },
-   "platform": "macos",
-   "scenarios": [
-    {
-     "id": "correction-time",
-     "kind": "corrections",
-     "llm": {
-      "answer": "let’s meet at 3 tomorrow:",
-      "failures": [],
-      "fallback": null,
-      "ms": 6818.7645,
-      "passed": true,
-      "rewritten": true,
-      "text": "Let’s meet at 3 tomorrow:"
-     },
-     "raw": "let's meet at 2 actually 3 tomorrow",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "Let's meet at 3 tomorrow."
-     }
-    },
-    {
-     "id": "correction-person",
-     "kind": "corrections",
-     "llm": {
-      "answer": "send the invoice to Priya",
-      "failures": [],
-      "fallback": null,
-      "ms": 6967.737375000001,
-      "passed": true,
-      "rewritten": true,
-      "text": "Send the invoice to Priya."
-     },
-     "raw": "send the invoice to Rahul no wait send it to Priya",
-     "rules": {
-      "failures": [
-       "missing invoice"
-      ],
-      "passed": false,
-      "text": "Send it to Priya."
-     }
-    },
-    {
-     "id": "correction-day",
-     "kind": "corrections",
-     "llm": {
-      "answer": "the deadline for the report is Monday, sorry.",
-      "failures": [
-       "still has \"sorry\""
-      ],
-      "fallback": null,
-      "ms": 7048.15875,
-      "passed": false,
-      "rewritten": true,
-      "text": "The deadline for the report is Monday, sorry."
-     },
-     "raw": "the deadline for the report is Friday sorry I mean Monday",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "The deadline for the report is Monday."
-     }
-    },
-    {
-     "id": "correction-scratch-that",
-     "kind": "corrections",
-     "llm": {
-      "answer": "book a table for six people",
-      "failures": [],
-      "fallback": null,
-      "ms": 6817.6565,
-      "passed": true,
-      "rewritten": true,
-      "text": "Book a table for six people."
-     },
-     "raw": "book a table for four people scratch that make it six people",
-     "rules": {
-      "failures": [
-       "missing table"
-      ],
-      "passed": false,
-      "text": "Make it six people."
-     }
-    },
-    {
-     "id": "correction-or-rather",
-     "kind": "corrections",
-     "llm": {
-      "answer": "we should store the sessions in PostgreSQL or rather in Redis for now",
-      "failures": [
-       "still has \"or rather\""
-      ],
-      "fallback": null,
-      "ms": 6807.430542,
-      "passed": false,
-      "rewritten": true,
-      "text": "We should store the sessions in PostgreSQL or rather in Redis for now."
-     },
-     "raw": "we should store the sessions in postgres or rather in redis for now",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "We should store the sessions in redis for now."
-     }
-    },
-    {
-     "id": "correction-number",
-     "kind": "corrections",
-     "llm": {
-      "answer": "Call me back at 5 pm if that works.",
-      "failures": [
-       "missing 6",
-       "still has \"5\""
-      ],
-      "fallback": null,
-      "ms": 6971.186334,
-      "passed": false,
-      "rewritten": true,
-      "text": "Call me back at 5 pm if that works."
-     },
-     "raw": "call me back at 5 pm no 6 pm if that works",
-     "rules": {
-      "failures": [
-       "still has \"5\""
-      ],
-      "passed": false,
-      "text": "Call me back at 5 pm no 6 pm if that works."
-     }
-    },
-    {
-     "id": "repeat-restart",
-     "kind": "repetition",
-     "llm": {
-      "answer": "the latest branch, the latest master branch has the fix for the crash",
-      "failures": [
-       "still has \"latest branch\""
-      ],
-      "fallback": null,
-      "ms": 7273.098333,
-      "passed": false,
-      "rewritten": true,
-      "text": "The latest branch, the latest master branch has the fix for the crash."
-     },
-     "raw": "the latest branch, latest master branch has the fix for the crash",
-     "rules": {
-      "failures": [
-       "still has \"latest branch\""
-      ],
-      "passed": false,
-      "text": "The latest branch, latest master branch has the fix for the crash."
-     }
-    },
-    {
-     "id": "repeat-stutter",
-     "kind": "repetition",
-     "llm": {
-      "answer": "I think the plan is fine:\n",
-      "failures": [
-       "expected exactly \"I think the plan is fine.\""
-      ],
-      "fallback": null,
-      "ms": 7101.2939590000005,
-      "passed": false,
-      "rewritten": true,
-      "text": "I think the plan is fine:"
-     },
-     "raw": "I I think the the plan is is fine",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "I think the plan is fine."
-     }
-    },
-    {
-     "id": "repeat-more-detail",
-     "kind": "repetition",
-     "llm": {
-      "answer": "Can you send me the final report by tonight?",
-      "failures": [],
-      "fallback": null,
-      "ms": 6784.169333000001,
-      "passed": true,
-      "rewritten": true,
-      "text": "Can you send me the final report by tonight?"
-     },
-     "raw": "can you send me the report, the final report by tonight",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "Can you send me the final report by tonight."
-     }
-    },
-    {
-     "id": "repeat-login-bug",
-     "kind": "repetition",
-     "llm": {
-      "answer": "we need to fix the login page bug before the release",
-      "failures": [],
-      "fallback": null,
-      "ms": 7928.359208,
-      "passed": true,
-      "rewritten": true,
-      "text": "We need to fix the login page bug before the release."
-     },
-     "raw": "we need to fix the login, the login page bug before the release",
-     "rules": {
-      "failures": [
-       "still has \"the login,\""
-      ],
-      "passed": false,
-      "text": "We need to fix the login, the login page bug before the release."
-     }
-    },
-    {
-     "id": "repeat-deliberate",
-     "kind": "repetition",
-     "llm": {
-      "answer": "He had enough, very much.",
-      "failures": [
-       "expected exactly \"He had had enough, very very much.\""
-      ],
-      "fallback": null,
-      "ms": 6337.556416,
-      "passed": false,
-      "rewritten": true,
-      "text": "He had enough, very much."
-     },
-     "raw": "He had had enough, very very much.",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "He had had enough, very very much."
-     }
-    },
-    {
-     "id": "list-counted",
-     "kind": "lists",
-     "llm": {
-      "answer": "My plan for today is:\n1. Buy milk\n2. Call Mom\n3. Pay the bills",
-      "failures": [
-       "expected numbered list, got none"
-      ],
-      "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 8672.674708,
-      "passed": false,
-      "rewritten": false,
-      "text": "My plan for today is one buy milk two call mom three pay the bills."
-     },
-     "raw": "my plan for today is one buy milk two call mom three pay the bills",
-     "rules": {
-      "failures": [
-       "expected numbered list, got none"
-      ],
-      "passed": false,
-      "text": "My plan for today is one buy milk two call mom three pay the bills."
-     }
-    },
-    {
-     "id": "list-ordinals",
-     "kind": "lists",
-     "llm": {
-      "answer": "1. Review the code:\n2. Run the tests:\n3. Deploy to staging:",
-      "failures": [
-       "expected numbered list, got none"
-      ],
-      "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 7638.999124999999,
-      "passed": false,
-      "rewritten": false,
-      "text": "First we review the code second we run the tests and third we deploy to staging."
-     },
-     "raw": "first we review the code second we run the tests and third we deploy to staging",
-     "rules": {
-      "failures": [
-       "expected numbered list, got none"
-      ],
-      "passed": false,
-      "text": "First we review the code second we run the tests and third we deploy to staging."
-     }
-    },
-    {
-     "id": "list-steps",
-     "kind": "lists",
-     "llm": {
-      "answer": "1. Install the app:\n2. Sign in:\n3. Pick a model:",
-      "failures": [],
-      "fallback": null,
-      "ms": 9621.342999999999,
-      "passed": true,
-      "rewritten": true,
-      "text": "1. Install the app:\n2. Sign in:\n3. Pick a model:"
-     },
-     "raw": "there are three steps step one install the app step two sign in step three pick a model",
-     "rules": {
-      "failures": [
-       "still has \"app step\"",
-       "still has \"in step\"",
-       "still has \"steps step\""
-      ],
-      "passed": false,
-      "text": "There are three steps step:\n1. Install the app step\n2. Sign in step\n3. Pick a model"
-     }
-    },
-    {
-     "id": "points-packing",
-     "kind": "lists",
-     "llm": {
-      "answer": "Things to pack for the trip: sunscreen, a hat, two water bottles, and some snacks.",
-      "failures": [
-       "expected bullets list, got none"
-      ],
-      "fallback": null,
-      "ms": 8092.857916,
-      "passed": false,
-      "rewritten": true,
-      "text": "Things to pack for the trip: sunscreen, a hat, two water bottles, and some snacks."
-     },
-     "raw": "things to pack for the trip sunscreen a hat two water bottles and some snacks",
-     "rules": {
-      "failures": [
-       "expected bullets list, got none"
-      ],
-      "passed": false,
-      "text": "Things to pack for the trip sunscreen a hat two water bottles and some snacks."
-     }
-    },
-    {
-     "id": "points-agenda",
-     "kind": "lists",
-     "llm": {
-      "answer": "Agenda for tomorrow’s meeting: budget review, the hiring plan, and the product roadmap.",
-      "failures": [
-       "expected bullets list, got none"
-      ],
-      "fallback": null,
-      "ms": 9088.710417,
-      "passed": false,
-      "rewritten": true,
-      "text": "Agenda for tomorrow’s meeting: budget review, the hiring plan, and the product roadmap."
-     },
-     "raw": "agenda for tomorrow's meeting budget review the hiring plan and the product roadmap",
-     "rules": {
-      "failures": [
-       "expected bullets list, got none"
-      ],
-      "passed": false,
-      "text": "Agenda for tomorrow's meeting budget review the hiring plan and the product roadmap."
-     }
-    },
-    {
-     "id": "points-release",
-     "kind": "lists",
-     "llm": {
-      "answer": "This release has a few changes: a new settings page, faster startup, and a fix for the crash on wake.",
-      "failures": [
-       "expected bullets list, got none"
-      ],
-      "fallback": null,
-      "ms": 10223.807375,
-      "passed": false,
-      "rewritten": true,
-      "text": "This release has a few changes: a new settings page, faster startup, and a fix for the crash on wake."
-     },
-     "raw": "this release has a few changes a new settings page faster startup and a fix for the crash on wake",
-     "rules": {
-      "failures": [
-       "expected bullets list, got none"
-      ],
-      "passed": false,
-      "text": "This release has a few changes a new settings page faster startup and a fix for the crash on wake."
-     }
-    },
-    {
-     "id": "points-spoken",
-     "kind": "lists",
-     "llm": {
-      "answer": "bullet rice bullet tea bullet sugar",
-      "failures": [
-       "expected bullets list, got none"
-      ],
-      "fallback": null,
-      "ms": 9773.707458,
-      "passed": false,
-      "rewritten": true,
-      "text": "Bullet rice bullet tea bullet sugar."
-     },
-     "raw": "bullet rice bullet tea bullet sugar",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "- Rice\n- Tea\n- Sugar"
-     }
-    },
-    {
-     "id": "prose-not-a-list",
-     "kind": "keep as said",
-     "llm": {
-      "answer": "the summer programme begins tomorrow and runs for two weeks:",
-      "failures": [],
-      "fallback": null,
-      "ms": 10097.046208,
-      "passed": true,
-      "rewritten": true,
-      "text": "The summer programme begins tomorrow and runs for two weeks:"
-     },
-     "raw": "the summer programme begins tomorrow and runs for two weeks",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "The summer programme begins tomorrow and runs for two weeks."
-     }
-    },
-    {
-     "id": "prose-two-things",
-     "kind": "keep as said",
-     "llm": {
-      "answer": "I bought milk and eggs on the way home today",
-      "failures": [],
-      "fallback": null,
-      "ms": 9201.079167,
-      "passed": true,
-      "rewritten": true,
-      "text": "I bought milk and eggs on the way home today."
-     },
-     "raw": "I bought milk and eggs on the way home today",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "I bought milk and eggs on the way home today."
-     }
-    },
-    {
-     "id": "paragraph-spoken",
-     "kind": "paragraphs",
-     "llm": {
-      "answer": "Hi team: the build is green and ready to ship. Thanks",
-      "failures": [
-       "expected 3 paragraphs, got 1"
-      ],
-      "fallback": null,
-      "ms": 9957.844458,
-      "passed": false,
-      "rewritten": true,
-      "text": "Hi team: the build is green and ready to ship. Thanks."
-     },
-     "raw": "hi team new paragraph the build is green and ready to ship new paragraph thanks",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "Hi team\n\nThe build is green and ready to ship\n\nThanks."
-     }
-    },
-    {
-     "id": "paragraph-email",
-     "kind": "paragraphs",
-     "llm": {
-      "answer": "Hi Priya, thanks for the update. I’ll review it today. Regards, Sumedh",
-      "failures": [
-       "expected at least 3 lines, got 1"
-      ],
-      "fallback": null,
-      "ms": 10633.867417,
-      "passed": false,
-      "rewritten": true,
-      "text": "Hi Priya, thanks for the update. I’ll review it today. Regards, Sumedh."
-     },
-     "raw": "hi priya comma new line thanks for the update I'll review it today new line regards sumedh",
-     "rules": {
-      "failures": [
-       "missing Hi Priya,"
-      ],
-      "passed": false,
-      "text": "Hi priya\nThanks for the update I'll review it today\nRegards sumedh."
-     }
-    },
-    {
-     "id": "paragraph-topic-change",
-     "kind": "paragraphs",
-     "llm": {
-      "answer": "the build passed on all three platforms and the installers are uploaded. separately, I wanted to ask about the design review. can we move it to Thursday because I’m out on Wednesday?",
-      "failures": [
-       "expected 2 paragraphs, got 1"
-      ],
-      "fallback": null,
-      "ms": 12229.507417,
-      "passed": false,
-      "rewritten": true,
-      "text": "The build passed on all three platforms and the installers are uploaded. Separately, I wanted to ask about the design review. Can we move it to Thursday because I’m out on Wednesday?"
-     },
-     "raw": "the build passed on all three platforms and the installers are uploaded. separately I wanted to ask about the design review. can we move it to thursday because I'm out on wednesday",
-     "rules": {
-      "failures": [
-       "expected 2 paragraphs, got 1"
-      ],
-      "passed": false,
-      "text": "The build passed on all three platforms and the installers are uploaded. Separately I wanted to ask about the design review. Can we move it to thursday because I'm out on wednesday."
-     }
-    },
-    {
-     "id": "filler-start",
-     "kind": "fillers",
-     "llm": {
-      "answer": "I think we should go with the second option",
-      "failures": [],
-      "fallback": null,
-      "ms": 9693.802875,
-      "passed": true,
-      "rewritten": true,
-      "text": "I think we should go with the second option."
-     },
-     "raw": "um so uh I think we should go with the second option",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "So I think we should go with the second option."
-     }
-    },
-    {
-     "id": "filler-short",
-     "kind": "fillers",
-     "llm": {
-      "answer": "Okay\n",
-      "failures": [],
-      "fallback": null,
-      "ms": 7915.444209,
-      "passed": true,
-      "rewritten": true,
-      "text": "Okay"
-     },
-     "raw": "Erm. Okay",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "Okay"
-     }
-    },
-    {
-     "id": "filler-only",
-     "kind": "fillers",
-     "llm": {
-      "answer": "",
-      "failures": [],
-      "fallback": null,
-      "ms": 7530.14925,
-      "passed": true,
-      "rewritten": false,
-      "text": ""
-     },
-     "raw": "uh um",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": ""
-     }
-    },
-    {
-     "id": "keep-instruction",
-     "kind": "keep as said",
-     "llm": {
-      "answer": "Write an email to Priya about the delay in the shipment: 1. Please find attached the updated shipping timeline. 2. We are experiencing some unforeseen logistical challenges which have caused a slight delay. 3. We anticipate the shipment will now arrive by 15th July. 4. I will keep you updated on any further developments.",
-      "failures": [],
-      "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 13771.842333,
-      "passed": true,
-      "rewritten": false,
-      "text": "Write an email to priya about the delay in the shipment."
-     },
-     "raw": "write an email to priya about the delay in the shipment",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "Write an email to priya about the delay in the shipment."
-     }
-    },
-    {
-     "id": "keep-question",
-     "kind": "formatting",
-     "llm": {
-      "answer": "What time is the stand-up tomorrow?",
-      "failures": [],
-      "fallback": null,
-      "ms": 10249.962667,
-      "passed": true,
-      "rewritten": true,
-      "text": "What time is the stand-up tomorrow?"
-     },
-     "raw": "what time is the standup tomorrow",
-     "rules": {
-      "failures": [
-       "missing ?"
-      ],
-      "passed": false,
-      "text": "What time is the standup tomorrow."
-     }
-    },
-    {
-     "id": "keep-actually",
-     "kind": "keep as said",
-     "llm": {
-      "answer": "I think we’re fine with the current plan:",
-      "failures": [
-       "missing actually"
-      ],
-      "fallback": null,
-      "ms": 9470.396625,
-      "passed": false,
-      "rewritten": true,
-      "text": "I think we’re fine with the current plan:"
-     },
-     "raw": "actually I think we're fine with the current plan",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "Actually I think we're fine with the current plan."
-     }
-    },
-    {
-     "id": "numbers-indian",
-     "kind": "formatting",
-     "llm": {
-      "answer": "the budget is 2,50,000 rupees",
-      "failures": [],
-      "fallback": null,
-      "ms": 9955.482125,
-      "passed": true,
-      "rewritten": true,
-      "text": "The budget is 2,50,000 rupees."
-     },
-     "raw": "the budget is two lakh fifty thousand rupees",
-     "rules": {
-      "failures": [],
-      "passed": true,
-      "text": "The budget is ₹2,50,000."
-     }
-    },
-    {
-     "id": "code-flags",
-     "kind": "formatting",
-     "llm": {
-      "answer": "git push --force",
-      "failures": [],
-      "fallback": null,
-      "ms": 8711.705583,
-      "passed": true,
-      "rewritten": true,
-      "text": "git push --force"
-     },
-     "raw": "git push dash dash force",
-     "rules": {
-      "failures": [
-       "expected exactly \"git push --force\""
-      ],
-      "passed": false,
-      "text": "git push dash dash force"
-     }
-    }
-   ],
-   "schema": 2,
-   "transcription": {
-    "audio_s": 11.0,
-    "first_ms": 18862.886167,
-    "load_ms": 888.851166,
-    "realtime": 0.8194996311772252,
-    "runs_ms": [
-     13560.354834,
-     12606.486083,
-     13422.824833
-    ],
-    "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
-    "time_ms": 13422.824833,
-    "wer": 0.0
-   }
-  },
-  "windows": {
-   "arch": "x86_64",
-   "cleanup": {
-    "llm": {
-     "calls": 31,
-     "median_ms": 11838.9105,
-     "p90_ms": 14299.4002,
-     "rejected": 3
-    },
-    "rules_ms": 1.35
-   },
-   "cpus": 4,
-   "image": "win25-vs2026 20261116.315.1",
-   "models": {
-    "cleanup": "gemma3:4b",
-    "cleanup_digest": "sha256:f06e91e18fc74295d0c781bf91622508c75655e2c18ed869d52447ffe1e667e1",
-    "speech": "whisper-large-v3-turbo"
-   },
-   "platform": "windows",
-   "scenarios": [
-    {
-     "id": "correction-time",
-     "kind": "corrections",
-     "llm": {
-      "answer": "Let’s meet at 3 tomorrow.",
-      "failures": [],
-      "fallback": null,
-      "ms": 11386.9244,
-      "passed": true,
-      "rewritten": true,
-      "text": "Let’s meet at 3 tomorrow."
      },
      "raw": "let's meet at 2 actually 3 tomorrow",
      "rules": {
@@ -1433,7 +53,7 @@
        "still has \"no wait\""
       ],
       "fallback": null,
-      "ms": 12176.2055,
+      "ms": 16284.267251,
       "passed": false,
       "rewritten": true,
       "text": "Send the invoice to Priya, no wait, send it to Priya."
@@ -1456,7 +76,7 @@
        "still has \"sorry\""
       ],
       "fallback": null,
-      "ms": 11308.6792,
+      "ms": 15960.816176,
       "passed": false,
       "rewritten": true,
       "text": "The deadline for the report is Monday, sorry."
@@ -1475,7 +95,7 @@
       "answer": "book a table for six people",
       "failures": [],
       "fallback": null,
-      "ms": 10927.052599999999,
+      "ms": 15513.36648,
       "passed": true,
       "rewritten": true,
       "text": "Book a table for six people."
@@ -1498,7 +118,7 @@
        "still has \"or rather\""
       ],
       "fallback": null,
-      "ms": 12257.3621,
+      "ms": 16379.883538000002,
       "passed": false,
       "rewritten": true,
       "text": "We should store the sessions in PostgreSQL or rather in Redis for now."
@@ -1520,7 +140,7 @@
        "still has \"5\""
       ],
       "fallback": null,
-      "ms": 11838.9105,
+      "ms": 16397.430743,
       "passed": false,
       "rewritten": true,
       "text": "Call me back at 5 pm if that works."
@@ -1543,7 +163,7 @@
        "still has \"latest branch\""
       ],
       "fallback": null,
-      "ms": 12362.9418,
+      "ms": 16471.678639,
       "passed": false,
       "rewritten": true,
       "text": "The latest branch, the latest master branch has the fix for the crash."
@@ -1561,15 +181,13 @@
      "id": "repeat-stutter",
      "kind": "repetition",
      "llm": {
-      "answer": "I think the plan is fine:\n",
-      "failures": [
-       "expected exactly \"I think the plan is fine.\""
-      ],
+      "answer": "I think the plan is fine",
+      "failures": [],
       "fallback": null,
-      "ms": 11289.5614,
-      "passed": false,
+      "ms": 15418.377516999999,
+      "passed": true,
       "rewritten": true,
-      "text": "I think the plan is fine:"
+      "text": "I think the plan is fine."
      },
      "raw": "I I think the the plan is is fine",
      "rules": {
@@ -1585,7 +203,7 @@
       "answer": "Can you send me the final report by tonight?",
       "failures": [],
       "fallback": null,
-      "ms": 11447.6276,
+      "ms": 15879.975102999999,
       "passed": true,
       "rewritten": true,
       "text": "Can you send me the final report by tonight?"
@@ -1601,10 +219,10 @@
      "id": "repeat-login-bug",
      "kind": "repetition",
      "llm": {
-      "answer": "We need to fix the login page bug before the release.",
+      "answer": "we need to fix the login page bug before the release",
       "failures": [],
       "fallback": null,
-      "ms": 12296.0291,
+      "ms": 16174.270104000001,
       "passed": true,
       "rewritten": true,
       "text": "We need to fix the login page bug before the release."
@@ -1627,7 +245,7 @@
        "expected exactly \"He had had enough, very very much.\""
       ],
       "fallback": null,
-      "ms": 12323.2998,
+      "ms": 15545.176165,
       "passed": false,
       "rewritten": true,
       "text": "He had enough, very much."
@@ -1648,7 +266,7 @@
        "expected numbered list, got none"
       ],
       "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 15679.7919,
+      "ms": 17686.754844,
       "passed": false,
       "rewritten": false,
       "text": "My plan for today is one buy milk two call mom three pay the bills."
@@ -1671,7 +289,7 @@
        "expected numbered list, got none"
       ],
       "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 13757.794199999998,
+      "ms": 17271.27849,
       "passed": false,
       "rewritten": false,
       "text": "First we review the code second we run the tests and third we deploy to staging."
@@ -1692,7 +310,7 @@
       "answer": "1. Install the app:\n2. Sign in:\n3. Pick a model:",
       "failures": [],
       "fallback": null,
-      "ms": 13464.932299999999,
+      "ms": 17181.884059,
       "passed": true,
       "rewritten": true,
       "text": "1. Install the app:\n2. Sign in:\n3. Pick a model:"
@@ -1717,7 +335,7 @@
        "expected bullets list, got none"
       ],
       "fallback": null,
-      "ms": 13700.2852,
+      "ms": 17175.661221,
       "passed": false,
       "rewritten": true,
       "text": "Things to pack for the trip: sunscreen, a hat, two water bottles, and some snacks."
@@ -1735,15 +353,15 @@
      "id": "points-agenda",
      "kind": "lists",
      "llm": {
-      "answer": "Agenda for tomorrow’s meeting: budget review, the hiring plan, and the product roadmap.",
+      "answer": "Agenda for tomorrow’s meeting: budget review, the hiring plan, and the product roadmap:",
       "failures": [
        "expected bullets list, got none"
       ],
       "fallback": null,
-      "ms": 13496.5966,
+      "ms": 17035.981571,
       "passed": false,
       "rewritten": true,
-      "text": "Agenda for tomorrow’s meeting: budget review, the hiring plan, and the product roadmap."
+      "text": "Agenda for tomorrow’s meeting: budget review, the hiring plan, and the product roadmap:"
      },
      "raw": "agenda for tomorrow's meeting budget review the hiring plan and the product roadmap",
      "rules": {
@@ -1763,7 +381,7 @@
        "expected bullets list, got none"
       ],
       "fallback": null,
-      "ms": 14299.4002,
+      "ms": 17877.84256,
       "passed": false,
       "rewritten": true,
       "text": "This release has a few changes: a new settings page, faster startup, and a fix for the crash on wake."
@@ -1786,7 +404,7 @@
        "expected bullets list, got none"
       ],
       "fallback": null,
-      "ms": 10490.0246,
+      "ms": 15278.202077,
       "passed": false,
       "rewritten": true,
       "text": "Bullet rice bullet tea bullet sugar."
@@ -1805,7 +423,7 @@
       "answer": "the summer programme begins tomorrow and runs for two weeks:",
       "failures": [],
       "fallback": null,
-      "ms": 11580.9046,
+      "ms": 15981.825526,
       "passed": true,
       "rewritten": true,
       "text": "The summer programme begins tomorrow and runs for two weeks:"
@@ -1824,7 +442,7 @@
       "answer": "I bought milk and eggs on the way home today",
       "failures": [],
       "fallback": null,
-      "ms": 11353.2338,
+      "ms": 15852.323516,
       "passed": true,
       "rewritten": true,
       "text": "I bought milk and eggs on the way home today."
@@ -1845,7 +463,7 @@
        "expected 3 paragraphs, got 1"
       ],
       "fallback": null,
-      "ms": 12100.1094,
+      "ms": 16423.598132,
       "passed": false,
       "rewritten": true,
       "text": "Hi team: the build is green and ready to ship. Thanks."
@@ -1866,7 +484,7 @@
        "expected at least 3 lines, got 1"
       ],
       "fallback": null,
-      "ms": 14183.6693,
+      "ms": 18233.260007999997,
       "passed": false,
       "rewritten": true,
       "text": "Hi Priya, thanks for the update. I’ll review it today. Regards, Sumedh."
@@ -1889,7 +507,7 @@
        "expected 2 paragraphs, got 1"
       ],
       "fallback": null,
-      "ms": 17465.3346,
+      "ms": 19922.056952,
       "passed": false,
       "rewritten": true,
       "text": "The build passed on all three platforms and the installers are uploaded. Separately, I wanted to ask about the design review. Can we move it to Thursday because I’m out on Wednesday?"
@@ -1907,13 +525,15 @@
      "id": "filler-start",
      "kind": "fillers",
      "llm": {
-      "answer": "I think we should go with the second option",
-      "failures": [],
+      "answer": "So, we should go with the second option.",
+      "failures": [
+       "missing I think we should go with the second option"
+      ],
       "fallback": null,
-      "ms": 11450.181,
-      "passed": true,
+      "ms": 16003.156566000001,
+      "passed": false,
       "rewritten": true,
-      "text": "I think we should go with the second option."
+      "text": "So, we should go with the second option."
      },
      "raw": "um so uh I think we should go with the second option",
      "rules": {
@@ -1929,7 +549,7 @@
       "answer": "Okay\n",
       "failures": [],
       "fallback": null,
-      "ms": 9712.2099,
+      "ms": 14916.226608,
       "passed": true,
       "rewritten": true,
       "text": "Okay"
@@ -1945,10 +565,10 @@
      "id": "filler-only",
      "kind": "fillers",
      "llm": {
-      "answer": "EMPTY\n",
+      "answer": "",
       "failures": [],
       "fallback": null,
-      "ms": 9453.0314,
+      "ms": 14609.837087,
       "passed": true,
       "rewritten": false,
       "text": ""
@@ -1964,10 +584,10 @@
      "id": "keep-instruction",
      "kind": "keep as said",
      "llm": {
-      "answer": "Write an email to Priya about the delay in the shipment: 1. Please find an update on the shipment delay. 2. We are experiencing some unforeseen logistical challenges. 3. We anticipate a revised delivery timeline within 48 hours. We will keep you updated.",
+      "answer": "Write an email to Priya about the delay in the shipment: 1. Please find attached the updated shipping timeline. 2. We are experiencing some unforeseen logistical challenges which have caused a slight delay. 3. We anticipate the shipment will now arrive by 15th July. 4. I will keep you updated on any further developments.",
       "failures": [],
       "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
-      "ms": 20267.691899999998,
+      "ms": 22395.212277,
       "passed": true,
       "rewritten": false,
       "text": "Write an email to priya about the delay in the shipment."
@@ -1986,7 +606,7 @@
       "answer": "What time is the stand-up tomorrow?",
       "failures": [],
       "fallback": null,
-      "ms": 11315.143100000001,
+      "ms": 15644.863299,
       "passed": true,
       "rewritten": true,
       "text": "What time is the stand-up tomorrow?"
@@ -2009,7 +629,7 @@
        "missing actually"
       ],
       "fallback": null,
-      "ms": 11613.9005,
+      "ms": 16027.984373,
       "passed": false,
       "rewritten": true,
       "text": "I think we’re fine with the current plan:"
@@ -2028,7 +648,7 @@
       "answer": "the budget is 2,50,000 rupees",
       "failures": [],
       "fallback": null,
-      "ms": 11768.8303,
+      "ms": 16132.017374000001,
       "passed": true,
       "rewritten": true,
       "text": "The budget is 2,50,000 rupees."
@@ -2047,7 +667,7 @@
       "answer": "git push --force",
       "failures": [],
       "fallback": null,
-      "ms": 10252.7461,
+      "ms": 15529.303761,
       "passed": true,
       "rewritten": true,
       "text": "git push --force"
@@ -2065,16 +685,1396 @@
    "schema": 2,
    "transcription": {
     "audio_s": 11.0,
-    "first_ms": 21882.382,
-    "load_ms": 137.9247,
-    "realtime": 0.5002646058675535,
+    "first_ms": 19174.203932,
+    "load_ms": 43.239798,
+    "realtime": 0.5815054888044053,
     "runs_ms": [
-     21655.955899999997,
-     22368.05,
-     21988.3635
+     18916.41646,
+     18906.652209,
+     18965.770038
     ],
     "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
-    "time_ms": 21988.3635,
+    "time_ms": 18916.41646,
+    "wer": 0.0
+   }
+  },
+  "macos": {
+   "arch": "aarch64",
+   "cleanup": {
+    "llm": {
+     "calls": 31,
+     "median_ms": 13180.555292,
+     "p90_ms": 15167.398334,
+     "rejected": 3
+    },
+    "rules_ms": 0.697208
+   },
+   "cpus": 3,
+   "image": "macos15 20261118.0550.1",
+   "models": {
+    "cleanup": "gemma3:4b",
+    "cleanup_digest": "sha256:f06e91e18fc74295d0c781bf91622508c75655e2c18ed869d52447ffe1e667e1",
+    "speech": "whisper-large-v3-turbo"
+   },
+   "platform": "macos",
+   "scenarios": [
+    {
+     "id": "correction-time",
+     "kind": "corrections",
+     "llm": {
+      "answer": "let’s meet at 3 tomorrow:",
+      "failures": [],
+      "fallback": null,
+      "ms": 14340.2835,
+      "passed": true,
+      "rewritten": true,
+      "text": "Let’s meet at 3 tomorrow:"
+     },
+     "raw": "let's meet at 2 actually 3 tomorrow",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "Let's meet at 3 tomorrow."
+     }
+    },
+    {
+     "id": "correction-person",
+     "kind": "corrections",
+     "llm": {
+      "answer": "send the invoice to Priya",
+      "failures": [],
+      "fallback": null,
+      "ms": 12979.690916,
+      "passed": true,
+      "rewritten": true,
+      "text": "Send the invoice to Priya."
+     },
+     "raw": "send the invoice to Rahul no wait send it to Priya",
+     "rules": {
+      "failures": [
+       "missing invoice"
+      ],
+      "passed": false,
+      "text": "Send it to Priya."
+     }
+    },
+    {
+     "id": "correction-day",
+     "kind": "corrections",
+     "llm": {
+      "answer": "the deadline for the report is Monday, sorry.",
+      "failures": [
+       "still has \"sorry\""
+      ],
+      "fallback": null,
+      "ms": 13722.350417,
+      "passed": false,
+      "rewritten": true,
+      "text": "The deadline for the report is Monday, sorry."
+     },
+     "raw": "the deadline for the report is Friday sorry I mean Monday",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "The deadline for the report is Monday."
+     }
+    },
+    {
+     "id": "correction-scratch-that",
+     "kind": "corrections",
+     "llm": {
+      "answer": "book a table for six people",
+      "failures": [],
+      "fallback": null,
+      "ms": 12680.694291,
+      "passed": true,
+      "rewritten": true,
+      "text": "Book a table for six people."
+     },
+     "raw": "book a table for four people scratch that make it six people",
+     "rules": {
+      "failures": [
+       "missing table"
+      ],
+      "passed": false,
+      "text": "Make it six people."
+     }
+    },
+    {
+     "id": "correction-or-rather",
+     "kind": "corrections",
+     "llm": {
+      "answer": "we should store the sessions in PostgreSQL or rather in Redis for now",
+      "failures": [
+       "still has \"or rather\""
+      ],
+      "fallback": null,
+      "ms": 15167.398334,
+      "passed": false,
+      "rewritten": true,
+      "text": "We should store the sessions in PostgreSQL or rather in Redis for now."
+     },
+     "raw": "we should store the sessions in postgres or rather in redis for now",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "We should store the sessions in redis for now."
+     }
+    },
+    {
+     "id": "correction-number",
+     "kind": "corrections",
+     "llm": {
+      "answer": "Call me back at 5 pm if that works.",
+      "failures": [
+       "missing 6",
+       "still has \"5\""
+      ],
+      "fallback": null,
+      "ms": 12449.301292,
+      "passed": false,
+      "rewritten": true,
+      "text": "Call me back at 5 pm if that works."
+     },
+     "raw": "call me back at 5 pm no 6 pm if that works",
+     "rules": {
+      "failures": [
+       "still has \"5\""
+      ],
+      "passed": false,
+      "text": "Call me back at 5 pm no 6 pm if that works."
+     }
+    },
+    {
+     "id": "repeat-restart",
+     "kind": "repetition",
+     "llm": {
+      "answer": "the latest branch, the latest master branch has the fix for the crash",
+      "failures": [
+       "still has \"latest branch\""
+      ],
+      "fallback": null,
+      "ms": 13569.447875,
+      "passed": false,
+      "rewritten": true,
+      "text": "The latest branch, the latest master branch has the fix for the crash."
+     },
+     "raw": "the latest branch, latest master branch has the fix for the crash",
+     "rules": {
+      "failures": [
+       "still has \"latest branch\""
+      ],
+      "passed": false,
+      "text": "The latest branch, latest master branch has the fix for the crash."
+     }
+    },
+    {
+     "id": "repeat-stutter",
+     "kind": "repetition",
+     "llm": {
+      "answer": "I think the plan is fine:\n",
+      "failures": [
+       "expected exactly \"I think the plan is fine.\""
+      ],
+      "fallback": null,
+      "ms": 12623.634417,
+      "passed": false,
+      "rewritten": true,
+      "text": "I think the plan is fine:"
+     },
+     "raw": "I I think the the plan is is fine",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "I think the plan is fine."
+     }
+    },
+    {
+     "id": "repeat-more-detail",
+     "kind": "repetition",
+     "llm": {
+      "answer": "Can you send me the final report by tonight?",
+      "failures": [],
+      "fallback": null,
+      "ms": 13322.856749999999,
+      "passed": true,
+      "rewritten": true,
+      "text": "Can you send me the final report by tonight?"
+     },
+     "raw": "can you send me the report, the final report by tonight",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "Can you send me the final report by tonight."
+     }
+    },
+    {
+     "id": "repeat-login-bug",
+     "kind": "repetition",
+     "llm": {
+      "answer": "we need to fix the login page bug before the release",
+      "failures": [],
+      "fallback": null,
+      "ms": 16339.731874999998,
+      "passed": true,
+      "rewritten": true,
+      "text": "We need to fix the login page bug before the release."
+     },
+     "raw": "we need to fix the login, the login page bug before the release",
+     "rules": {
+      "failures": [
+       "still has \"the login,\""
+      ],
+      "passed": false,
+      "text": "We need to fix the login, the login page bug before the release."
+     }
+    },
+    {
+     "id": "repeat-deliberate",
+     "kind": "repetition",
+     "llm": {
+      "answer": "He had enough, very much.",
+      "failures": [
+       "expected exactly \"He had had enough, very very much.\""
+      ],
+      "fallback": null,
+      "ms": 14037.421,
+      "passed": false,
+      "rewritten": true,
+      "text": "He had enough, very much."
+     },
+     "raw": "He had had enough, very very much.",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "He had had enough, very very much."
+     }
+    },
+    {
+     "id": "list-counted",
+     "kind": "lists",
+     "llm": {
+      "answer": "My plan for today is:\n1. Buy milk\n2. Call Mom\n3. Pay the bills",
+      "failures": [
+       "expected numbered list, got none"
+      ],
+      "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
+      "ms": 15049.457833,
+      "passed": false,
+      "rewritten": false,
+      "text": "My plan for today is one buy milk two call mom three pay the bills."
+     },
+     "raw": "my plan for today is one buy milk two call mom three pay the bills",
+     "rules": {
+      "failures": [
+       "expected numbered list, got none"
+      ],
+      "passed": false,
+      "text": "My plan for today is one buy milk two call mom three pay the bills."
+     }
+    },
+    {
+     "id": "list-ordinals",
+     "kind": "lists",
+     "llm": {
+      "answer": "1. Review the code:\n2. Run the tests:\n3. Deploy to staging:",
+      "failures": [
+       "expected numbered list, got none"
+      ],
+      "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
+      "ms": 14139.025209,
+      "passed": false,
+      "rewritten": false,
+      "text": "First we review the code second we run the tests and third we deploy to staging."
+     },
+     "raw": "first we review the code second we run the tests and third we deploy to staging",
+     "rules": {
+      "failures": [
+       "expected numbered list, got none"
+      ],
+      "passed": false,
+      "text": "First we review the code second we run the tests and third we deploy to staging."
+     }
+    },
+    {
+     "id": "list-steps",
+     "kind": "lists",
+     "llm": {
+      "answer": "1. Install the app:\n2. Sign in:\n3. Pick a model:",
+      "failures": [],
+      "fallback": null,
+      "ms": 14007.711208,
+      "passed": true,
+      "rewritten": true,
+      "text": "1. Install the app:\n2. Sign in:\n3. Pick a model:"
+     },
+     "raw": "there are three steps step one install the app step two sign in step three pick a model",
+     "rules": {
+      "failures": [
+       "still has \"app step\"",
+       "still has \"in step\"",
+       "still has \"steps step\""
+      ],
+      "passed": false,
+      "text": "There are three steps step:\n1. Install the app step\n2. Sign in step\n3. Pick a model"
+     }
+    },
+    {
+     "id": "points-packing",
+     "kind": "lists",
+     "llm": {
+      "answer": "Things to pack for the trip: sunscreen, a hat, two water bottles, and some snacks.",
+      "failures": [
+       "expected bullets list, got none"
+      ],
+      "fallback": null,
+      "ms": 13180.555292,
+      "passed": false,
+      "rewritten": true,
+      "text": "Things to pack for the trip: sunscreen, a hat, two water bottles, and some snacks."
+     },
+     "raw": "things to pack for the trip sunscreen a hat two water bottles and some snacks",
+     "rules": {
+      "failures": [
+       "expected bullets list, got none"
+      ],
+      "passed": false,
+      "text": "Things to pack for the trip sunscreen a hat two water bottles and some snacks."
+     }
+    },
+    {
+     "id": "points-agenda",
+     "kind": "lists",
+     "llm": {
+      "answer": "Agenda for tomorrow’s meeting: budget review, the hiring plan, and the product roadmap.",
+      "failures": [
+       "expected bullets list, got none"
+      ],
+      "fallback": null,
+      "ms": 11961.365916,
+      "passed": false,
+      "rewritten": true,
+      "text": "Agenda for tomorrow’s meeting: budget review, the hiring plan, and the product roadmap."
+     },
+     "raw": "agenda for tomorrow's meeting budget review the hiring plan and the product roadmap",
+     "rules": {
+      "failures": [
+       "expected bullets list, got none"
+      ],
+      "passed": false,
+      "text": "Agenda for tomorrow's meeting budget review the hiring plan and the product roadmap."
+     }
+    },
+    {
+     "id": "points-release",
+     "kind": "lists",
+     "llm": {
+      "answer": "This release has a few changes: a new settings page, faster startup, and a fix for the crash on wake.",
+      "failures": [
+       "expected bullets list, got none"
+      ],
+      "fallback": null,
+      "ms": 11592.207667,
+      "passed": false,
+      "rewritten": true,
+      "text": "This release has a few changes: a new settings page, faster startup, and a fix for the crash on wake."
+     },
+     "raw": "this release has a few changes a new settings page faster startup and a fix for the crash on wake",
+     "rules": {
+      "failures": [
+       "expected bullets list, got none"
+      ],
+      "passed": false,
+      "text": "This release has a few changes a new settings page faster startup and a fix for the crash on wake."
+     }
+    },
+    {
+     "id": "points-spoken",
+     "kind": "lists",
+     "llm": {
+      "answer": "bullet rice bullet tea bullet sugar",
+      "failures": [
+       "expected bullets list, got none"
+      ],
+      "fallback": null,
+      "ms": 10999.835792,
+      "passed": false,
+      "rewritten": true,
+      "text": "Bullet rice bullet tea bullet sugar."
+     },
+     "raw": "bullet rice bullet tea bullet sugar",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "- Rice\n- Tea\n- Sugar"
+     }
+    },
+    {
+     "id": "prose-not-a-list",
+     "kind": "keep as said",
+     "llm": {
+      "answer": "the summer programme begins tomorrow and runs for two weeks:",
+      "failures": [],
+      "fallback": null,
+      "ms": 13476.706375,
+      "passed": true,
+      "rewritten": true,
+      "text": "The summer programme begins tomorrow and runs for two weeks:"
+     },
+     "raw": "the summer programme begins tomorrow and runs for two weeks",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "The summer programme begins tomorrow and runs for two weeks."
+     }
+    },
+    {
+     "id": "prose-two-things",
+     "kind": "keep as said",
+     "llm": {
+      "answer": "I bought milk and eggs on the way home today",
+      "failures": [],
+      "fallback": null,
+      "ms": 11909.907541999999,
+      "passed": true,
+      "rewritten": true,
+      "text": "I bought milk and eggs on the way home today."
+     },
+     "raw": "I bought milk and eggs on the way home today",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "I bought milk and eggs on the way home today."
+     }
+    },
+    {
+     "id": "paragraph-spoken",
+     "kind": "paragraphs",
+     "llm": {
+      "answer": "Hi team: the build is green and ready to ship. Thanks",
+      "failures": [
+       "expected 3 paragraphs, got 1"
+      ],
+      "fallback": null,
+      "ms": 14515.081417,
+      "passed": false,
+      "rewritten": true,
+      "text": "Hi team: the build is green and ready to ship. Thanks."
+     },
+     "raw": "hi team new paragraph the build is green and ready to ship new paragraph thanks",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "Hi team\n\nThe build is green and ready to ship\n\nThanks."
+     }
+    },
+    {
+     "id": "paragraph-email",
+     "kind": "paragraphs",
+     "llm": {
+      "answer": "Hi Priya, thanks for the update. I’ll review it today. Regards, Sumedh",
+      "failures": [
+       "expected at least 3 lines, got 1"
+      ],
+      "fallback": null,
+      "ms": 14743.053042,
+      "passed": false,
+      "rewritten": true,
+      "text": "Hi Priya, thanks for the update. I’ll review it today. Regards, Sumedh."
+     },
+     "raw": "hi priya comma new line thanks for the update I'll review it today new line regards sumedh",
+     "rules": {
+      "failures": [
+       "missing Hi Priya,"
+      ],
+      "passed": false,
+      "text": "Hi priya\nThanks for the update I'll review it today\nRegards sumedh."
+     }
+    },
+    {
+     "id": "paragraph-topic-change",
+     "kind": "paragraphs",
+     "llm": {
+      "answer": "the build passed on all three platforms and the installers are uploaded. separately, I wanted to ask about the design review. can we move it to Thursday because I’m out on Wednesday?",
+      "failures": [
+       "expected 2 paragraphs, got 1"
+      ],
+      "fallback": null,
+      "ms": 16185.318958,
+      "passed": false,
+      "rewritten": true,
+      "text": "The build passed on all three platforms and the installers are uploaded. Separately, I wanted to ask about the design review. Can we move it to Thursday because I’m out on Wednesday?"
+     },
+     "raw": "the build passed on all three platforms and the installers are uploaded. separately I wanted to ask about the design review. can we move it to thursday because I'm out on wednesday",
+     "rules": {
+      "failures": [
+       "expected 2 paragraphs, got 1"
+      ],
+      "passed": false,
+      "text": "The build passed on all three platforms and the installers are uploaded. Separately I wanted to ask about the design review. Can we move it to thursday because I'm out on wednesday."
+     }
+    },
+    {
+     "id": "filler-start",
+     "kind": "fillers",
+     "llm": {
+      "answer": "I think we should go with the second option",
+      "failures": [],
+      "fallback": null,
+      "ms": 12674.062375,
+      "passed": true,
+      "rewritten": true,
+      "text": "I think we should go with the second option."
+     },
+     "raw": "um so uh I think we should go with the second option",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "So I think we should go with the second option."
+     }
+    },
+    {
+     "id": "filler-short",
+     "kind": "fillers",
+     "llm": {
+      "answer": "Okay\n",
+      "failures": [],
+      "fallback": null,
+      "ms": 10584.306792,
+      "passed": true,
+      "rewritten": true,
+      "text": "Okay"
+     },
+     "raw": "Erm. Okay",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "Okay"
+     }
+    },
+    {
+     "id": "filler-only",
+     "kind": "fillers",
+     "llm": {
+      "answer": "",
+      "failures": [],
+      "fallback": null,
+      "ms": 9562.733541,
+      "passed": true,
+      "rewritten": false,
+      "text": ""
+     },
+     "raw": "uh um",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": ""
+     }
+    },
+    {
+     "id": "keep-instruction",
+     "kind": "keep as said",
+     "llm": {
+      "answer": "Write an email to Priya about the delay in the shipment: 1. Please find attached the updated shipping timeline. 2. We are experiencing some unforeseen logistical challenges which have caused a slight delay. 3. We anticipate the shipment will now arrive by 15th July. 4. I will keep you updated on any further developments.",
+      "failures": [],
+      "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
+      "ms": 18951.515333,
+      "passed": true,
+      "rewritten": false,
+      "text": "Write an email to priya about the delay in the shipment."
+     },
+     "raw": "write an email to priya about the delay in the shipment",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "Write an email to priya about the delay in the shipment."
+     }
+    },
+    {
+     "id": "keep-question",
+     "kind": "formatting",
+     "llm": {
+      "answer": "What time is the stand-up tomorrow?",
+      "failures": [],
+      "fallback": null,
+      "ms": 11246.589542,
+      "passed": true,
+      "rewritten": true,
+      "text": "What time is the stand-up tomorrow?"
+     },
+     "raw": "what time is the standup tomorrow",
+     "rules": {
+      "failures": [
+       "missing ?"
+      ],
+      "passed": false,
+      "text": "What time is the standup tomorrow."
+     }
+    },
+    {
+     "id": "keep-actually",
+     "kind": "keep as said",
+     "llm": {
+      "answer": "I think we’re fine with the current plan:",
+      "failures": [
+       "missing actually"
+      ],
+      "fallback": null,
+      "ms": 12488.077374999999,
+      "passed": false,
+      "rewritten": true,
+      "text": "I think we’re fine with the current plan:"
+     },
+     "raw": "actually I think we're fine with the current plan",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "Actually I think we're fine with the current plan."
+     }
+    },
+    {
+     "id": "numbers-indian",
+     "kind": "formatting",
+     "llm": {
+      "answer": "the budget is 2,50,000 rupees",
+      "failures": [],
+      "fallback": null,
+      "ms": 12215.224959000001,
+      "passed": true,
+      "rewritten": true,
+      "text": "The budget is 2,50,000 rupees."
+     },
+     "raw": "the budget is two lakh fifty thousand rupees",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "The budget is ₹2,50,000."
+     }
+    },
+    {
+     "id": "code-flags",
+     "kind": "formatting",
+     "llm": {
+      "answer": "git push --force",
+      "failures": [],
+      "fallback": null,
+      "ms": 10717.258875000001,
+      "passed": true,
+      "rewritten": true,
+      "text": "git push --force"
+     },
+     "raw": "git push dash dash force",
+     "rules": {
+      "failures": [
+       "expected exactly \"git push --force\""
+      ],
+      "passed": false,
+      "text": "git push dash dash force"
+     }
+    }
+   ],
+   "schema": 2,
+   "transcription": {
+    "audio_s": 11.0,
+    "first_ms": 28868.943375,
+    "load_ms": 1341.7450410000001,
+    "realtime": 0.5919079643382448,
+    "runs_ms": [
+     18490.872625,
+     19885.032166999998,
+     18583.97025
+    ],
+    "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+    "time_ms": 18583.97025,
+    "wer": 0.0
+   }
+  },
+  "windows": {
+   "arch": "x86_64",
+   "cleanup": {
+    "llm": {
+     "calls": 31,
+     "median_ms": 14368.0154,
+     "p90_ms": 18099.6375,
+     "rejected": 3
+    },
+    "rules_ms": 1.4178000000000002
+   },
+   "cpus": 4,
+   "image": "win25-vs2026 20261116.315.1",
+   "models": {
+    "cleanup": "gemma3:4b",
+    "cleanup_digest": "sha256:f06e91e18fc74295d0c781bf91622508c75655e2c18ed869d52447ffe1e667e1",
+    "speech": "whisper-large-v3-turbo"
+   },
+   "platform": "windows",
+   "scenarios": [
+    {
+     "id": "correction-time",
+     "kind": "corrections",
+     "llm": {
+      "answer": "let’s meet at 3 tomorrow:",
+      "failures": [],
+      "fallback": null,
+      "ms": 13754.2317,
+      "passed": true,
+      "rewritten": true,
+      "text": "Let’s meet at 3 tomorrow:"
+     },
+     "raw": "let's meet at 2 actually 3 tomorrow",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "Let's meet at 3 tomorrow."
+     }
+    },
+    {
+     "id": "correction-person",
+     "kind": "corrections",
+     "llm": {
+      "answer": "send the invoice to Priya",
+      "failures": [],
+      "fallback": null,
+      "ms": 13577.3171,
+      "passed": true,
+      "rewritten": true,
+      "text": "Send the invoice to Priya."
+     },
+     "raw": "send the invoice to Rahul no wait send it to Priya",
+     "rules": {
+      "failures": [
+       "missing invoice"
+      ],
+      "passed": false,
+      "text": "Send it to Priya."
+     }
+    },
+    {
+     "id": "correction-day",
+     "kind": "corrections",
+     "llm": {
+      "answer": "the deadline for the report is Monday, sorry",
+      "failures": [
+       "still has \"sorry\""
+      ],
+      "fallback": null,
+      "ms": 13736.9362,
+      "passed": false,
+      "rewritten": true,
+      "text": "The deadline for the report is Monday, sorry."
+     },
+     "raw": "the deadline for the report is Friday sorry I mean Monday",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "The deadline for the report is Monday."
+     }
+    },
+    {
+     "id": "correction-scratch-that",
+     "kind": "corrections",
+     "llm": {
+      "answer": "book a table for six people",
+      "failures": [],
+      "fallback": null,
+      "ms": 13455.431700000001,
+      "passed": true,
+      "rewritten": true,
+      "text": "Book a table for six people."
+     },
+     "raw": "book a table for four people scratch that make it six people",
+     "rules": {
+      "failures": [
+       "missing table"
+      ],
+      "passed": false,
+      "text": "Make it six people."
+     }
+    },
+    {
+     "id": "correction-or-rather",
+     "kind": "corrections",
+     "llm": {
+      "answer": "we should store the sessions in PostgreSQL or rather in Redis for now",
+      "failures": [
+       "still has \"or rather\""
+      ],
+      "fallback": null,
+      "ms": 15490.49,
+      "passed": false,
+      "rewritten": true,
+      "text": "We should store the sessions in PostgreSQL or rather in Redis for now."
+     },
+     "raw": "we should store the sessions in postgres or rather in redis for now",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "We should store the sessions in redis for now."
+     }
+    },
+    {
+     "id": "correction-number",
+     "kind": "corrections",
+     "llm": {
+      "answer": "Call me back at 5 pm if that works.",
+      "failures": [
+       "missing 6",
+       "still has \"5\""
+      ],
+      "fallback": null,
+      "ms": 17149.2185,
+      "passed": false,
+      "rewritten": true,
+      "text": "Call me back at 5 pm if that works."
+     },
+     "raw": "call me back at 5 pm no 6 pm if that works",
+     "rules": {
+      "failures": [
+       "still has \"5\""
+      ],
+      "passed": false,
+      "text": "Call me back at 5 pm no 6 pm if that works."
+     }
+    },
+    {
+     "id": "repeat-restart",
+     "kind": "repetition",
+     "llm": {
+      "answer": "the latest branch, the latest master branch has the fix for the crash",
+      "failures": [
+       "still has \"latest branch\""
+      ],
+      "fallback": null,
+      "ms": 15299.3797,
+      "passed": false,
+      "rewritten": true,
+      "text": "The latest branch, the latest master branch has the fix for the crash."
+     },
+     "raw": "the latest branch, latest master branch has the fix for the crash",
+     "rules": {
+      "failures": [
+       "still has \"latest branch\""
+      ],
+      "passed": false,
+      "text": "The latest branch, latest master branch has the fix for the crash."
+     }
+    },
+    {
+     "id": "repeat-stutter",
+     "kind": "repetition",
+     "llm": {
+      "answer": "I think the plan is fine",
+      "failures": [],
+      "fallback": null,
+      "ms": 13644.5878,
+      "passed": true,
+      "rewritten": true,
+      "text": "I think the plan is fine."
+     },
+     "raw": "I I think the the plan is is fine",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "I think the plan is fine."
+     }
+    },
+    {
+     "id": "repeat-more-detail",
+     "kind": "repetition",
+     "llm": {
+      "answer": "Can you send me the final report by tonight?",
+      "failures": [],
+      "fallback": null,
+      "ms": 14038.6356,
+      "passed": true,
+      "rewritten": true,
+      "text": "Can you send me the final report by tonight?"
+     },
+     "raw": "can you send me the report, the final report by tonight",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "Can you send me the final report by tonight."
+     }
+    },
+    {
+     "id": "repeat-login-bug",
+     "kind": "repetition",
+     "llm": {
+      "answer": "We need to fix the login page bug before the release.",
+      "failures": [],
+      "fallback": null,
+      "ms": 16907.8958,
+      "passed": true,
+      "rewritten": true,
+      "text": "We need to fix the login page bug before the release."
+     },
+     "raw": "we need to fix the login, the login page bug before the release",
+     "rules": {
+      "failures": [
+       "still has \"the login,\""
+      ],
+      "passed": false,
+      "text": "We need to fix the login, the login page bug before the release."
+     }
+    },
+    {
+     "id": "repeat-deliberate",
+     "kind": "repetition",
+     "llm": {
+      "answer": "He had enough, very much.",
+      "failures": [
+       "expected exactly \"He had had enough, very very much.\""
+      ],
+      "fallback": null,
+      "ms": 19343.3624,
+      "passed": false,
+      "rewritten": true,
+      "text": "He had enough, very much."
+     },
+     "raw": "He had had enough, very very much.",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "He had had enough, very very much."
+     }
+    },
+    {
+     "id": "list-counted",
+     "kind": "lists",
+     "llm": {
+      "answer": "My plan for today is:\n1. Buy milk\n2. Call Mom\n3. Pay the bills",
+      "failures": [
+       "expected numbered list, got none"
+      ],
+      "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
+      "ms": 21371.668700000002,
+      "passed": false,
+      "rewritten": false,
+      "text": "My plan for today is one buy milk two call mom three pay the bills."
+     },
+     "raw": "my plan for today is one buy milk two call mom three pay the bills",
+     "rules": {
+      "failures": [
+       "expected numbered list, got none"
+      ],
+      "passed": false,
+      "text": "My plan for today is one buy milk two call mom three pay the bills."
+     }
+    },
+    {
+     "id": "list-ordinals",
+     "kind": "lists",
+     "llm": {
+      "answer": "1. Review the code:\n2. Run the tests:\n3. Deploy to staging:",
+      "failures": [
+       "expected numbered list, got none"
+      ],
+      "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
+      "ms": 15182.9999,
+      "passed": false,
+      "rewritten": false,
+      "text": "First we review the code second we run the tests and third we deploy to staging."
+     },
+     "raw": "first we review the code second we run the tests and third we deploy to staging",
+     "rules": {
+      "failures": [
+       "expected numbered list, got none"
+      ],
+      "passed": false,
+      "text": "First we review the code second we run the tests and third we deploy to staging."
+     }
+    },
+    {
+     "id": "list-steps",
+     "kind": "lists",
+     "llm": {
+      "answer": "1. Install the app:\n2. Sign in:\n3. Pick a model:",
+      "failures": [],
+      "fallback": null,
+      "ms": 15371.6718,
+      "passed": true,
+      "rewritten": true,
+      "text": "1. Install the app:\n2. Sign in:\n3. Pick a model:"
+     },
+     "raw": "there are three steps step one install the app step two sign in step three pick a model",
+     "rules": {
+      "failures": [
+       "still has \"app step\"",
+       "still has \"in step\"",
+       "still has \"steps step\""
+      ],
+      "passed": false,
+      "text": "There are three steps step:\n1. Install the app step\n2. Sign in step\n3. Pick a model"
+     }
+    },
+    {
+     "id": "points-packing",
+     "kind": "lists",
+     "llm": {
+      "answer": "Things to pack for the trip: sunscreen, a hat, two water bottles and some snacks.",
+      "failures": [
+       "expected bullets list, got none"
+      ],
+      "fallback": null,
+      "ms": 15062.114599999999,
+      "passed": false,
+      "rewritten": true,
+      "text": "Things to pack for the trip: sunscreen, a hat, two water bottles and some snacks."
+     },
+     "raw": "things to pack for the trip sunscreen a hat two water bottles and some snacks",
+     "rules": {
+      "failures": [
+       "expected bullets list, got none"
+      ],
+      "passed": false,
+      "text": "Things to pack for the trip sunscreen a hat two water bottles and some snacks."
+     }
+    },
+    {
+     "id": "points-agenda",
+     "kind": "lists",
+     "llm": {
+      "answer": "Agenda for tomorrow’s meeting: budget review, the hiring plan, and the product roadmap.",
+      "failures": [
+       "expected bullets list, got none"
+      ],
+      "fallback": null,
+      "ms": 15075.9513,
+      "passed": false,
+      "rewritten": true,
+      "text": "Agenda for tomorrow’s meeting: budget review, the hiring plan, and the product roadmap."
+     },
+     "raw": "agenda for tomorrow's meeting budget review the hiring plan and the product roadmap",
+     "rules": {
+      "failures": [
+       "expected bullets list, got none"
+      ],
+      "passed": false,
+      "text": "Agenda for tomorrow's meeting budget review the hiring plan and the product roadmap."
+     }
+    },
+    {
+     "id": "points-release",
+     "kind": "lists",
+     "llm": {
+      "answer": "This release has a few changes: a new settings page, faster startup, and a fix for the crash on wake.",
+      "failures": [
+       "expected bullets list, got none"
+      ],
+      "fallback": null,
+      "ms": 15689.264299999999,
+      "passed": false,
+      "rewritten": true,
+      "text": "This release has a few changes: a new settings page, faster startup, and a fix for the crash on wake."
+     },
+     "raw": "this release has a few changes a new settings page faster startup and a fix for the crash on wake",
+     "rules": {
+      "failures": [
+       "expected bullets list, got none"
+      ],
+      "passed": false,
+      "text": "This release has a few changes a new settings page faster startup and a fix for the crash on wake."
+     }
+    },
+    {
+     "id": "points-spoken",
+     "kind": "lists",
+     "llm": {
+      "answer": "bullet rice bullet tea bullet sugar",
+      "failures": [
+       "expected bullets list, got none"
+      ],
+      "fallback": null,
+      "ms": 13251.9205,
+      "passed": false,
+      "rewritten": true,
+      "text": "Bullet rice bullet tea bullet sugar."
+     },
+     "raw": "bullet rice bullet tea bullet sugar",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "- Rice\n- Tea\n- Sugar"
+     }
+    },
+    {
+     "id": "prose-not-a-list",
+     "kind": "keep as said",
+     "llm": {
+      "answer": "the summer programme begins tomorrow and runs for two weeks:",
+      "failures": [],
+      "fallback": null,
+      "ms": 14083.6278,
+      "passed": true,
+      "rewritten": true,
+      "text": "The summer programme begins tomorrow and runs for two weeks:"
+     },
+     "raw": "the summer programme begins tomorrow and runs for two weeks",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "The summer programme begins tomorrow and runs for two weeks."
+     }
+    },
+    {
+     "id": "prose-two-things",
+     "kind": "keep as said",
+     "llm": {
+      "answer": "I bought milk and eggs on the way home today",
+      "failures": [],
+      "fallback": null,
+      "ms": 13807.525800000001,
+      "passed": true,
+      "rewritten": true,
+      "text": "I bought milk and eggs on the way home today."
+     },
+     "raw": "I bought milk and eggs on the way home today",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "I bought milk and eggs on the way home today."
+     }
+    },
+    {
+     "id": "paragraph-spoken",
+     "kind": "paragraphs",
+     "llm": {
+      "answer": "Hi team: the build is green and ready to ship. Thanks",
+      "failures": [
+       "expected 3 paragraphs, got 1"
+      ],
+      "fallback": null,
+      "ms": 14368.0154,
+      "passed": false,
+      "rewritten": true,
+      "text": "Hi team: the build is green and ready to ship. Thanks."
+     },
+     "raw": "hi team new paragraph the build is green and ready to ship new paragraph thanks",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "Hi team\n\nThe build is green and ready to ship\n\nThanks."
+     }
+    },
+    {
+     "id": "paragraph-email",
+     "kind": "paragraphs",
+     "llm": {
+      "answer": "Hi Priya, thanks for the update. I’ll review it today. Regards, Sumedh",
+      "failures": [
+       "expected at least 3 lines, got 1"
+      ],
+      "fallback": null,
+      "ms": 16082.4508,
+      "passed": false,
+      "rewritten": true,
+      "text": "Hi Priya, thanks for the update. I’ll review it today. Regards, Sumedh."
+     },
+     "raw": "hi priya comma new line thanks for the update I'll review it today new line regards sumedh",
+     "rules": {
+      "failures": [
+       "missing Hi Priya,"
+      ],
+      "passed": false,
+      "text": "Hi priya\nThanks for the update I'll review it today\nRegards sumedh."
+     }
+    },
+    {
+     "id": "paragraph-topic-change",
+     "kind": "paragraphs",
+     "llm": {
+      "answer": "the build passed on all three platforms and the installers are uploaded. separately, I wanted to ask about the design review. can we move it to Thursday because I’m out on Wednesday?",
+      "failures": [
+       "expected 2 paragraphs, got 1"
+      ],
+      "fallback": null,
+      "ms": 18099.6375,
+      "passed": false,
+      "rewritten": true,
+      "text": "The build passed on all three platforms and the installers are uploaded. Separately, I wanted to ask about the design review. Can we move it to Thursday because I’m out on Wednesday?"
+     },
+     "raw": "the build passed on all three platforms and the installers are uploaded. separately I wanted to ask about the design review. can we move it to thursday because I'm out on wednesday",
+     "rules": {
+      "failures": [
+       "expected 2 paragraphs, got 1"
+      ],
+      "passed": false,
+      "text": "The build passed on all three platforms and the installers are uploaded. Separately I wanted to ask about the design review. Can we move it to thursday because I'm out on wednesday."
+     }
+    },
+    {
+     "id": "filler-start",
+     "kind": "fillers",
+     "llm": {
+      "answer": "I think we should go with the second option",
+      "failures": [],
+      "fallback": null,
+      "ms": 14026.3887,
+      "passed": true,
+      "rewritten": true,
+      "text": "I think we should go with the second option."
+     },
+     "raw": "um so uh I think we should go with the second option",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "So I think we should go with the second option."
+     }
+    },
+    {
+     "id": "filler-short",
+     "kind": "fillers",
+     "llm": {
+      "answer": "Okay\n",
+      "failures": [],
+      "fallback": null,
+      "ms": 13051.196,
+      "passed": true,
+      "rewritten": true,
+      "text": "Okay"
+     },
+     "raw": "Erm. Okay",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "Okay"
+     }
+    },
+    {
+     "id": "filler-only",
+     "kind": "fillers",
+     "llm": {
+      "answer": "EMPTY\n",
+      "failures": [],
+      "fallback": null,
+      "ms": 12931.7929,
+      "passed": true,
+      "rewritten": false,
+      "text": ""
+     },
+     "raw": "uh um",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": ""
+     }
+    },
+    {
+     "id": "keep-instruction",
+     "kind": "keep as said",
+     "llm": {
+      "answer": "Write an email to Priya about the delay in the shipment: 1. Please find attached the updated shipping timeline. 2. We are experiencing some unforeseen logistical challenges which have caused a slight delay. 3. We anticipate the shipment will now arrive by 15th July. 4. I will keep you updated on any further developments.",
+      "failures": [],
+      "fallback": "The language model's answer did not look like a cleanup, so the built-in formatter was used",
+      "ms": 20745.9013,
+      "passed": true,
+      "rewritten": false,
+      "text": "Write an email to priya about the delay in the shipment."
+     },
+     "raw": "write an email to priya about the delay in the shipment",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "Write an email to priya about the delay in the shipment."
+     }
+    },
+    {
+     "id": "keep-question",
+     "kind": "formatting",
+     "llm": {
+      "answer": "What time is the stand-up tomorrow?",
+      "failures": [],
+      "fallback": null,
+      "ms": 15337.618900000001,
+      "passed": true,
+      "rewritten": true,
+      "text": "What time is the stand-up tomorrow?"
+     },
+     "raw": "what time is the standup tomorrow",
+     "rules": {
+      "failures": [
+       "missing ?"
+      ],
+      "passed": false,
+      "text": "What time is the standup tomorrow."
+     }
+    },
+    {
+     "id": "keep-actually",
+     "kind": "keep as said",
+     "llm": {
+      "answer": "I think we’re fine with the current plan",
+      "failures": [
+       "missing actually"
+      ],
+      "fallback": null,
+      "ms": 13888.831100000001,
+      "passed": false,
+      "rewritten": true,
+      "text": "I think we’re fine with the current plan."
+     },
+     "raw": "actually I think we're fine with the current plan",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "Actually I think we're fine with the current plan."
+     }
+    },
+    {
+     "id": "numbers-indian",
+     "kind": "formatting",
+     "llm": {
+      "answer": "the budget is 2,50,000 rupees",
+      "failures": [],
+      "fallback": null,
+      "ms": 14139.762499999999,
+      "passed": true,
+      "rewritten": true,
+      "text": "The budget is 2,50,000 rupees."
+     },
+     "raw": "the budget is two lakh fifty thousand rupees",
+     "rules": {
+      "failures": [],
+      "passed": true,
+      "text": "The budget is ₹2,50,000."
+     }
+    },
+    {
+     "id": "code-flags",
+     "kind": "formatting",
+     "llm": {
+      "answer": "git push --force",
+      "failures": [],
+      "fallback": null,
+      "ms": 13287.1307,
+      "passed": true,
+      "rewritten": true,
+      "text": "git push --force"
+     },
+     "raw": "git push dash dash force",
+     "rules": {
+      "failures": [
+       "expected exactly \"git push --force\""
+      ],
+      "passed": false,
+      "text": "git push dash dash force"
+     }
+    }
+   ],
+   "schema": 2,
+   "transcription": {
+    "audio_s": 11.0,
+    "first_ms": 21437.330599999998,
+    "load_ms": 120.3308,
+    "realtime": 0.5216608450185797,
+    "runs_ms": [
+     21084.9463,
+     21120.4313,
+     21086.497300000003
+    ],
+    "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+    "time_ms": 21086.497300000003,
     "wer": 0.0
    }
   }
