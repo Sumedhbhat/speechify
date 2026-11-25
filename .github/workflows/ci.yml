@@ -1,6 +1,8 @@
 name: CI
 
 # Tests on every platform, then a gate that requires full coverage.
+# Each platform runs its own Test then Measure, so a slow platform does not hold
+# up the others; only the coverage gate and the performance report wait for all three.
 # Pull requests run this directly; pushes to main and release branches run it
 # from release.yml, so a release is published only after it passes.
 
@@ -28,30 +30,22 @@ env:
   TEST_STREAM_MODEL_SHA256: 930e4622ad3a24158b91406c30c977fa6a26b34cb32d6ac3e57cfb23383a869e
 
 jobs:
-  test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+  test-linux:
+    name: &test-name Test (${{ matrix.os }})
+    runs-on: &runner ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
-      fail-fast: false
       matrix:
-        include: &platforms
-          - os: ubuntu-24.04
+        include:
+          - &linux
+            os: ubuntu-24.04
             platform: linux
             python: python3
             exe: ''
-          - os: macos-15
-            platform: macos
-            python: python3
-            exe: ''
-          - os: windows-2025
-            platform: windows
-            python: python
-            exe: .exe
-    defaults:
+    defaults: &bash
       run:
         shell: bash
-    steps:
+    steps: &test-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -100,21 +94,48 @@ jobs:
           retention-days: 3
           overwrite: true
 
-  measure:
-    name: Measure (${{ matrix.platform }})
-    needs: test
-    if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main') }}
-    continue-on-error: ${{ github.event_name != 'pull_request' }}
-    runs-on: ${{ matrix.os }}
+  test-macos:
+    name: *test-name
+    runs-on: *runner
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        include:
+          - &macos
+            os: macos-15
+            platform: macos
+            python: python3
+            exe: ''
+    defaults: *bash
+    steps: *test-steps
+
+  test-windows:
+    name: *test-name
+    runs-on: *runner
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        include:
+          - &windows
+            os: windows-2025
+            platform: windows
+            python: python
+            exe: .exe
+    defaults: *bash
+    steps: *test-steps
+
+  measure-linux:
+    name: &measure-name Measure (${{ matrix.platform }})
+    needs: test-linux
+    if: &measure-if ${{ !cancelled() && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main') }}
+    continue-on-error: &measure-optional ${{ github.event_name != 'pull_request' }}
+    runs-on: *runner
     timeout-minutes: 60
     strategy:
-      fail-fast: false
       matrix:
-        include: *platforms
-    defaults:
-      run:
-        shell: bash
-    steps:
+        include: [*linux]
+    defaults: *bash
+    steps: &measure-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -160,17 +181,43 @@ jobs:
           path: .build/llm/server.log
           retention-days: 7
 
+  measure-macos:
+    name: *measure-name
+    needs: test-macos
+    if: *measure-if
+    continue-on-error: *measure-optional
+    runs-on: *runner
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        include: [*macos]
+    defaults: *bash
+    steps: *measure-steps
+
+  measure-windows:
+    name: *measure-name
+    needs: test-windows
+    if: *measure-if
+    continue-on-error: *measure-optional
+    runs-on: *runner
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        include: [*windows]
+    defaults: *bash
+    steps: *measure-steps
+
   coverage-gate:
     name: Tauri full coverage gate
-    needs: test
+    needs: [test-linux, test-macos, test-windows]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Require passing tests on every platform
         env:
-          TEST_RESULT: ${{ needs.test.result }}
-        run: test "$TEST_RESULT" = success
+          RESULTS: ${{ needs.test-linux.result }} ${{ needs.test-macos.result }} ${{ needs.test-windows.result }}
+        run: test "$RESULTS" = "success success success"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -198,8 +245,8 @@ jobs:
 
   performance:
     name: Performance report
-    needs: measure
-    if: ${{ !cancelled() && (github.event_name == 'pull_request' || (github.ref == 'refs/heads/main' && needs.measure.result == 'success')) }}
+    needs: [measure-linux, measure-macos, measure-windows]
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || (github.ref == 'refs/heads/main' && needs.measure-linux.result == 'success' && needs.measure-macos.result == 'success' && needs.measure-windows.result == 'success')) }}
     continue-on-error: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
