@@ -56,6 +56,67 @@ A habit the code follows: a line that can only run when a test is about to fail 
 
 A new pull request run cancels the one it supersedes. Release runs always finish.
 
+## Performance and cleanup scenarios
+
+On pull requests and on every push to `main`, `ci.yml` also measures performance. The jobs run in this order:
+
+1. **Test (ubuntu-24.04, macos-15, windows-2025)** also builds the `perf` binary (`bench/src/bin/perf.rs`) in release mode and uploads it.
+2. **Measure (linux, macos, windows)** starts as soon as the Test job of its own platform passes, without waiting for the other platforms. Each platform is its own pair of jobs (`test-linux` then `measure-linux`, and so on) rather than one matrix, because a matrix job waits for every entry of the matrix before the next job starts. The pairs share their steps through YAML anchors. Each Measure job takes the binary built on its own platform and runs `scripts/perf-run.sh`, which measures three things:
+   - **Transcription**: speech to raw text on `jfk.wav` with the default speech model. It reports the load time, the median time to text over 3 warm runs, the speed relative to real time, and the share of words wrong.
+   - **Cleanup**: raw text to the typed text. It reports the rule formatter's time over every scenario, and the language model's typical and slowest call times. It also counts how many of the model's answers the app rejected, using the rules instead.
+   - **Scenarios**: each case in `bench/scenarios.json` runs through the rules alone and through the default language model, with the real system prompt (`core/src/prompts/cleanup.txt`), vetting and fallback. Results are grouped by `kind`: corrections, repetition, lists, paragraphs, fillers, formatting, and keep as said.
+
+   The language model runs on the CPU under llama.cpp `b12211`, which `scripts/fetch-perf-llm.py` pins by SHA-256. CI gives each request 180 seconds instead of the app's 6, and sends short dictations to the model too, so the prompt is judged on its answers rather than on how fast the runner is.
+3. **Performance report** waits for every Measure job and runs `.github/actions/performance-report` with one input, `target`:
+   - `branch` (pull requests): downloads `performance.json` from the newest nightly release that has one, and adds a new comment to the pull request on every run, headed with the commit it measured, so the comments read as a timeline of what each push changed. The layout is the template `bench/perf_comment.md`; `perf_report.py` fills in its `$name` fields, so a wording or order change goes in the template, not the script.
+   - `main` (pushes to `main`): saves the three platforms as the `performance-baseline` artifact, only when all three were measured. `release.yml` attaches it to the nightly release as `performance.json`.
+
+   The comment:
+   - compares every number with that nightly release and marks changes beyond ±15% (and beyond a small absolute floor);
+   - lists scenarios that started or stopped passing;
+   - shows every failing scenario, with what was said and what came out;
+   - ends with a JSON summary for tools to read, keyed by stable metric names such as `time_ms` and `llm_p90_ms`.
+
+   The comment shows at most 40 failing rows, with long text shortened, so it stays under GitHub's size limit. The run's job summary has everything.
+
+   Rows are named for what they measure, not for a model, so changing a default keeps them comparable. The footer names the models, and says when `main` was measured with different ones. Results carry a format number, `SCHEMA` in `perf.rs` and in `perf_report.py`, and a test checks that the two match. Bump both when the results JSON changes shape. Until a nightly has results in the new format, pull requests say the baseline is in an older format instead of comparing.
+
+   Nothing is committed. The results live only on releases, so CI never pushes to a pull request branch and never starts runs that wait for approval. A merge with `[no-release]` publishes no nightly, so the next pull request compares with the release before it.
+
+None of this fails a pull request over a slower number or a worse scenario. The comment reports them. On `main`, Measure and Performance report may fail without failing the release.
+
+### Default models
+
+`core/defaults.json` holds the models the app starts with and the ones CI measures:
+
+- `speech_model`: the speech model on a machine with a graphics card. It is also the model in `Settings::default()`, and the one Transcription measures.
+- `cpu_speech_model`: what first start picks without a graphics card.
+- `streaming_model`
+- `cleanup_model`: the Ollama tag for cleanup, which Cleanup and Scenarios use.
+- `teacher_speech_model` and `cpu_teacher_speech_model`: the nightly review's speech models, with and without a graphics card.
+- `teacher_cleanup_model`: the nightly review's cleanup model.
+
+Speech models are catalog ids (`core/src/catalog.rs`), and CI downloads them through the catalog with its pinned checksum. For the cleanup model, `scripts/fetch-perf-llm.py` reads the Ollama tag, looks it up in Ollama's registry, and downloads the same weights Ollama would, checked against the digest the registry gives. Ollama tags can move, so the results record that digest. Changing a default changes the app and the next CI measurement together. The catalog test fails if a speech default is not in the catalog.
+
+`release.yml` grants its `Tests` job `pull-requests: write` because Performance report asks for it, and a reusable workflow cannot ask for more than its caller. On pushes it does not comment.
+
+Each scenario needs an `id`, a `kind`, the `raw` text and at least one check. `perf` refuses to run on an unknown key, a duplicate id, `items` without `list`, or an unknown category, so a misspelt check cannot pass silently. Scenario checks: `equals` (exact text), `contains` (each entry a phrase, or a list of alternatives), `absent` (phrases that must not remain, matched as whole words), `list` (`numbered`, `bullets` or `none`) with `items`, `paragraphs` (blocks separated by a blank line) and `min_lines`. `category` is `work` (the default, typing into Slack), `email`, `code` or `personal`. Some scenarios describe behaviour the app does not have yet, such as bullet points for items that are listed without being counted. They fail until it does, and the comment shows when that changes.
+
+To run it locally (Linux):
+
+```
+bash scripts/fetch-test-fixtures.sh
+python3 scripts/fetch-perf-llm.py .build/llm
+cargo build --release --locked -p speechify-bench --bin perf
+source .build/test-env.sh
+bash scripts/perf-run.sh target/release/perf .build/llm .build/perf/linux.json
+python3 bench/perf_report.py .build/perf --head-sha local --out-json .build/perf/record.json --out-md .build/perf/comment.md
+```
+
+Without `PERF_LLM_URL`, `target/release/perf bench/scenarios.json OUT.json` skips the cleanup model and runs everything else.
+
+Tests: `cargo test -p speechify-bench` covers the scenario checker and validation, and `python3 -m unittest discover -s bench -p 'test_*.py'` covers the report. The Linux Test job runs both.
+
 ## Things to know
 
 - Passing here is not the same as working on a person's desktop. The automated tests have passed on Linux, and the Windows and macOS test jobs run in CI, but nobody has used the app by hand on Windows or macOS yet. See the status section of the [README](../README.md).

@@ -1,0 +1,369 @@
+[
+  {
+    "id": "correction-time",
+    "kind": "corrections",
+    "raw": "let's meet at 2 actually 3 tomorrow",
+    "checks": {
+      "contains": [
+        "3"
+      ],
+      "absent": [
+        "2",
+        "actually"
+      ]
+    }
+  },
+  {
+    "id": "correction-person",
+    "kind": "corrections",
+    "raw": "send the invoice to Rahul no wait send it to Priya",
+    "checks": {
+      "contains": [
+        "Priya",
+        "invoice"
+      ],
+      "absent": [
+        "Rahul",
+        "no wait"
+      ]
+    }
+  },
+  {
+    "id": "correction-day",
+    "kind": "corrections",
+    "raw": "the deadline for the report is Friday sorry I mean Monday",
+    "checks": {
+      "contains": [
+        "Monday"
+      ],
+      "absent": [
+        "Friday",
+        "sorry"
+      ]
+    }
+  },
+  {
+    "id": "correction-scratch-that",
+    "kind": "corrections",
+    "raw": "book a table for four people scratch that make it six people",
+    "checks": {
+      "contains": [
+        [
+          "six",
+          "6"
+        ],
+        "table"
+      ],
+      "absent": [
+        "four",
+        "scratch that"
+      ]
+    }
+  },
+  {
+    "id": "correction-or-rather",
+    "kind": "corrections",
+    "raw": "we should store the sessions in postgres or rather in redis for now",
+    "checks": {
+      "contains": [
+        [
+          "redis",
+          "Redis"
+        ]
+      ],
+      "absent": [
+        "postgres",
+        "or rather"
+      ]
+    }
+  },
+  {
+    "id": "correction-number",
+    "kind": "corrections",
+    "raw": "call me back at 5 pm no 6 pm if that works",
+    "checks": {
+      "contains": [
+        "6"
+      ],
+      "absent": [
+        "5"
+      ]
+    }
+  },
+  {
+    "id": "repeat-restart",
+    "kind": "repetition",
+    "raw": "the latest branch, latest master branch has the fix for the crash",
+    "checks": {
+      "contains": [
+        "latest master branch"
+      ],
+      "absent": [
+        "latest branch"
+      ]
+    }
+  },
+  {
+    "id": "repeat-stutter",
+    "kind": "repetition",
+    "raw": "I I think the the plan is is fine",
+    "checks": {
+      "equals": "I think the plan is fine."
+    }
+  },
+  {
+    "id": "repeat-more-detail",
+    "kind": "repetition",
+    "raw": "can you send me the report, the final report by tonight",
+    "checks": {
+      "contains": [
+        "the final report"
+      ],
+      "absent": [
+        "send me the report"
+      ]
+    }
+  },
+  {
+    "id": "repeat-login-bug",
+    "kind": "repetition",
+    "raw": "we need to fix the login, the login page bug before the release",
+    "checks": {
+      "contains": [
+        "login page bug"
+      ],
+      "absent": [
+        "the login,"
+      ]
+    }
+  },
+  {
+    "id": "repeat-deliberate",
+    "kind": "repetition",
+    "raw": "He had had enough, very very much.",
+    "checks": {
+      "equals": "He had had enough, very very much."
+    }
+  },
+  {
+    "id": "list-counted",
+    "kind": "lists",
+    "raw": "my plan for today is one buy milk two call mom three pay the bills",
+    "checks": {
+      "list": "numbered",
+      "items": 3,
+      "contains": [
+        [
+          "buy milk",
+          "Buy milk"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "list-ordinals",
+    "kind": "lists",
+    "raw": "first we review the code second we run the tests and third we deploy to staging",
+    "checks": {
+      "list": "numbered",
+      "items": 3
+    }
+  },
+  {
+    "id": "list-steps",
+    "kind": "lists",
+    "raw": "there are three steps step one install the app step two sign in step three pick a model",
+    "checks": {
+      "list": "numbered",
+      "items": 3,
+      "absent": [
+        "app step",
+        "in step",
+        "steps step"
+      ]
+    }
+  },
+  {
+    "id": "points-packing",
+    "kind": "lists",
+    "raw": "things to pack for the trip sunscreen a hat two water bottles and some snacks",
+    "checks": {
+      "list": "bullets",
+      "items": 4
+    }
+  },
+  {
+    "id": "points-agenda",
+    "kind": "lists",
+    "raw": "agenda for tomorrow's meeting budget review the hiring plan and the product roadmap",
+    "checks": {
+      "list": "bullets",
+      "items": 3
+    }
+  },
+  {
+    "id": "points-release",
+    "kind": "lists",
+    "raw": "this release has a few changes a new settings page faster startup and a fix for the crash on wake",
+    "checks": {
+      "list": "bullets",
+      "items": 3
+    }
+  },
+  {
+    "id": "points-spoken",
+    "kind": "lists",
+    "raw": "bullet rice bullet tea bullet sugar",
+    "checks": {
+      "list": "bullets",
+      "items": 3
+    }
+  },
+  {
+    "id": "prose-not-a-list",
+    "kind": "keep as said",
+    "raw": "the summer programme begins tomorrow and runs for two weeks",
+    "checks": {
+      "list": "none",
+      "contains": [
+        "summer programme"
+      ]
+    }
+  },
+  {
+    "id": "prose-two-things",
+    "kind": "keep as said",
+    "raw": "I bought milk and eggs on the way home today",
+    "checks": {
+      "list": "none",
+      "contains": [
+        "milk and eggs"
+      ]
+    }
+  },
+  {
+    "id": "paragraph-spoken",
+    "kind": "paragraphs",
+    "raw": "hi team new paragraph the build is green and ready to ship new paragraph thanks",
+    "checks": {
+      "paragraphs": 3
+    }
+  },
+  {
+    "id": "paragraph-email",
+    "kind": "paragraphs",
+    "category": "email",
+    "raw": "hi priya comma new line thanks for the update I'll review it today new line regards sumedh",
+    "checks": {
+      "min_lines": 3,
+      "contains": [
+        "Hi Priya,",
+        "Regards"
+      ]
+    }
+  },
+  {
+    "id": "paragraph-topic-change",
+    "kind": "paragraphs",
+    "raw": "the build passed on all three platforms and the installers are uploaded. separately I wanted to ask about the design review. can we move it to thursday because I'm out on wednesday",
+    "checks": {
+      "paragraphs": 2
+    }
+  },
+  {
+    "id": "filler-start",
+    "kind": "fillers",
+    "raw": "um so uh I think we should go with the second option",
+    "checks": {
+      "contains": [
+        "I think we should go with the second option"
+      ],
+      "absent": [
+        "um",
+        "uh"
+      ]
+    }
+  },
+  {
+    "id": "filler-short",
+    "kind": "fillers",
+    "raw": "Erm. Okay",
+    "checks": {
+      "equals": "Okay"
+    }
+  },
+  {
+    "id": "filler-only",
+    "kind": "fillers",
+    "raw": "uh um",
+    "checks": {
+      "equals": ""
+    }
+  },
+  {
+    "id": "keep-instruction",
+    "kind": "keep as said",
+    "raw": "write an email to priya about the delay in the shipment",
+    "checks": {
+      "contains": [
+        [
+          "write an email to Priya",
+          "Write an email to Priya"
+        ]
+      ],
+      "absent": [
+        "Dear",
+        "Subject"
+      ],
+      "list": "none"
+    }
+  },
+  {
+    "id": "keep-question",
+    "kind": "formatting",
+    "raw": "what time is the standup tomorrow",
+    "checks": {
+      "contains": [
+        [
+          "what time is the standup tomorrow",
+          "what time is the stand-up tomorrow"
+        ],
+        "?"
+      ]
+    }
+  },
+  {
+    "id": "keep-actually",
+    "kind": "keep as said",
+    "raw": "actually I think we're fine with the current plan",
+    "checks": {
+      "contains": [
+        "actually"
+      ]
+    }
+  },
+  {
+    "id": "numbers-indian",
+    "kind": "formatting",
+    "raw": "the budget is two lakh fifty thousand rupees",
+    "checks": {
+      "contains": [
+        [
+          "₹2,50,000",
+          "₹2.5 lakh",
+          "2,50,000",
+          "2.5 lakh"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "code-flags",
+    "kind": "formatting",
+    "category": "code",
+    "raw": "git push dash dash force",
+    "checks": {
+      "equals": "git push --force"
+    }
+  }
+]

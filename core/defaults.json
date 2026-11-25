@@ -1,0 +1,9 @@
+{
+  "speech_model": "whisper-large-v3-turbo",
+  "cpu_speech_model": "parakeet-tdt-0.6b-v3",
+  "streaming_model": "parakeet-unified-en-0.6b",
+  "cleanup_model": "gemma3:4b",
+  "teacher_speech_model": "whisper-large-v3",
+  "cpu_teacher_speech_model": "whisper-large-v3-turbo",
+  "teacher_cleanup_model": "qwen3.5:9b-q4_K_M"
+}

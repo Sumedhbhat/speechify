@@ -64,6 +64,10 @@ pub struct RewriteCircuit {
 }
 
 impl RewriteCircuit {
+    pub fn failures(&self) -> u32 {
+        self.failures
+    }
+
     pub fn cooling(&self, now_ms: u64) -> bool {
         now_ms < self.retry_at_ms
     }
@@ -1406,6 +1410,7 @@ mod tests {
         assert!(run(120_100).rewritten);
         assert!(run(120_101).fallback.unwrap().contains("down"));
         assert!(!circuit.cooling(120_102));
+        assert_eq!(circuit.failures(), 1);
         assert_eq!(llm.seen.borrow().len(), 5);
         assert_eq!(store.dictionary().unwrap()[0].hits, 6);
     }
