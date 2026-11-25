@@ -267,15 +267,17 @@ fn language_model(scenarios: &[Scenario], url: &str, model: &str) -> (Value, Vec
     let store = Store::memory();
     let compose = |s: &Scenario| {
         let (target, category) = destination(&s.category);
-        pipeline::compose_guarded(
+        let mut circuit = RewriteCircuit::default();
+        let out = pipeline::compose_guarded(
             &s.raw,
             &target,
             category,
             &settings,
             &store,
             Some(&capture as &dyn Rewriter),
-            (&mut RewriteCircuit::default(), 0),
-        )
+            (&mut circuit, 0),
+        );
+        (out, circuit.failures() > 0)
     };
     if let Some(first) = scenarios.iter().max_by_key(|s| s.raw.split_whitespace().count()) {
         compose(first);
@@ -285,7 +287,7 @@ fn language_model(scenarios: &[Scenario], url: &str, model: &str) -> (Value, Vec
     let rows: Vec<Value> = scenarios
         .iter()
         .map(|s| {
-            let out = compose(s);
+            let (out, rejected) = compose(s);
             let calls = capture.calls.take();
             latencies.extend(calls.iter().map(|(ms, _)| *ms));
             let text = out.as_ref().map_or(String::new(), |c| c.text.clone());
@@ -298,6 +300,7 @@ fn language_model(scenarios: &[Scenario], url: &str, model: &str) -> (Value, Vec
                 "ms": calls.iter().map(|(ms, _)| ms).sum::<f64>(),
                 "rewritten": out.as_ref().is_some_and(|c| c.rewritten),
                 "fallback": out.and_then(|c| c.fallback),
+                "rejected": rejected,
                 "answer": calls.last().map(|(_, answer)| answer.clone()),
             })
         })
@@ -306,7 +309,7 @@ fn language_model(scenarios: &[Scenario], url: &str, model: &str) -> (Value, Vec
         "median_ms": median(&latencies),
         "p90_ms": percentile(&latencies, 0.9),
         "calls": latencies.len(),
-        "rejected": rows.iter().filter(|r| !r["fallback"].is_null()).count(),
+        "rejected": rows.iter().filter(|r| r["rejected"] == true).count(),
     });
     (summary, rows)
 }

@@ -232,6 +232,7 @@ jobs:
 
       - name: Attach the performance results
         if: env.CHANNEL == 'nightly' && hashFiles('performance/performance.json') != ''
+        continue-on-error: true
         run: gh release upload "v$VERSION" performance/performance.json --clobber
 
       # The app reads updates/<channel>.json. This runs after the versioned

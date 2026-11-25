@@ -39,7 +39,7 @@ runs:
         GH_REPO: ${{ github.repository }}
       run: |
         mkdir -p .build/perf/baseline
-        tags="$(gh release list --limit 30 --json tagName,createdAt \
+        tags="$(gh release list --limit 200 --json tagName,createdAt \
           --jq '[.[] | select(.tagName | test("-nightly\\."))] | sort_by(.createdAt) | reverse | .[].tagName')"
         for tag in $tags; do
           if gh release download "$tag" --pattern performance.json --dir .build/perf/baseline 2>/dev/null; then
