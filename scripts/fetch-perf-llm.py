@@ -4,6 +4,7 @@ import shutil
 import stat
 import sys
 import tarfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -25,6 +26,7 @@ SERVERS = {
 }
 REGISTRY = "https://registry.ollama.ai/v2"
 DEFAULTS = Path(__file__).resolve().parent.parent / "core" / "defaults.json"
+ATTEMPTS = 3
 
 
 def digest(path):
@@ -35,16 +37,44 @@ def digest(path):
     return sha.hexdigest()
 
 
+def retried(action, what):
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            return action()
+        except OSError as error:
+            if attempt == ATTEMPTS:
+                sys.exit(f"Could not fetch {what} after {ATTEMPTS} attempts: {error}")
+            print(f"Fetching {what} failed ({error}); trying again", file=sys.stderr)
+            time.sleep(10 * attempt)
+
+
 def fetch(url, path, expected):
     if path.exists() and digest(path) == expected:
         return
     part = path.with_name(path.name + ".part")
-    with urllib.request.urlopen(urllib.request.Request(url), timeout=120) as response, open(part, "wb") as out:
-        shutil.copyfileobj(response, out, 1 << 20)
+
+    def download():
+        with urllib.request.urlopen(urllib.request.Request(url), timeout=120) as response, open(part, "wb") as out:
+            shutil.copyfileobj(response, out, 1 << 20)
+
+    retried(download, url)
     if digest(part) != expected:
         part.unlink()
         sys.exit(f"The checksum of {url} does not match")
     part.replace(path)
+
+
+def manifest(name, version):
+    request = urllib.request.Request(
+        f"{REGISTRY}/{name}/manifests/{version or 'latest'}",
+        headers={"Accept": "application/vnd.docker.distribution.manifest.v2+json"},
+    )
+
+    def read():
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.load(response)
+
+    return retried(read, f"the manifest of {name}:{version}")
 
 
 def main():
@@ -67,19 +97,20 @@ def main():
         with tarfile.open(archive) as bundle:
             bundle.extractall(server_dir, filter="data")
     name = "llama-server.exe" if platform == "win32" else "llama-server"
-    server = next(server_dir.rglob(name))
+    server = next(server_dir.rglob(name), None)
+    if server is None:
+        sys.exit(f"{archive_name} has no {name}")
     server.chmod(server.stat().st_mode | stat.S_IXUSR)
     tag = json.loads(DEFAULTS.read_text(encoding="utf-8"))["cleanup_model"]
     name, _, version = tag.partition(":")
     if "/" not in name:
         name = f"library/{name}"
-    request = urllib.request.Request(
-        f"{REGISTRY}/{name}/manifests/{version or 'latest'}",
-        headers={"Accept": "application/vnd.docker.distribution.manifest.v2+json"},
+    layer = next(
+        (item for item in manifest(name, version)["layers"] if item["mediaType"] == "application/vnd.ollama.image.model"),
+        None,
     )
-    with urllib.request.urlopen(request, timeout=60) as response:
-        manifest = json.load(response)
-    layer = next(item for item in manifest["layers"] if item["mediaType"] == "application/vnd.ollama.image.model")
+    if layer is None:
+        sys.exit(f"{tag} has no model layer in the Ollama registry")
     model_sha = layer["digest"].removeprefix("sha256:")
     model = dest / f"{model_sha}.gguf"
     fetch(f"{REGISTRY}/{name}/blobs/{layer['digest']}", model, model_sha)

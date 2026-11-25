@@ -75,9 +75,11 @@ On pull requests and on every push to `main`, `ci.yml` also measures performance
    - compares every number with that nightly release and marks changes beyond ±15% (and beyond a small absolute floor);
    - lists scenarios that started or stopped passing;
    - shows every failing scenario, with what was said and what came out;
-   - ends with a JSON summary for tools to read.
+   - ends with a JSON summary for tools to read, keyed by stable metric names such as `time_ms` and `llm_p90_ms`.
 
-   Rows are named for what they measure, not for a model, so changing a default keeps them comparable. The footer names the models, and says when `main` was measured with different ones.
+   The comment shows at most 40 failing rows, with long text shortened, so it stays under GitHub's size limit. The run's job summary has everything.
+
+   Rows are named for what they measure, not for a model, so changing a default keeps them comparable. The footer names the models, and says when `main` was measured with different ones. Results carry a format number, `SCHEMA` in `perf.rs` and in `perf_report.py`, and a test checks that the two match. Bump both when the results JSON changes shape. Until a nightly has results in the new format, pull requests say the baseline is in an older format instead of comparing.
 
    Nothing is committed. The results live only on releases, so CI never pushes to a pull request branch and never starts runs that wait for approval. A merge with `[no-release]` publishes no nightly, so the next pull request compares with the release before it.
 
@@ -98,7 +100,7 @@ Speech models are catalog ids (`core/src/catalog.rs`), and CI downloads them thr
 
 `release.yml` grants its `Tests` job `pull-requests: write` because Performance report asks for it, and a reusable workflow cannot ask for more than its caller. On pushes it does not comment.
 
-Scenario checks, all optional: `equals` (exact text), `contains` (each entry a phrase, or a list of alternatives), `absent` (phrases that must not remain, matched as whole words), `list` (`numbered`, `bullets` or `none`) with `items`, `paragraphs` (blocks separated by a blank line) and `min_lines`. `category` is `work` (the default, typing into Slack), `email`, `code` or `personal`. Some scenarios describe behaviour the app does not have yet, such as bullet points for items that are listed without being counted. They fail until it does, and the comment shows when that changes.
+Each scenario needs an `id`, a `kind`, the `raw` text and at least one check. `perf` refuses to run on an unknown key, a duplicate id, `items` without `list`, or an unknown category, so a misspelt check cannot pass silently. Scenario checks: `equals` (exact text), `contains` (each entry a phrase, or a list of alternatives), `absent` (phrases that must not remain, matched as whole words), `list` (`numbered`, `bullets` or `none`) with `items`, `paragraphs` (blocks separated by a blank line) and `min_lines`. `category` is `work` (the default, typing into Slack), `email`, `code` or `personal`. Some scenarios describe behaviour the app does not have yet, such as bullet points for items that are listed without being counted. They fail until it does, and the comment shows when that changes.
 
 To run it locally (Linux):
 
@@ -112,6 +114,8 @@ python3 bench/perf_report.py .build/perf --head-sha local --out-json .build/perf
 ```
 
 Without `PERF_LLM_URL`, `target/release/perf bench/scenarios.json OUT.json` skips the cleanup model and runs everything else.
+
+Tests: `cargo test -p speechify-bench` covers the scenario checker and validation, and `python3 -m unittest discover -s bench -p 'test_*.py'` covers the report. The Linux Test job runs both.
 
 ## Things to know
 

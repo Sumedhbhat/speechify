@@ -35,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
+        include: &platforms
           - os: ubuntu-24.04
             platform: linux
             python: python3
@@ -82,6 +82,7 @@ jobs:
           npm run format:check
           cargo fmt --all --check
           cargo clippy --workspace --all-targets --locked -- -D warnings
+          python3 -m unittest discover -s bench -p 'test_*.py'
       - name: Rust tests
         run: |
           source .build/test-env.sh
@@ -97,6 +98,7 @@ jobs:
           name: perf-bin-${{ matrix.platform }}
           path: target/release/perf${{ matrix.exe }}
           retention-days: 3
+          overwrite: true
 
   measure:
     name: Measure (${{ matrix.platform }})
@@ -108,19 +110,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            platform: linux
-            python: python3
-            exe: ''
-          - os: macos-15
-            platform: macos
-            python: python3
-            exe: ''
-          - os: windows-2025
-            platform: windows
-            python: python
-            exe: .exe
+        include: *platforms
     defaults:
       run:
         shell: bash
@@ -142,6 +132,10 @@ jobs:
         with:
           path: .build/default-models
           key: default-models-${{ hashFiles('core/defaults.json', 'core/src/catalog.rs') }}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .build/llm/llama-*
+          key: llama-server-${{ runner.os }}-${{ hashFiles('scripts/fetch-perf-llm.py') }}
       - name: Fetch the language model server and model
         run: '"${{ matrix.python }}" scripts/fetch-perf-llm.py .build/llm'
       - name: Measure speed and run the scenarios
@@ -155,9 +149,10 @@ jobs:
           bash scripts/perf-run.sh ".build/perf-bin/perf${{ matrix.exe }}" .build/llm ".build/perf/${{ matrix.platform }}.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: perf-result-${{ matrix.platform }}-${{ github.run_attempt }}
+          name: perf-result-${{ matrix.platform }}
           path: .build/perf/${{ matrix.platform }}.json
           retention-days: 30
+          overwrite: true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:

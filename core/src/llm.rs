@@ -159,7 +159,7 @@ pub struct Brief<'a> {
 /// How much of the earlier text a block's prompt carries.
 const BEFORE_CHARS: usize = 400;
 
-pub const CLEANUP: &str = include_str!("prompts/cleanup.txt");
+const CLEANUP: &str = include_str!("prompts/cleanup.txt");
 
 /// Returns (system, user) messages asking a model to clean `raw`.
 pub fn cleanup_prompt(raw: &str, brief: &Brief) -> (String, String) {
@@ -528,6 +528,19 @@ mod tests {
             user,
             "CONTEXT: typing into Outlook, window \"Re: Budget\"\n\nRAW:\n<<<\nhello there\n>>>"
         );
+    }
+
+    #[test]
+    fn cleanup_file_is_an_intro_then_one_rule_per_line() {
+        let mut lines = CLEANUP.lines();
+        assert!(!lines.next().unwrap().is_empty());
+        let rest: Vec<&str> = lines.filter(|line| !line.trim().is_empty()).collect();
+        assert_eq!(rest[0], "Rules:");
+        assert!(rest[1..].iter().all(|line| line.starts_with("- ") && line.len() > 2));
+        let medium = rest
+            .iter()
+            .filter(|line| line.starts_with("- Keep the speaker's own words"));
+        assert_eq!(medium.count(), 1);
     }
 
     #[test]

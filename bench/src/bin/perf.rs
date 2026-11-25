@@ -20,6 +20,7 @@ use std::{
 
 const JFK: &str =
     "And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.";
+const SCHEMA: u32 = 2;
 const RUNS: usize = 3;
 const RULE_PASSES: usize = 50;
 const CLOCK: Clock = Clock {
@@ -28,6 +29,7 @@ const CLOCK: Clock = Clock {
 };
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Scenario {
     id: String,
     kind: String,
@@ -38,6 +40,7 @@ struct Scenario {
 }
 
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct Checks {
     equals: Option<String>,
     #[serde(default)]
@@ -228,7 +231,55 @@ fn failures(text: &str, checks: &Checks) -> Vec<String> {
     failed
 }
 
-fn rules(scenarios: &[Scenario]) -> (Value, Vec<Value>) {
+fn validate(scenarios: &[Scenario]) -> Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    for s in scenarios {
+        let problem = if !seen.insert(s.id.as_str()) {
+            Some("appears twice".to_string())
+        } else if !["", "work", "email", "code", "personal"].contains(&s.category.as_str()) {
+            Some(format!("has an unknown category {:?}", s.category))
+        } else {
+            checks_problem(&s.checks)
+        };
+        if let Some(problem) = problem {
+            return Err(format!("Scenario {} {problem}", s.id));
+        }
+    }
+    Ok(())
+}
+
+fn checks_problem(checks: &Checks) -> Option<String> {
+    let phrases = |v: &Value| match v {
+        Value::String(text) => !text.is_empty(),
+        Value::Array(items) => !items.is_empty() && items.iter().all(|i| i.as_str().is_some_and(|t| !t.is_empty())),
+        _ => false,
+    };
+    if checks.items.is_some() && checks.list.as_deref().is_none_or(|list| list == "none") {
+        Some("sets items without a numbered or bullet list".into())
+    } else if checks.equals.is_none()
+        && checks.contains.is_empty()
+        && checks.absent.is_empty()
+        && checks.list.is_none()
+        && checks.paragraphs.is_none()
+        && checks.min_lines.is_none()
+    {
+        Some("has no checks".into())
+    } else if checks
+        .list
+        .as_deref()
+        .is_some_and(|l| !["numbered", "bullets", "none"].contains(&l))
+    {
+        Some("has a list that is not numbered, bullets or none".into())
+    } else if !checks.contains.iter().all(phrases) {
+        Some("has a contains entry that is not a phrase or a list of phrases".into())
+    } else if checks.absent.iter().any(String::is_empty) {
+        Some("has an empty absent phrase".into())
+    } else {
+        None
+    }
+}
+
+fn rules(scenarios: &[Scenario]) -> (f64, Vec<Value>) {
     let settings = settings();
     let store = Store::memory();
     let compose = |s: &Scenario| {
@@ -251,7 +302,7 @@ fn rules(scenarios: &[Scenario]) -> (Value, Vec<Value>) {
             json!({"text": text, "passed": failed.is_empty(), "failures": failed})
         })
         .collect();
-    (json!({"pass_ms": median(&passes)}), rows)
+    (median(&passes), rows)
 }
 
 fn language_model(scenarios: &[Scenario], url: &str, model: &str) -> (Value, Vec<Value>) {
@@ -320,7 +371,8 @@ fn run() -> Result<()> {
         return Err("Usage: perf SCENARIOS OUTPUT".into());
     };
     let scenarios: Vec<Scenario> =
-        serde_json::from_slice(&fs::read(cases).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        serde_json::from_slice(&fs::read(cases).map_err(|e| e.to_string())?).map_err(|e| format!("{cases}: {e}"))?;
+    validate(&scenarios)?;
     let runtime = env_path("SPEECHIFY_NATIVE_DIR")?;
     let speech = catalog::find(&DEFAULTS.speech_model)?;
     let models_dir = env::var_os("PERF_MODELS_DIR").map_or_else(|| PathBuf::from(".build/models"), PathBuf::from);
@@ -332,7 +384,7 @@ fn run() -> Result<()> {
     };
     let heard = transcription(&runtime, &speech_path)?;
     eprintln!("transcription {:.0} ms", heard["time_ms"]);
-    let (rules_summary, rule_rows) = rules(&scenarios);
+    let (rules_ms, rule_rows) = rules(&scenarios);
     let llm = match (env::var("PERF_LLM_URL"), env::var("PERF_LLM_MODEL")) {
         (Ok(url), Ok(model)) if !url.is_empty() => Some(language_model(&scenarios, &url, &model)),
         _ => None,
@@ -356,7 +408,7 @@ fn run() -> Result<()> {
         env::var("ImageVersion").unwrap_or_default()
     );
     let report = json!({
-        "schema": 2,
+        "schema": SCHEMA,
         "platform": env::var("PERF_PLATFORM").unwrap_or_else(|_| env::consts::OS.into()),
         "arch": env::consts::ARCH,
         "cpus": std::thread::available_parallelism().map_or(0, |n| n.get()),
@@ -368,7 +420,7 @@ fn run() -> Result<()> {
         },
         "transcription": heard,
         "cleanup": {
-            "rules_ms": rules_summary["pass_ms"],
+            "rules_ms": rules_ms,
             "llm": llm.as_ref().map(|(summary, _)| summary),
         },
         "scenarios": rows,
@@ -380,5 +432,116 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn checks(value: Value) -> Checks {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn find_matches_whole_words_only() {
+        assert!(find("Meet at 3 tomorrow", "3"));
+        assert!(!find("Meet at 13 tomorrow", "3"));
+        assert!(find("Hi Priya, thanks", "hi priya,"));
+        assert!(find("Ship it?", "?"));
+        assert!(!find("the latest master branch", "latest branch"));
+        assert!(find("git push --force", "--force"));
+    }
+
+    #[test]
+    fn lists_are_told_apart() {
+        assert!(numbered("1. Buy milk"));
+        assert!(numbered("  12) Pay"));
+        assert!(!numbered("1.5 litres"));
+        assert!(!numbered("2024 was good"));
+        assert!(bulleted("- tea"));
+        assert!(bulleted("• rice"));
+        assert!(!bulleted("-5 degrees"));
+    }
+
+    #[test]
+    fn list_checks_count_items_and_reject_mixed_lists() {
+        let numbered_three = checks(json!({"list": "numbered", "items": 3}));
+        assert!(failures("Plan:\n1. A\n2. B\n3. C", &numbered_three).is_empty());
+        assert_eq!(failures("1. A\n2. B", &numbered_three), ["expected 3 items, got 2"]);
+        assert_eq!(
+            failures("1. A\n- B\n2. C", &numbered_three),
+            ["expected numbered list, got mixed"]
+        );
+        assert_eq!(
+            failures("A, B and C.", &numbered_three),
+            ["expected numbered list, got none"]
+        );
+        assert!(failures("Just prose.", &checks(json!({"list": "none"}))).is_empty());
+    }
+
+    #[test]
+    fn text_checks_report_every_failure() {
+        let c = checks(json!({"contains": [["six", "6"], "table"], "absent": ["four"]}));
+        assert!(failures("Book a table for 6.", &c).is_empty());
+        assert_eq!(
+            failures("Book four seats.", &c),
+            ["missing six or 6", "missing table", "still has \"four\""]
+        );
+        assert_eq!(
+            failures("Okay.", &checks(json!({"equals": "Okay"}))),
+            ["expected exactly \"Okay\""]
+        );
+    }
+
+    #[test]
+    fn paragraphs_and_lines_are_counted() {
+        let c = checks(json!({"paragraphs": 3, "min_lines": 3}));
+        assert!(failures("Hi team\n\nThe build is green.\n\nThanks", &c).is_empty());
+        assert_eq!(
+            failures("Hi team\nThanks", &c),
+            ["expected 3 paragraphs, got 1", "expected at least 3 lines, got 2"]
+        );
+    }
+
+    #[test]
+    fn scenarios_with_mistakes_are_refused() {
+        let scenario = |checks: Value| -> std::result::Result<Scenario, serde_json::Error> {
+            serde_json::from_value(json!({"id": "a", "kind": "lists", "raw": "x", "checks": checks}))
+        };
+        assert!(scenario(json!({"absnt": ["x"]})).is_err());
+        let refused = |checks: Value| validate(&[scenario(checks).unwrap()]).unwrap_err();
+        assert!(refused(json!({})).contains("no checks"));
+        assert!(refused(json!({"items": 3})).contains("items without"));
+        assert!(refused(json!({"list": "none", "items": 2})).contains("items without"));
+        assert!(refused(json!({"list": "bullet"})).contains("not numbered"));
+        assert!(refused(json!({"contains": [3]})).contains("contains entry"));
+        assert!(refused(json!({"contains": [[]]})).contains("contains entry"));
+        assert!(refused(json!({"absent": [""]})).contains("empty absent"));
+        let twice = [
+            scenario(json!({"list": "none"})).unwrap(),
+            scenario(json!({"list": "none"})).unwrap(),
+        ];
+        assert!(validate(&twice).unwrap_err().contains("appears twice"));
+        let mut odd = scenario(json!({"list": "none"})).unwrap();
+        odd.category = "chat".into();
+        assert!(validate(&[odd]).unwrap_err().contains("unknown category"));
+    }
+
+    #[test]
+    fn every_scenario_in_the_suite_is_valid() {
+        let scenarios: Vec<Scenario> = serde_json::from_str(include_str!("../../scenarios.json")).unwrap();
+        validate(&scenarios).unwrap();
+        assert!(scenarios.len() >= 30);
+    }
+
+    #[test]
+    fn percentiles_pick_the_nearest_rank() {
+        assert_eq!(median(&[]), 0.0);
+        assert_eq!(median(&[3.0, 1.0, 2.0]), 2.0);
+        assert_eq!(
+            percentile(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0], 0.9),
+            9.0
+        );
     }
 }

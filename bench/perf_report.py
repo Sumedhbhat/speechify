@@ -9,16 +9,14 @@ SCHEMA = 2
 PLATFORMS = [("linux", "Linux"), ("macos", "macOS"), ("windows", "Windows")]
 KINDS = ["corrections", "repetition", "lists", "paragraphs", "fillers", "formatting", "keep as said"]
 NOISE = 0.15
-
-
-def attempt(path):
-    suffix = path.parent.name.rsplit("-", 1)[-1]
-    return int(suffix) if suffix.isdigit() else 0
+COMMENT_LIMIT = 60_000
+FAILURE_ROWS = 40
+CELL_CHARS = 300
 
 
 def load_platforms(directory):
     found = {}
-    for path in sorted(Path(directory).rglob("*.json"), key=lambda p: (attempt(p), str(p))):
+    for path in sorted(Path(directory).rglob("*.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(data, dict) and data.get("schema") == SCHEMA and "platform" in data:
             found[data["platform"]] = data
@@ -44,22 +42,30 @@ def percent(value):
 def transcription(platform):
     t = platform["transcription"]
     return [
-        ("Load the speech model", t["load_ms"], ms, "time", 20.0),
-        ("Time to text", t["time_ms"], ms, "time", 20.0),
-        ("Speed", t["realtime"], times, "rate", 0.5),
-        ("Words wrong", t["wer"], percent, "error", 0.005),
+        ("load_ms", "Load the speech model", t["load_ms"], ms, "time", 20.0),
+        ("time_ms", "Time to text", t["time_ms"], ms, "time", 20.0),
+        ("realtime", "Speed", t["realtime"], times, "rate", 0.5),
+        ("wer", "Words wrong", t["wer"], percent, "error", 0.005),
     ]
 
 
 def cleanup(platform):
     c = platform["cleanup"]
-    rows = [("Rules, every scenario once", c["rules_ms"], ms, "time", 0.2)]
+    rows = [("rules_ms", "Rules, every scenario once", c["rules_ms"], ms, "time", 0.2)]
     llm = c.get("llm")
     if llm:
         rows += [
-            ("Language model, typical call", llm["median_ms"], ms, "time", 200.0),
-            ("Language model, slowest 10% of calls", llm["p90_ms"], ms, "time", 200.0),
-            ("Answers rejected, rules used instead", llm["rejected"], lambda v: f"{v:.0f}/{llm['calls']}", "count", 0.5),
+            ("llm_median_ms", "Language model, typical call", llm["median_ms"], ms, "time", 200.0),
+            ("llm_p90_ms", "Language model, slowest 10% of calls", llm["p90_ms"], ms, "time", 200.0),
+            (
+                "llm_rejected",
+                "Answers rejected, rules used instead",
+                llm["rejected"],
+                lambda v: f"{v:.0f}/{llm['calls']}",
+                "count",
+                0.5,
+                llm["calls"],
+            ),
         ]
     return rows
 
@@ -83,22 +89,24 @@ def change(now, before, kind, floor):
 
 def metric_table(section, current, baseline, flags):
     columns = [(key, label) for key, label in PLATFORMS if key in current]
-    names = []
+    order = {}
     for key, _ in columns:
         for row in section(current[key]):
-            if row[0] not in names:
-                names.append(row[0])
+            order.setdefault(row[0], row[1])
     lines = ["| | " + " | ".join(label for _, label in columns) + " |", "| --- |" + " ---: |" * len(columns)]
-    for name in names:
+    for metric, name in order.items():
         cells = []
         for key, label in columns:
-            now = {row[0]: row for row in section(current[key])}.get(name)
-            before = {row[0]: row[1] for row in section(baseline[key])}.get(name) if key in baseline else None
+            now = {row[0]: row for row in section(current[key])}.get(metric)
+            old = {row[0]: row for row in section(baseline[key])}.get(metric) if key in baseline else None
             if now is None:
                 cells.append("—")
                 continue
-            _, value, show, kind, floor = now
-            text, flag = change(value, before, kind, floor)
+            _, _, value, show, kind, floor, *basis = now
+            if old and list(old[6:]) != basis:
+                cells.append(f"{show(value)} (main: {old[3](old[2])})")
+                continue
+            text, flag = change(value, old[2] if old else None, kind, floor)
             if flag == "worse":
                 flags.append(f"{name} on {label}")
             cells.append(show(value) + text)
@@ -137,12 +145,13 @@ def scenario_table(current, baseline):
                 if not total:
                     parts.append("—")
                     continue
-                cell = f"{passed}/{total}"
-                if key in baseline:
-                    before = tally(baseline[key], path).get(kind)
-                    if before and before[0] != passed:
-                        cell += f" ({passed - before[0]:+d})"
-                parts.append(cell)
+                text = f"{passed}/{total}"
+                before = tally(baseline[key], path).get(kind) if key in baseline else None
+                if before and before[1] != total:
+                    text += f" (was {before[0]}/{before[1]})"
+                elif before and before[0] != passed:
+                    text += f" ({passed - before[0]:+d})"
+                parts.append(text)
             cells.append(" / ".join(parts))
         lines.append(f"| {kind.capitalize()} | " + " | ".join(cells) + " |")
     return lines
@@ -161,15 +170,21 @@ def flips(current, baseline):
             now, before = results(current[key], path), results(baseline[key], path)
             for scenario in sorted(now.keys() & before.keys()):
                 if now[scenario] != before[scenario]:
-                    state = "now passes" if now[scenario] else "now fails"
-                    changes.setdefault((scenario, name, state), []).append(label)
-    return [
-        f"- {'🟢' if state == 'now passes' else '❌'} `{scenario}` {state} {name} on {', '.join(labels)}"
-        for (scenario, name, state), labels in sorted(changes.items())
-    ]
+                    changes.setdefault((scenario, name, now[scenario]), []).append(label)
+    return [(scenario, name, passes, labels) for (scenario, name, passes), labels in sorted(changes.items())]
 
 
-def failures(current):
+def flip_line(scenario, name, passes, labels):
+    state = "now passes" if passes else "now fails"
+    return f"- {'🟢' if passes else '❌'} `{scenario}` {state} {name} on {', '.join(labels)}"
+
+
+def cell(text):
+    text = text.replace("\n", "⏎").replace("|", "\\|")
+    return text if len(text) <= CELL_CHARS else text[: CELL_CHARS - 1] + "…"
+
+
+def failures(current, limit=None):
     rows = {}
     for key, label in PLATFORMS:
         for s in current.get(key, {}).get("scenarios", []):
@@ -183,11 +198,12 @@ def failures(current):
         return []
     lines = ["| Kind | Scenario | Path | Platforms | Said | Got | Why |", "| --- | --- | --- | --- | --- | --- | --- |"]
     order = {k: i for i, k in enumerate(KINDS)}
-    for (kind, scenario, name, text, why), (raw, labels) in sorted(
-        rows.items(), key=lambda item: (order.get(item[0][0], 99), item[0][1:])
-    ):
-        got = text.replace("\n", "⏎").replace("|", "\\|") or "(nothing)"
-        lines.append(f"| {kind} | `{scenario}` | {name} | {', '.join(labels)} | {raw} | {got} | {why} |")
+    ranked = sorted(rows.items(), key=lambda item: (order.get(item[0][0], 99), item[0][1:]))
+    for (kind, scenario, name, text, why), (raw, labels) in ranked[:limit]:
+        got = cell(text) or "(nothing)"
+        lines.append(f"| {kind} | `{scenario}` | {name} | {', '.join(labels)} | {cell(raw)} | {got} | {why} |")
+    if limit is not None and len(ranked) > limit:
+        lines += ["", f"…and {len(ranked) - limit} more in the run's job summary."]
     return lines
 
 
@@ -195,8 +211,8 @@ def summary(current):
     out = {}
     for key, platform in current.items():
         out[key] = {
-            "transcription": {name: round(value, 4) for name, value, *_ in transcription(platform)},
-            "cleanup": {name: round(value, 4) for name, value, *_ in cleanup(platform)},
+            "transcription": {metric: round(value, 4) for metric, _, value, *_ in transcription(platform)},
+            "cleanup": {metric: round(value, 4) for metric, _, value, *_ in cleanup(platform)},
             "scenarios_failing": {
                 path: sorted(id for id, passed in results(platform, path).items() if not passed)
                 for path in ("rules", "llm")
@@ -212,12 +228,20 @@ def models(platforms):
     return {}
 
 
-def render(current, baseline_doc, run_url, release):
+def render(current, baseline_doc, run_url, release, skipped_schema=None, limit=None, with_json=True):
     baseline = (baseline_doc or {}).get("platforms", {})
     lines = [MARKER, "## Performance", ""]
     if baseline_doc:
         sha = (baseline_doc.get("head_sha") or "")[:7]
-        lines.append(f"Compared with `main` at `{sha}`, measured for the nightly release `{release}`.")
+        lines.append(
+            f"Compared with `main` at `{sha}`, measured for the nightly release `{release}`. "
+            "If this branch is behind `main`, changes merged since then show up here too."
+        )
+    elif skipped_schema is not None:
+        lines.append(
+            f"Not compared: the nightly release `{release}` has results in format {skipped_schema}, "
+            f"and this run writes format {SCHEMA}. The next merge to `main` records results in the new format."
+        )
     else:
         lines.append("No nightly release has performance results yet. The next merge to `main` records them.")
     lines.append(
@@ -237,9 +261,9 @@ def render(current, baseline_doc, run_url, release):
     lines += scenario_table(current, baseline)
     changed = flips(current, baseline)
     if changed:
-        lines += ["", "#### Changes from main", ""] + changed
+        lines += ["", "#### Changes from main", ""] + [flip_line(*flip) for flip in changed]
     lines += ["", "### Verdict", ""]
-    worse = [line for line in changed if "now fails" in line]
+    worse = [flip for flip in changed if not flip[2]]
     if not baseline_doc:
         lines.append("Nothing to compare with yet.")
     elif not flags and not worse:
@@ -249,20 +273,21 @@ def render(current, baseline_doc, run_url, release):
             lines.append(f"Worse than main: {'; '.join(flags)}.")
         if worse:
             lines.append(f"{len(worse)} scenario result(s) got worse; see Changes from main.")
-    failing = failures(current)
+    failing = failures(current, limit)
     if failing:
         lines += ["", "<details><summary>Scenarios that fail on this branch</summary>", ""] + failing + ["", "</details>"]
-    lines += [
-        "",
-        "<details><summary>Summary as JSON</summary>",
-        "",
-        "```json",
-        json.dumps(summary(current), indent=1, ensure_ascii=False),
-        "```",
-        "",
-        "</details>",
-        "",
-    ]
+    if with_json:
+        lines += [
+            "",
+            "<details><summary>Summary as JSON</summary>",
+            "",
+            "```json",
+            json.dumps(summary(current), indent=1, ensure_ascii=False),
+            "```",
+            "",
+            "</details>",
+        ]
+    lines.append("")
     used = models(current)
     footer = (
         f"Models are the defaults in `core/defaults.json`: speech `{used.get('speech')}`, "
@@ -284,6 +309,15 @@ def render(current, baseline_doc, run_url, release):
     return "\n".join(lines) + "\n"
 
 
+def comment(current, baseline_doc, run_url, release, skipped_schema):
+    body = render(current, baseline_doc, run_url, release, skipped_schema, limit=FAILURE_ROWS)
+    if len(body) > COMMENT_LIMIT:
+        body = render(current, baseline_doc, run_url, release, skipped_schema, limit=FAILURE_ROWS, with_json=False)
+    if len(body) > COMMENT_LIMIT:
+        body = render(current, baseline_doc, run_url, release, skipped_schema, limit=0, with_json=False)
+    return body
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("results")
@@ -295,16 +329,20 @@ def main():
     parser.add_argument("--run-url", default="")
     parser.add_argument("--out-json", required=True)
     parser.add_argument("--out-md", required=True)
+    parser.add_argument("--out-summary")
     args = parser.parse_args()
     current = load_platforms(args.results)
     missing = [label for key, label in PLATFORMS if key not in current]
     if args.complete and missing:
         sys.exit(f"No results from {', '.join(missing)}")
     baseline = None
+    skipped_schema = None
     if args.baseline and Path(args.baseline).is_file():
         loaded = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
         if loaded.get("schema") == SCHEMA:
             baseline = loaded
+        else:
+            skipped_schema = loaded.get("schema")
     record = {
         "schema": SCHEMA,
         "pr": args.pr,
@@ -314,7 +352,12 @@ def main():
         "platforms": current,
     }
     Path(args.out_json).write_text(json.dumps(record, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    Path(args.out_md).write_text(render(current, baseline, args.run_url, args.baseline_release), encoding="utf-8")
+    release = args.baseline_release
+    Path(args.out_md).write_text(comment(current, baseline, args.run_url, release, skipped_schema), encoding="utf-8")
+    if args.out_summary:
+        Path(args.out_summary).write_text(
+            render(current, baseline, args.run_url, release, skipped_schema), encoding="utf-8"
+        )
 
 
 if __name__ == "__main__":

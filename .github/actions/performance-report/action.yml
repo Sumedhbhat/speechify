@@ -39,15 +39,20 @@ runs:
         GH_REPO: ${{ github.repository }}
       run: |
         mkdir -p .build/perf/baseline
-        tags="$(gh release list --limit 200 --json tagName,createdAt \
-          --jq '[.[] | select(.tagName | test("-nightly\\."))] | sort_by(.createdAt) | reverse | .[].tagName')"
-        for tag in $tags; do
-          if gh release download "$tag" --pattern performance.json --dir .build/perf/baseline 2>/dev/null; then
-            echo "$tag" > .build/perf/baseline/tag
-            echo "Comparing with $tag"
-            break
-          fi
-        done
+        if ! found="$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
+          --jq '.[] | select((.draft | not) and (.tag_name | test("-nightly\\.")) and any(.assets[]; .name == "performance.json")) | .tag_name')"; then
+          echo "::warning::Could not list releases, so this run is not compared with main"
+          exit 0
+        fi
+        tag="${found%%$'\n'*}"
+        if [ -z "$tag" ]; then
+          echo "No nightly release has performance.json yet"
+        elif gh release download "$tag" --pattern performance.json --dir .build/perf/baseline; then
+          echo "$tag" > .build/perf/baseline/tag
+          echo "Comparing with $tag"
+        else
+          echo "::warning::Could not download performance.json from $tag, so this run is not compared with main"
+        fi
 
     - name: Build the table
       shell: bash
@@ -57,7 +62,8 @@ runs:
         HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
-        args=(--head-sha "$HEAD_SHA" --run-url "$RUN_URL" --out-json .build/perf/performance.json --out-md .build/perf/comment.md)
+        args=(--head-sha "$HEAD_SHA" --run-url "$RUN_URL" --out-json .build/perf/performance.json \
+          --out-md .build/perf/comment.md --out-summary .build/perf/summary.md)
         if [ "$TARGET" = branch ]; then
           args+=(--pr "$PR")
           if [ -f .build/perf/baseline/performance.json ]; then
@@ -67,7 +73,7 @@ runs:
           args+=(--complete)
         fi
         python3 bench/perf_report.py .build/perf/platforms "${args[@]}"
-        cat .build/perf/comment.md >> "$GITHUB_STEP_SUMMARY"
+        cat .build/perf/summary.md >> "$GITHUB_STEP_SUMMARY"
 
     - name: Comment on the pull request
       if: inputs.target == 'branch' && github.event.pull_request.head.repo.full_name == github.repository
