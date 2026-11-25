@@ -241,6 +241,18 @@ pub struct Store {
     conn: Connection,
 }
 
+fn add_column(conn: &Connection, column: &str, definition: &str) -> Result<()> {
+    let present = conn
+        .prepare("SELECT 1 FROM pragma_table_info('dictations') WHERE name = ?1")
+        .and_then(|mut query| query.exists([column]))
+        .map_err(err)?;
+    if !present {
+        conn.execute(&format!("ALTER TABLE dictations ADD COLUMN {column} {definition}"), [])
+            .map_err(err)?;
+    }
+    Ok(())
+}
+
 impl Store {
     pub fn open(path: &Path) -> Result<Store> {
         Self::init(Connection::open(path).map_err(err)?)
@@ -254,9 +266,8 @@ impl Store {
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")
             .map_err(err)?;
         conn.execute_batch(SCHEMA).map_err(err)?;
-        // Added after the first release: fails harmlessly when already there.
-        let _ = conn.execute("ALTER TABLE dictations ADD COLUMN heard TEXT NOT NULL DEFAULT '[]'", []);
-        let _ = conn.execute("ALTER TABLE dictations ADD COLUMN trace TEXT NOT NULL DEFAULT '[]'", []);
+        add_column(&conn, "heard", "TEXT NOT NULL DEFAULT '[]'")?;
+        add_column(&conn, "trace", "TEXT NOT NULL DEFAULT '[]'")?;
         Ok(Store { conn })
     }
 
@@ -889,6 +900,12 @@ mod tests {
         let path = dir.join("flow.db");
         Store::open(&path).unwrap().set("a", "b").unwrap();
         assert_eq!(Store::open(&path).unwrap().get("a").as_deref(), Some("b"));
+        let old = dir.join("old.db");
+        let conn = Connection::open(&old).unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        assert!(add_column(&conn, "trace", "TEXT NOT NULL DEFAULT '[]'").is_ok());
+        assert!(add_column(&conn, "trace", "TEXT NOT NULL DEFAULT '[]'").is_ok());
+        assert!(add_column(&conn, "broken", "NOT A TYPE (").is_err());
         assert!(Store::open(&dir.join("missing/flow.db")).is_err());
     }
 
