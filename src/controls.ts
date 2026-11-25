@@ -194,13 +194,8 @@ export function chordName(codes: string[], letters: Record<string, string> = {})
 /** Recording gives up before the shell's 30-second pause runs out. */
 export const RECORD_LIMIT_MS = 25_000;
 
-/** Settings write this after the keys of a shortcut that is tapped twice. */
 const TWICE = " x2";
 
-/**
- * The shell's double-tap: a first press shorter than this, and a second
- * starting within this of letting go.
- */
 export const TAP_MS = 500;
 
 function shortcutKeys(value: string): (Node | string)[] {
@@ -218,9 +213,8 @@ const sameKeys = (a: string[], b: string[]) =>
 
 /**
  * A shortcut setting, entered by pressing it: Record, then the keys. It is
- * taken when the first key is let go, unless that was a quick tap: then the
- * same keys tapped again soon after make a double-tap. Global shortcuts are
- * paused meanwhile, so pressing the current one does not start dictation.
+ * taken when the first key is let go. Global shortcuts are paused meanwhile,
+ * so pressing the current one does not start dictation.
  */
 export function shortcut(
   store: SettingsStore,

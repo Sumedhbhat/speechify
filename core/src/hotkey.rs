@@ -189,11 +189,8 @@ impl std::fmt::Display for Chord {
     }
 }
 
-/// What settings write after a chord that is tapped twice.
 const TWICE: &str = " x2";
 
-/// A chord pressed once, or tapped twice in quick succession
-/// ("Right Shift x2").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shortcut {
     chord: Chord,
@@ -281,8 +278,6 @@ pub const SETTLE_MS: u64 = 150;
 pub const ABORT_MS: u64 = crate::session::TAP_MS;
 /// How long after going down such a shortcut may still be aborted.
 pub const UNSURE_MS: u64 = ABORT_MS - SETTLE_MS;
-/// A double-tap is two presses shorter than this, the second starting this
-/// soon after the first is let go.
 const TAP_MS: u64 = crate::session::TAP_MS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,19 +294,11 @@ enum Phase {
     Spent,
 }
 
-/// How far a double-tap shortcut is before its second press.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tap {
     Waiting,
-    /// The first press, held alone since `since`.
-    First {
-        since: u64,
-    },
-    /// The first press was let go at `at`.
-    Tapped {
-        at: u64,
-    },
-    /// Held with other keys: typing. Waits for the keys to be let go.
+    First { since: u64 },
+    Tapped { at: u64 },
     Spoiled,
 }
 
@@ -324,8 +311,6 @@ struct Binding {
 }
 
 impl Binding {
-    /// For a double-tap shortcut, whether the keys going down now are its
-    /// second press. The first press and its release are only remembered.
     fn second_press(&mut self, held: bool, clean: bool, now: u64) -> bool {
         let tap = match self.tap {
             Tap::Tapped { at } if now.saturating_sub(at) >= TAP_MS => Tap::Waiting,
@@ -371,8 +356,6 @@ impl Tracker {
                 });
             }
         }
-        // A double-tap goes first, so that its second press is not also a
-        // press of a shortcut on the same keys.
         bindings.sort_by_key(|binding| !binding.double);
         Ok(Tracker {
             bindings,
@@ -406,9 +389,8 @@ impl Tracker {
             .any(|binding| matches!(binding.phase, Phase::Settling { .. }))
     }
 
-    /// Feeds the current key state and returns what changed, each with the
-    /// time it happened: a press that settles is reported late but dated
-    /// when its keys went down. `now` is a monotonic clock in milliseconds.
+    /// Feeds the current key state and returns what changed. `now` is a
+    /// monotonic clock in milliseconds.
     pub fn update(&mut self, pressed: &BTreeSet<Key>, now: u64) -> Vec<(Edge, u64)> {
         let mut edges = Vec::new();
         let chords: Vec<(Bind, Chord)> = self
@@ -880,11 +862,9 @@ mod tests {
         assert_eq!(tracker.edges(&keys(&[RightShift]), 1000), vec![]);
         assert_eq!(tracker.edges(&keys(&[RightShift]), 1050), vec![]);
         assert_eq!(tracker.edges(&keys(&[]), 1090), vec![Edge::Released]);
-        // Other keys meanwhile leave the first tap waiting.
         assert_eq!(tracker.edges(&keys(&[]), 1100), vec![]);
         assert_eq!(tracker.edges(&keys(&[RightShift]), 1300), vec![]);
         assert!(tracker.settling());
-        // It settles like any modifier-only shortcut, dated when it was pressed.
         assert_eq!(
             tracker.update(&keys(&[RightShift]), 1300 + SETTLE_MS),
             vec![(Edge::Down(Bind::HandsFree), 1300)]
@@ -893,7 +873,6 @@ mod tests {
             tracker.update(&keys(&[]), 3000),
             vec![(Edge::Up(Bind::HandsFree), 3000), (Edge::Released, 3000)]
         );
-        // A quick second tap counts when it is let go, dated when it went down.
         tracker.edges(&keys(&[RightShift]), 4000);
         tracker.edges(&keys(&[]), 4080);
         tracker.edges(&keys(&[RightShift]), 4200);
@@ -905,7 +884,6 @@ mod tests {
                 (Edge::Released, 4280)
             ]
         );
-        // A third tap starts over.
         tracker.edges(&keys(&[RightShift]), 4400);
         assert_eq!(tracker.edges(&keys(&[]), 4480), vec![Edge::Released]);
     }
@@ -917,12 +895,9 @@ mod tests {
             tracker.edges(&keys(&[RightShift]), at);
             tracker.edges(&keys(&[]), at + 80)
         };
-        // A first press held too long is not a tap.
         tracker.edges(&keys(&[RightShift]), 0);
         tracker.edges(&keys(&[]), TAP_MS);
         assert_eq!(second_tap(&mut tracker, TAP_MS + 100), vec![Edge::Released]);
-        // Nor is a second press that comes too late. That late press is a
-        // first tap of its own, so one more press makes a double-tap.
         tracker.edges(&keys(&[]), 2000);
         tracker.edges(&keys(&[RightShift]), 3000);
         tracker.edges(&keys(&[]), 3080);
@@ -931,19 +906,16 @@ mod tests {
             second_tap(&mut tracker, 3080 + TAP_MS + 200),
             vec![Edge::Down(Bind::HandsFree), Edge::Up(Bind::HandsFree), Edge::Released]
         );
-        // A capital typed with the first press.
         tracker.edges(&keys(&[RightShift]), 5000);
         tracker.edges(&keys(&[RightShift, Char('A')]), 5050);
         tracker.edges(&keys(&[RightShift]), 5080);
         tracker.edges(&keys(&[]), 5100);
         assert_eq!(second_tap(&mut tracker, 5200), vec![Edge::Released]);
-        // Let go as a letter goes down.
         tracker.edges(&keys(&[]), 6000);
         tracker.edges(&keys(&[RightShift]), 6100);
         tracker.edges(&keys(&[Char('A')]), 6150);
         tracker.edges(&keys(&[]), 6200);
         assert_eq!(second_tap(&mut tracker, 6300), vec![Edge::Released]);
-        // A capital typed with the second press.
         tracker.edges(&keys(&[]), 7000);
         tracker.edges(&keys(&[RightShift]), 7100);
         tracker.edges(&keys(&[]), 7180);
@@ -972,7 +944,6 @@ mod tests {
             tracker.edges(&keys(&[]), 2000),
             vec![Edge::Up(Bind::HandsFree), Edge::Released]
         );
-        // Held on its own later, it is push-to-talk again.
         tracker.edges(&keys(&[RightShift]), 3000);
         assert_eq!(
             tracker.edges(&keys(&[RightShift]), 3000 + SETTLE_MS),

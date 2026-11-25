@@ -5,8 +5,6 @@ use serde::Serialize;
 
 /// A press shorter than this is a tap, not a dictation.
 pub const TAP_MS: u64 = 500;
-/// A modifier-only press is reported once it settles, dated when it went
-/// down, so a tap waits this much longer for a second press to arrive.
 const LATE_MS: u64 = crate::hotkey::SETTLE_MS + 100;
 /// The user is warned here and stopped a minute later.
 pub const WARN_MS: u64 = 19 * 60_000;
@@ -98,11 +96,7 @@ pub struct Session {
     paste_pending: bool,
     copy_pending: bool,
     undoable: bool,
-    /// A press that stopped hands-free may be the first half of a
-    /// double-tap; a second press before this only finishes it.
     echo_until: u64,
-    /// That press is still held: its release opens the window again, as
-    /// the second press of a double-tap is timed from it.
     echo_held: bool,
 }
 
@@ -384,7 +378,6 @@ mod tests {
         s.handle(Down(PushToTalk), 0);
         assert_eq!(s.handle(Up(PushToTalk), 200), vec![]);
         assert_eq!(s.handle(Tick, 400), vec![]);
-        // A second press that is still settling may be dated before now.
         assert_eq!(s.handle(Tick, 700 + LATE_MS - 1), vec![]);
         assert_eq!(s.handle(Tick, 700 + LATE_MS), vec![Effect::Discard { keep: false }]);
         assert_eq!(s.handle(Undo, 800), vec![]);
@@ -450,8 +443,6 @@ mod tests {
                 locked: true
             }]
         );
-        // Double-tapped again to stop: the first tap stops it, the second
-        // only finishes the double-tap, even once the dictation is done.
         assert_eq!(s.handle(Down(PushToTalk), 5000), vec![Effect::Stop { command: false }]);
         assert_eq!(s.handle(Down(PushToTalk), 5200), vec![]);
         s.handle(Finished, 5300);
@@ -467,7 +458,6 @@ mod tests {
         s.handle(Finished, 5100);
         assert_eq!(s.handle(Up(PushToTalk), 5200), vec![]);
         assert_eq!(s.handle(Down(HandsFree), 5600), vec![]);
-        // Only the stopping press's release reopens the window.
         assert_eq!(s.handle(Up(HandsFree), 5650), vec![]);
         assert_eq!(s.handle(Down(PushToTalk), 5200 + TAP_MS), START);
     }

@@ -214,9 +214,6 @@ impl<P: Platform, E: Engines> Controller<P, E> {
         self.handle_ago(event, 0);
     }
 
-    /// Like `handle`, for an event that happened `ago_ms` before now: a key
-    /// press waits in the queue while the microphone opens, yet its length
-    /// is from when the keys moved.
     pub fn handle_ago(&mut self, event: Event, ago_ms: u64) {
         let settings = self.store.settings();
         let unsure = matches!(event, Event::Down(bind) if bind.unsure(&settings.hotkeys));
@@ -1080,7 +1077,6 @@ mod tests {
     fn a_tap_is_timed_from_its_keys_not_from_when_it_was_handled() {
         let mut app = app(&[]);
         app.handle(Event::Down(Bind::PushToTalk));
-        // The microphone took 700 ms to open; the key went up after 100.
         app.platform.now += 700;
         app.handle_ago(Event::Up(Bind::PushToTalk), 600);
         assert_eq!(app.platform.log, vec!["start:"]);

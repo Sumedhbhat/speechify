@@ -32,7 +32,6 @@ const PAUSE_LIMIT: Duration = Duration::from_secs(30);
 struct Queued {
     message: Msg,
     at: Instant,
-    /// When the keys behind an input moved, which can be before it was sent.
     happened: Instant,
 }
 
@@ -392,7 +391,7 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
                         happened,
                     }) => {
                         state.wanted.fetch_sub(1, Ordering::SeqCst);
-                        if at >= accept_after {
+                        if at >= accept_after || matches!(event, Event::Up(_)) {
                             let was_idle = controller.is_idle();
                             let began = Instant::now();
                             let ago = happened.elapsed().as_millis() as u64;
@@ -454,8 +453,6 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
                     }
                     Err(RecvTimeoutError::Disconnected) => return,
                 };
-                // Input still queued happened before now: time must not run
-                // past it, or a double-tap waiting on its second press expires.
                 if ticked.elapsed() >= Duration::from_millis(100)
                     && !controller.is_idle()
                     && state.wanted.load(Ordering::SeqCst) == 0
