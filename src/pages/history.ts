@@ -2,15 +2,8 @@
 
 import type { Dictation } from "../api";
 import type { Deps } from "../deps";
-import {
-  categoryLabel,
-  dayKey,
-  dayLabel,
-  formatNumber,
-  OUTCOME_LABELS,
-  timeOfDay,
-  todayKey,
-} from "../format";
+import { categoryLabel, dayKey, dayLabel, OUTCOME_LABELS, timeOfDay, todayKey } from "../format";
+import { modelLine, seconds, stepsLine, wait, waitLine } from "../timing";
 import { confirmButton, debounce, emptyState, errorText, h, iconButton, toast } from "../ui";
 
 const PAGE = 50;
@@ -184,6 +177,11 @@ export function createHistory({ api, events }: Deps) {
         h("span", { className: "entry-app", textContent: item.app || "Unknown app" }),
         h("span", { className: "chip", textContent: categoryLabel(item.category) }),
         h("span", { className: tidied.className, textContent: tidied.chip, title: tidied.detail }),
+        h("span", {
+          className: "entry-wait",
+          textContent: seconds(wait(item).total),
+          title: "How long you waited after you stopped",
+        }),
         item.command && h("span", { className: "chip accent", textContent: "Command" }),
         item.flagged && h("span", { className: "chip warn", textContent: "Flagged" }),
       ]),
@@ -196,21 +194,21 @@ export function createHistory({ api, events }: Deps) {
   }
 
   function detail(item: Dictation, tidied: Cleanup): HTMLElement {
+    const steps = stepsLine(item);
+    const model = modelLine(item);
     const pair = (label: string, value: string) => [
       h("dt", { textContent: label }),
       h("dd", { textContent: value }),
     ];
-    const ms = (value: number) => `${formatNumber(value)} ms`;
     return h("dl", { className: "detail" }, [
       ...pair("Heard", item.raw),
       ...pair("Typed", item.text),
       ...(item.edited === null ? [] : pair("Corrected", item.edited)),
       ...(item.teacher_text === null ? [] : pair("Teacher's version", item.teacher_text)),
       ...pair("Clean-up", tidied.detail),
-      ...pair(
-        "Timing",
-        `Recognition ${ms(item.asr_ms)} · Clean-up ${ms(item.rewrite_ms)} · Total ${ms(item.total_ms)}`,
-      ),
+      ...pair("Wait", `${waitLine(item)}  (speech + clean-up + other)`),
+      ...(steps === null ? [] : pair("Steps", steps)),
+      ...(model === null ? [] : pair("Language model", model)),
       ...pair("Speech model", item.speech_model),
       ...pair("Result", OUTCOME_LABELS[item.outcome]),
     ]);

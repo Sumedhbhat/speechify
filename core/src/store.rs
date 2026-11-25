@@ -139,9 +139,10 @@ pub struct Dictation {
     /// Each recognised word with how sure the recogniser was, 0 to 1.
     /// Empty when the recogniser does not report it.
     pub heard: Vec<crate::asr::Heard>,
+    pub trace: Vec<crate::trace::Span>,
 }
 
-const DICTATION_COLUMNS: &str = "id, created_at, offset_min, app, process, title, category, command, duration_ms, speech_ms, raw, text, words, rewritten, speech_model, rewrite_model, asr_ms, rewrite_ms, total_ms, outcome, fixes, audio, edited, teacher_raw, teacher_text, teacher_wer, reviewed_at, flagged, heard";
+const DICTATION_COLUMNS: &str = "id, created_at, offset_min, app, process, title, category, command, duration_ms, speech_ms, raw, text, words, rewritten, speech_model, rewrite_model, asr_ms, rewrite_ms, total_ms, outcome, fixes, audio, edited, teacher_raw, teacher_text, teacher_wer, reviewed_at, flagged, heard, trace";
 
 fn read_dictation(row: &Row) -> rusqlite::Result<Dictation> {
     Ok(Dictation {
@@ -174,6 +175,7 @@ fn read_dictation(row: &Row) -> rusqlite::Result<Dictation> {
         reviewed_at: row.get(26)?,
         flagged: row.get(27)?,
         heard: serde_json::from_str(&row.get::<_, String>(28)?).unwrap_or_default(),
+        trace: serde_json::from_str(&row.get::<_, String>(29)?).unwrap_or_default(),
     })
 }
 
@@ -254,6 +256,7 @@ impl Store {
         conn.execute_batch(SCHEMA).map_err(err)?;
         // Added after the first release: fails harmlessly when already there.
         let _ = conn.execute("ALTER TABLE dictations ADD COLUMN heard TEXT NOT NULL DEFAULT '[]'", []);
+        let _ = conn.execute("ALTER TABLE dictations ADD COLUMN trace TEXT NOT NULL DEFAULT '[]'", []);
         Ok(Store { conn })
     }
 
@@ -304,9 +307,9 @@ impl Store {
     pub fn add_dictation(&self, d: &Dictation) -> Result<i64> {
         self.conn
             .execute(
-                "INSERT INTO dictations (created_at, offset_min, app, process, title, category, command, duration_ms, speech_ms, raw, text, words, rewritten, speech_model, rewrite_model, asr_ms, rewrite_ms, total_ms, outcome, fixes, audio, heard)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
-                params![d.created_at, d.offset_min, d.app, d.process, d.title, category_name(d.category), d.command, d.duration_ms, d.speech_ms, d.raw, d.text, d.words, d.rewritten, d.speech_model, d.rewrite_model, d.asr_ms, d.rewrite_ms, d.total_ms, d.outcome.name(), d.fixes, d.audio, serde_json::to_string(&d.heard).map_err(err)?],
+                "INSERT INTO dictations (created_at, offset_min, app, process, title, category, command, duration_ms, speech_ms, raw, text, words, rewritten, speech_model, rewrite_model, asr_ms, rewrite_ms, total_ms, outcome, fixes, audio, heard, trace)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+                params![d.created_at, d.offset_min, d.app, d.process, d.title, category_name(d.category), d.command, d.duration_ms, d.speech_ms, d.raw, d.text, d.words, d.rewritten, d.speech_model, d.rewrite_model, d.asr_ms, d.rewrite_ms, d.total_ms, d.outcome.name(), d.fixes, d.audio, serde_json::to_string(&d.heard).map_err(err)?, serde_json::to_string(&d.trace).map_err(err)?],
             )
             .map_err(err)?;
         Ok(self.conn.last_insert_rowid())
@@ -887,6 +890,37 @@ mod tests {
         Store::open(&path).unwrap().set("a", "b").unwrap();
         assert_eq!(Store::open(&path).unwrap().get("a").as_deref(), Some("b"));
         assert!(Store::open(&dir.join("missing/flow.db")).is_err());
+    }
+
+    #[test]
+    fn a_dictation_keeps_its_timing_trace() {
+        use crate::trace::{Detail, Span, Stage};
+        let store = Store::memory();
+        let trace = vec![
+            Span {
+                stage: Stage::Piece,
+                at_ms: -2000,
+                ms: 400,
+                detail: Detail {
+                    chunk: Some(0),
+                    audio_ms: Some(3000),
+                    ..Detail::default()
+                },
+            },
+            Span {
+                stage: Stage::Paste,
+                at_ms: 900,
+                ms: 30,
+                detail: Detail::default(),
+            },
+        ];
+        let id = store
+            .add_dictation(&Dictation {
+                trace: trace.clone(),
+                ..dictation("Hello", "Slack", 100)
+            })
+            .unwrap();
+        assert_eq!(store.dictation(id).unwrap().trace, trace);
     }
 
     #[test]

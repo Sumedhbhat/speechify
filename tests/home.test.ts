@@ -166,6 +166,29 @@ describe("history", () => {
     expect(action(first!, "play")).not.toBeNull();
     expect(action(second!, "play")).toBeNull();
     expect(document.querySelector<HTMLButtonElement>(".more")!.hidden).toBe(true);
+    expect(first!.querySelector(".entry-wait")!.textContent).toBe("0.60 s");
+    expect(first!.querySelector(".entry-timing")).toBeNull();
+  });
+
+  it("keeps the timing breakdown in the details", async () => {
+    await setup([
+      dictation({
+        trace: [
+          { stage: "speech", at_ms: 0, ms: 250 },
+          { stage: "model", at_ms: 250, ms: 690, model: { prompt_ms: 600, answer_ms: 80 } },
+          { stage: "cleanup", at_ms: 250, ms: 700 },
+          { stage: "paste", at_ms: 950, ms: 50 },
+        ],
+      }),
+    ]);
+    const row = entries()[0]!;
+    expect(row.querySelector(".entry-wait")!.textContent).toBe("1.00 s");
+    expect(row.textContent).not.toContain("clean-up 700 ms");
+    action(row, "details").click();
+    const detail = entries()[0]!.querySelector(".detail")!.textContent;
+    expect(detail).toContain("Wait0.25 s + 0.70 s + 0.05 s = 1.00 s");
+    expect(detail).toContain("Stepsspeech 250 ms → clean-up 700 ms → paste 50 ms");
+    expect(detail).toContain("Language modelprompt 600 ms, answer 80 ms");
   });
 
   it("expands to show what was heard and how it was made", async () => {
@@ -178,7 +201,8 @@ describe("history", () => {
     expect(document.activeElement).toBe(action(open, "details"));
     const detail = open.querySelector(".detail")!.textContent;
     expect(detail).toContain("um hello there");
-    expect(detail).toContain("Recognition 320 ms");
+    expect(detail).toContain("Wait0.32 s + 0.21 s + 0.07 s = 0.60 s");
+    expect(detail).not.toContain("Steps");
     expect(detail).toContain("Clean-upWritten by the language model (qwen2.5:1.5b)");
     expect(detail).toContain("Speech modelWhisper turbo");
     expect(detail).toContain("Typed into the app");

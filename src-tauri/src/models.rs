@@ -70,6 +70,9 @@ impl Rewriter for DiagnosedChat {
     fn rewrite(&self, system: &str, user: &str) -> Result<String> {
         diagnostics::attempt("rewrite", || self.0.rewrite(system, user))
     }
+    fn rewrite_timed(&self, system: &str, user: &str) -> Result<(String, speechify_core::trace::ModelTime)> {
+        diagnostics::attempt("rewrite", || self.0.rewrite_timed(system, user))
+    }
     fn model(&self) -> &str {
         self.0.model()
     }

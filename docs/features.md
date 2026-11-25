@@ -187,6 +187,10 @@ Select text in any app, hold the command shortcut, say an instruction, and let g
 
 Each dictation is stored with the heard text, the final text, the app, timings, and the recording if you keep audio. On the Home page you can search, play the recording, copy, flag for review, edit and delete. Each dictation shows whether the language model tidied it, was asked but its answer was not used (it failed, timed out or answered with something that did not look like a clean-up, so the built-in rules were used), or did not tidy it. A failure can also show as the last: one that happens at once, or in blocks cleaned up while you spoke, records no clean-up time. Details show the app, category, models, timings and fixes made.
 
+Each dictation shows, beside its time and app, how long you waited after you stopped. Its details break that down: `speech + clean-up + other = total` in seconds (recognising the audio still left when you let go, waiting for the language model on a block it was still cleaning up and then the last one, and everything else: stopping the microphone, models, rules, pasting); each step in order with its time; and, for each language model request you waited for, how long it spent loading, reading the prompt and writing the answer, with token counts. Ollama reports all three times; an OpenAI-compatible server reports tokens only. Dictations made before this was added show the breakdown from their saved totals, without steps.
+
+Every dictation also keeps a full timing trace, described in [diagnostics](diagnostics.md#timing-traces), including the pieces recognised and blocks cleaned up while you were still speaking.
+
 Editing a dictation teaches Speechify at once: small word swaps become dictionary entries, and the edit becomes a worked example for the language model's prompt. A rewrite of most of the sentence teaches nothing about spelling, so it is not turned into dictionary entries. Common words swapped for other common words count as editing, not correcting.
 
 Retention in Settings is Keep (default), Day (delete dictations older than a day) or Never (store nothing, which also turns off history, learning and the nightly review).

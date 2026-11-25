@@ -89,6 +89,37 @@ export interface Dictation {
   teacher_wer: number | null;
   reviewed_at: number | null;
   flagged: boolean;
+  trace: Span[];
+}
+
+export type Stage =
+  | "stop"
+  | "load"
+  | "speech"
+  | "settle"
+  | "cleanup"
+  | "paste"
+  | "detect"
+  | "piece"
+  | "feed"
+  | "model";
+
+export interface ModelTime {
+  load_ms?: number;
+  prompt_ms?: number;
+  answer_ms?: number;
+  prompt_tokens?: number;
+  answer_tokens?: number;
+}
+
+export interface Span {
+  stage: Stage;
+  at_ms: number;
+  ms: number;
+  chunk?: number;
+  audio_ms?: number;
+  words?: number;
+  model?: ModelTime;
 }
 
 export interface Word {

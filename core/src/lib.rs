@@ -24,6 +24,7 @@ pub mod session;
 pub mod settings;
 pub mod store;
 pub mod teacher;
+pub mod trace;
 
 /// Errors are shown to the user as-is, so they are plain sentences.
 pub type Result<T> = std::result::Result<T, String>;
