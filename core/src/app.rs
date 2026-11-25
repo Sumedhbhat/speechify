@@ -257,13 +257,15 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                     let mut draft = std::mem::take(&mut self.draft);
                     draft.released = Some(released);
                     draft.mark(Timed::since(Stage::Stop, released));
-                    self.note(
-                        &settings,
-                        &mut draft,
-                        store::Ending::Cancelled,
-                        String::new(),
-                        audio.len(),
-                    );
+                    if keep {
+                        self.note(
+                            &settings,
+                            &mut draft,
+                            store::Ending::Cancelled,
+                            String::new(),
+                            audio.len(),
+                        );
+                    }
                     self.unmute();
                     self.kept = keep.then(|| {
                         let selection = if self.command { self.platform.selection() } else { String::new() };
@@ -1074,6 +1076,7 @@ mod tests {
         assert_eq!(app.platform.log, vec!["start:", "stop"]);
         assert_eq!(app.platform.bars, vec![Bar::Idle]);
         assert!(app.is_idle());
+        assert!(app.store.attempts(10).unwrap().is_empty());
 
         // Held on, it chimes and shows the bar once it cannot be typing.
         app.handle(Event::Down(Bind::PushToTalk));
@@ -1363,6 +1366,7 @@ mod tests {
         let before = app.platform.log.len();
         app.handle(Event::Undo);
         assert_eq!(app.platform.log.len(), before);
+        assert_eq!(app.store.attempts(10).unwrap().len(), 1);
     }
 
     #[test]
