@@ -1,0 +1,94 @@
+name: Performance report
+description: >-
+  Merges the Measure results of every platform. With target "branch" it compares them
+  with the performance.json of the latest nightly release and comments on the pull
+  request. With target "main" it saves them as the performance-baseline artifact,
+  which the nightly release attaches as performance.json.
+
+inputs:
+  target:
+    description: '"branch" to compare a pull request with main, "main" to record the new baseline'
+    required: true
+  token:
+    description: Token for reading releases and commenting
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check the target
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        case "$TARGET" in
+          branch | main) ;;
+          *) echo "target must be branch or main, not $TARGET" >&2; exit 1 ;;
+        esac
+
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        pattern: perf-result-*
+        path: .build/perf/platforms
+
+    - name: Download the results of the latest nightly release
+      if: inputs.target == 'branch'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        mkdir -p .build/perf/baseline
+        tags="$(gh release list --limit 30 --json tagName,createdAt \
+          --jq '[.[] | select(.tagName | test("-nightly\\."))] | sort_by(.createdAt) | reverse | .[].tagName')"
+        for tag in $tags; do
+          if gh release download "$tag" --pattern performance.json --dir .build/perf/baseline 2>/dev/null; then
+            echo "$tag" > .build/perf/baseline/tag
+            echo "Comparing with $tag"
+            break
+          fi
+        done
+
+    - name: Build the table
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        PR: ${{ github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        args=(--head-sha "$HEAD_SHA" --run-url "$RUN_URL" --out-json .build/perf/performance.json --out-md .build/perf/comment.md)
+        if [ "$TARGET" = branch ]; then
+          args+=(--pr "$PR")
+          if [ -f .build/perf/baseline/performance.json ]; then
+            args+=(--baseline .build/perf/baseline/performance.json --baseline-release "$(cat .build/perf/baseline/tag)")
+          fi
+        else
+          args+=(--complete)
+        fi
+        python3 bench/perf_report.py .build/perf/platforms "${args[@]}"
+        cat .build/perf/comment.md >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Comment on the pull request
+      if: inputs.target == 'branch' && github.event.pull_request.head.repo.full_name == github.repository
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+          --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- speechify-performance -->"))) | .id' | head -n 1)"
+        body="$(jq -Rs '{body: .}' .build/perf/comment.md)"
+        if [ -n "$id" ]; then
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" --input - <<< "$body" > /dev/null
+        else
+          gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --input - <<< "$body" > /dev/null
+        fi
+
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      if: inputs.target == 'main'
+      with:
+        name: performance-baseline
+        path: .build/perf/performance.json
+        if-no-files-found: error
+        retention-days: 30

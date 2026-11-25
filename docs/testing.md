@@ -58,7 +58,7 @@ A new pull request run cancels the one it supersedes. Release runs always finish
 
 ## Performance and cleanup scenarios
 
-On pull requests, `ci.yml` also measures performance. The jobs run in this order:
+On pull requests and on every push to `main`, `ci.yml` also measures performance. The jobs run in this order:
 
 1. **Test (ubuntu-24.04, macos-15, windows-2025)** also builds the `perf` binary (`bench/src/bin/perf.rs`) in release mode and uploads it.
 2. **Measure (linux, macos, windows)** starts once every Test job has finished. Each one takes the binary built on its own platform and runs `scripts/perf-run.sh`, which measures three things:
@@ -67,17 +67,21 @@ On pull requests, `ci.yml` also measures performance. The jobs run in this order
    - **Scenarios**: each case in `bench/scenarios.json` runs through the rules alone and through the default language model, with the real system prompt (`core/src/prompts/cleanup.txt`), vetting and fallback. Results are grouped by `kind`: corrections, repetition, lists, paragraphs, fillers, formatting, and keep as said.
 
    The language model runs on the CPU under llama.cpp `b12211`, which `scripts/fetch-perf-llm.py` pins by SHA-256. CI gives each request 180 seconds instead of the app's 6, and sends short dictations to the model too, so the prompt is judged on its answers rather than on how fast the runner is.
-3. **Performance report** waits for every Measure job and for the coverage gate. It merges the three platforms into one comment on the pull request, updated on every push, with a section each for Transcription, Cleanup and Scenarios. The comment:
-   - compares every number with the latest results file on `main` and marks changes beyond ±15% (and beyond a small absolute floor);
+3. **Performance report** waits for every Measure job and runs `.github/actions/performance-report` with one input, `target`:
+   - `branch` (pull requests): downloads `performance.json` from the newest nightly release that has one, and posts one comment on the pull request, updated on every push, with a section each for Transcription, Cleanup and Scenarios.
+   - `main` (pushes to `main`): saves the three platforms as the `performance-baseline` artifact, only when all three were measured. `release.yml` attaches it to the nightly release as `performance.json`.
+
+   The comment:
+   - compares every number with that nightly release and marks changes beyond ±15% (and beyond a small absolute floor);
    - lists scenarios that started or stopped passing;
    - shows every failing scenario, with what was said and what came out;
    - ends with a JSON summary for tools to read.
 
    Rows are named for what they measure, not for a model, so changing a default keeps them comparable. The footer names the models, and says when `main` was measured with different ones.
 
-   When every Measure job and the coverage gate passed, it commits the merged results to the pull request branch as `bench/perf/results/pr-<number>.json`, authored by `github-actions[bot]`. Merging the pull request brings that file to `main`, and later pull requests compare with the most recently added results file there. Each pull request writes its own file, so two open pull requests never conflict over results.
+   Nothing is committed. The results live only on releases, so CI never pushes to a pull request branch and never starts runs that wait for approval. A merge with `[no-release]` publishes no nightly, so the next pull request compares with the release before it.
 
-None of this fails a pull request over a slower number or a worse scenario. The comment reports them.
+None of this fails a pull request over a slower number or a worse scenario. The comment reports them. On `main`, Measure and Performance report may fail without failing the release.
 
 ### Default models
 
@@ -92,13 +96,7 @@ None of this fails a pull request over a slower number or a worse scenario. The 
 
 Speech models are catalog ids (`core/src/catalog.rs`), and CI downloads them through the catalog with its pinned checksum. For the cleanup model, `scripts/fetch-perf-llm.py` reads the Ollama tag, looks it up in Ollama's registry, and downloads the same weights Ollama would, checked against the digest the registry gives. Ollama tags can move, so the results record that digest. Changing a default changes the app and the next CI measurement together. The catalog test fails if a speech default is not in the catalog.
 
-After the results commit lands, pull before you push again: the branch now has a commit you do not have locally.
-
-A commit pushed with the workflow token starts no workflows, and GitHub ignores checks from a `workflow_dispatch` run when it applies required checks. So once Performance report has pushed the results commit, it posts a passing commit status on it for each required check name (`Test (…)` and `Tauri full coverage gate`). It does this only after it has seen every Test job and the coverage gate pass on the commit it measured. The results commit adds one data file to that commit.
-
-Only CI writes `bench/perf/results`. The coverage gate fails a pull request if any results file differs from the version `github-actions[bot]` last committed on that branch.
-
-`release.yml` grants its `Tests` job the permissions that `ci.yml`'s jobs ask for, because a reusable workflow cannot ask for more than its caller. On pushes, Performance report, the only job that uses them, is skipped.
+`release.yml` grants its `Tests` job `pull-requests: write` because Performance report asks for it, and a reusable workflow cannot ask for more than its caller. On pushes it does not comment.
 
 Scenario checks, all optional: `equals` (exact text), `contains` (each entry a phrase, or a list of alternatives), `absent` (phrases that must not remain, matched as whole words), `list` (`numbered`, `bullets` or `none`) with `items`, `paragraphs` (blocks separated by a blank line) and `min_lines`. `category` is `work` (the default, typing into Slack), `email`, `code` or `personal`. Some scenarios describe behaviour the app does not have yet, such as bullet points for items that are listed without being counted. They fail until it does, and the comment shows when that changes.
 
@@ -110,7 +108,7 @@ python3 scripts/fetch-perf-llm.py .build/llm
 cargo build --release --locked -p speechify-bench --bin perf
 source .build/test-env.sh
 bash scripts/perf-run.sh target/release/perf .build/llm .build/perf/linux.json
-python3 bench/perf_report.py .build/perf --pr 0 --head-sha local --out-json .build/perf/record.json --out-md .build/perf/comment.md
+python3 bench/perf_report.py .build/perf --head-sha local --out-json .build/perf/record.json --out-md .build/perf/comment.md
 ```
 
 Without `PERF_LLM_URL`, `target/release/perf bench/scenarios.json OUT.json` skips the cleanup model and runs everything else.

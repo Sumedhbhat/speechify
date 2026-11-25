@@ -89,10 +89,10 @@ jobs:
       - name: Build the app
         run: cargo build -p speechify --locked
       - name: Build the performance binary
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
         run: cargo build --release --locked -p speechify-bench --bin perf
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
         with:
           name: perf-bin-${{ matrix.platform }}
           path: target/release/perf${{ matrix.exe }}
@@ -101,7 +101,8 @@ jobs:
   measure:
     name: Measure (${{ matrix.platform }})
     needs: test
-    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main') }}
+    continue-on-error: ${{ github.event_name != 'pull_request' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -177,14 +178,7 @@ jobs:
         run: test "$TEST_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - name: Require performance results to come from CI
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: bash scripts/check-results-authors.sh "$BASE_SHA" "$HEAD_SHA"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
@@ -209,76 +203,18 @@ jobs:
 
   performance:
     name: Performance report
-    needs: [measure, coverage-gate]
-    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    needs: measure
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || (github.ref == 'refs/heads/main' && needs.measure.result == 'success')) }}
+    continue-on-error: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
-      statuses: write
-    env:
-      PR: ${{ github.event.pull_request.number }}
-      BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      HEAD_REF: ${{ github.event.pull_request.head.ref }}
-      SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+          persist-credentials: false
+      - uses: ./.github/actions/performance-report
         with:
-          pattern: perf-result-*
-          path: .build/perf/platforms
-      - name: Find the latest results on main
-        run: |
-          latest="$(git log -1 --format= --name-only --diff-filter=AM "$BASE_SHA" -- 'bench/perf/results/*.json' | sed '/^$/d' | head -n 1)"
-          if [ -n "$latest" ]; then
-            git show "$BASE_SHA:$latest" > .build/perf/baseline.json
-            echo "Comparing with $latest"
-          fi
-      - name: Build the table
-        run: |
-          python3 bench/perf_report.py .build/perf/platforms --baseline .build/perf/baseline.json \
-            --pr "$PR" --head-sha "$HEAD_SHA" --run-url "$RUN_URL" \
-            --out-json .build/perf/record.json --out-md .build/perf/comment.md
-          cat .build/perf/comment.md >> "$GITHUB_STEP_SUMMARY"
-      - name: Comment on the pull request
-        if: env.SAME_REPO == 'true'
-        run: |
-          id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
-            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- speechify-performance -->"))) | .id' | head -n 1)"
-          body="$(jq -Rs '{body: .}' .build/perf/comment.md)"
-          if [ -n "$id" ]; then
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" --input - <<< "$body" > /dev/null
-          else
-            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --input - <<< "$body" > /dev/null
-          fi
-      - name: Record the results in the pull request
-        id: record
-        if: env.SAME_REPO == 'true' && needs.measure.result == 'success' && needs.coverage-gate.result == 'success'
-        run: |
-          file="bench/perf/results/pr-$PR.json"
-          mkdir -p bench/perf/results
-          cp .build/perf/record.json "$file"
-          git add "$file"
-          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -q -m "Record performance results for ${HEAD_SHA::7}"
-          if git push origin "HEAD:refs/heads/$HEAD_REF"; then
-            echo "pushed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "The branch moved on since this run started; the next run records its own results."
-          fi
-      - name: Carry the passing checks over to the results commit
-        if: steps.record.outputs.pushed == 'true'
-        run: |
-          sha="$(git rev-parse HEAD)"
-          for check in "Test (ubuntu-24.04)" "Test (macos-15)" "Test (windows-2025)" "Tauri full coverage gate"; do
-            jq -n --arg context "$check" --arg url "$RUN_URL" --arg description "Passed on ${HEAD_SHA::7}; this commit only adds its results" \
-              '{state: "success", context: $context, target_url: $url, description: $description}' |
-              gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$sha" --input - > /dev/null
-          done
+          target: ${{ github.event_name == 'pull_request' && 'branch' || 'main' }}

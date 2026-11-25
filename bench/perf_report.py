@@ -1,5 +1,6 @@
 import argparse
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -211,15 +212,14 @@ def models(platforms):
     return {}
 
 
-def render(current, baseline_doc, run_url, results_path):
+def render(current, baseline_doc, run_url, release):
     baseline = (baseline_doc or {}).get("platforms", {})
     lines = [MARKER, "## Performance", ""]
     if baseline_doc:
-        source = f"#{baseline_doc['pr']}" if baseline_doc.get("pr") else "main"
         sha = (baseline_doc.get("head_sha") or "")[:7]
-        lines.append(f"Compared with the latest results on `main` (from {source}, `{sha}`).")
+        lines.append(f"Compared with `main` at `{sha}`, measured for the nightly release `{release}`.")
     else:
-        lines.append("There are no comparable results on `main` yet. This run becomes the baseline once it is merged.")
+        lines.append("No nightly release has performance results yet. The next merge to `main` records them.")
     lines.append(
         f"Timings come from shared GitHub runners: changes within ±{NOISE:.0%} are usually noise, "
         "so only larger ones are marked (⚠️ worse, 🟢 better)."
@@ -277,7 +277,7 @@ def render(current, baseline_doc, run_url, results_path):
     lines.append(footer)
     lines.append(
         "Scenarios: `bench/scenarios.json`. Cleanup prompt: `core/src/prompts/cleanup.txt`. "
-        f"Once every check passes, CI records these results in `{results_path}`."
+        "Each merge to `main` is measured again and attached to its nightly release as `performance.json`."
     )
     if run_url:
         lines.append(f"[Run]({run_url})")
@@ -288,13 +288,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("results")
     parser.add_argument("--baseline")
-    parser.add_argument("--pr", type=int, required=True)
+    parser.add_argument("--baseline-release", default="")
+    parser.add_argument("--pr", type=int)
+    parser.add_argument("--complete", action="store_true")
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--run-url", default="")
     parser.add_argument("--out-json", required=True)
     parser.add_argument("--out-md", required=True)
     args = parser.parse_args()
     current = load_platforms(args.results)
+    missing = [label for key, label in PLATFORMS if key not in current]
+    if args.complete and missing:
+        sys.exit(f"No results from {', '.join(missing)}")
     baseline = None
     if args.baseline and Path(args.baseline).is_file():
         loaded = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
@@ -309,8 +314,7 @@ def main():
         "platforms": current,
     }
     Path(args.out_json).write_text(json.dumps(record, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    results_path = f"bench/perf/results/pr-{args.pr}.json"
-    Path(args.out_md).write_text(render(current, baseline, args.run_url, results_path), encoding="utf-8")
+    Path(args.out_md).write_text(render(current, baseline, args.run_url, args.baseline_release), encoding="utf-8")
 
 
 if __name__ == "__main__":
