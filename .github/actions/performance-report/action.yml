@@ -1,9 +1,10 @@
 name: Performance report
 description: >-
   Merges the Measure results of every platform. With target "branch" it compares them
-  with the performance.json of the latest nightly release and comments on the pull
-  request. With target "main" it saves them as the performance-baseline artifact,
-  which the nightly release attaches as performance.json.
+  with the performance.json of the latest nightly release and adds a new comment to
+  the pull request on every run, filled in from bench/perf_comment.md. With target
+  "main" it saves them as the performance-baseline artifact, which the nightly release
+  attaches as performance.json.
 
 inputs:
   target:
@@ -82,14 +83,8 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
         PR: ${{ github.event.pull_request.number }}
       run: |
-        id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
-          --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- speechify-performance -->"))) | .id' | head -n 1)"
-        body="$(jq -Rs '{body: .}' .build/perf/comment.md)"
-        if [ -n "$id" ]; then
-          gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" --input - <<< "$body" > /dev/null
-        else
-          gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --input - <<< "$body" > /dev/null
-        fi
+        gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+          --input - <<< "$(jq -Rs '{body: .}' .build/perf/comment.md)" > /dev/null
 
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       if: inputs.target == 'main'

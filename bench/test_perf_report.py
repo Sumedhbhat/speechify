@@ -66,6 +66,13 @@ class Render(unittest.TestCase):
         self.assertIn("1/3 (main: 0/2)", body)
         self.assertIn("No regressions beyond the noise margin.", body)
 
+    def test_comment_names_the_commit_and_fills_the_template(self):
+        body = perf_report.render(everywhere(), None, "https://run", "", head_sha="0123456789abc")
+        self.assertTrue(body.startswith("## Performance for `0123456`\n"))
+        self.assertNotIn("$", body)
+        self.assertNotIn("\n\n\n", body)
+        self.assertTrue(body.endswith("[Run](https://run)\n"))
+
     def test_without_a_baseline(self):
         body = perf_report.render(everywhere(), None, "", "")
         self.assertIn("No nightly release has performance results yet", body)

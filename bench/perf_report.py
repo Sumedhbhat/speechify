@@ -3,8 +3,8 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from string import Template
 
-MARKER = "<!-- speechify-performance -->"
 SCHEMA = 2
 PLATFORMS = [("linux", "Linux"), ("macos", "macOS"), ("windows", "Windows")]
 KINDS = ["corrections", "repetition", "lists", "paragraphs", "fillers", "formatting", "keep as said"]
@@ -12,6 +12,7 @@ NOISE = 0.15
 COMMENT_LIMIT = 60_000
 FAILURE_ROWS = 40
 CELL_CHARS = 300
+TEMPLATE = Path(__file__).with_name("perf_comment.md")
 
 
 def load_platforms(directory):
@@ -228,66 +229,42 @@ def models(platforms):
     return {}
 
 
-def render(current, baseline_doc, run_url, release, skipped_schema=None, limit=None, with_json=True):
+def block(*lines):
+    return "\n".join(["", *lines]) if lines else ""
+
+
+def render(current, baseline_doc, run_url, release, skipped_schema=None, limit=None, with_json=True, head_sha=""):
     baseline = (baseline_doc or {}).get("platforms", {})
-    lines = [MARKER, "## Performance", ""]
     if baseline_doc:
         sha = (baseline_doc.get("head_sha") or "")[:7]
-        lines.append(
+        comparison = (
             f"Compared with `main` at `{sha}`, measured for the nightly release `{release}`. "
             "If this branch is behind `main`, changes merged since then show up here too."
         )
     elif skipped_schema is not None:
-        lines.append(
+        comparison = (
             f"Not compared: the nightly release `{release}` has results in format {skipped_schema}, "
             f"and this run writes format {SCHEMA}. The next merge to `main` records results in the new format."
         )
     else:
-        lines.append("No nightly release has performance results yet. The next merge to `main` records them.")
-    lines.append(
-        f"Timings come from shared GitHub runners: changes within ±{NOISE:.0%} are usually noise, "
-        "so only larger ones are marked (⚠️ worse, 🟢 better)."
-    )
+        comparison = "No nightly release has performance results yet. The next merge to `main` records them."
     missing = [label for key, label in PLATFORMS if key not in current]
-    if missing:
-        lines += ["", f"⚠️ No results from {', '.join(missing)}: that job failed or was cancelled."]
-    seconds = next((round(p["transcription"]["audio_s"]) for p in current.values()), 0)
     flags = []
-    lines += ["", "### 1. Transcription", "", f"Speech to raw text, for one recording of {seconds} s.", ""]
-    lines += metric_table(transcription, current, baseline, flags)
-    lines += ["", "### 2. Cleanup", "", "Raw text to the text that gets typed.", ""]
-    lines += metric_table(cleanup, current, baseline, flags)
-    lines += ["", "### 3. Scenarios", "", "Scenarios passed in each group, by the rules alone and with the language model.", ""]
-    lines += scenario_table(current, baseline)
+    transcription_rows = metric_table(transcription, current, baseline, flags)
+    cleanup_rows = metric_table(cleanup, current, baseline, flags)
     changed = flips(current, baseline)
-    if changed:
-        lines += ["", "#### Changes from main", ""] + [flip_line(*flip) for flip in changed]
-    lines += ["", "### Verdict", ""]
     worse = [flip for flip in changed if not flip[2]]
     if not baseline_doc:
-        lines.append("Nothing to compare with yet.")
+        verdict = ["Nothing to compare with yet."]
     elif not flags and not worse:
-        lines.append("No regressions beyond the noise margin.")
+        verdict = ["No regressions beyond the noise margin."]
     else:
+        verdict = []
         if flags:
-            lines.append(f"Worse than main: {'; '.join(flags)}.")
+            verdict.append(f"Worse than main: {'; '.join(flags)}.")
         if worse:
-            lines.append(f"{len(worse)} scenario result(s) got worse; see Changes from main.")
+            verdict.append(f"{len(worse)} scenario result(s) got worse; see Changes from main.")
     failing = failures(current, limit)
-    if failing:
-        lines += ["", "<details><summary>Scenarios that fail on this branch</summary>", ""] + failing + ["", "</details>"]
-    if with_json:
-        lines += [
-            "",
-            "<details><summary>Summary as JSON</summary>",
-            "",
-            "```json",
-            json.dumps(summary(current), indent=1, ensure_ascii=False),
-            "```",
-            "",
-            "</details>",
-        ]
-    lines.append("")
     used = models(current)
     footer = (
         f"Models are the defaults in `core/defaults.json`: speech `{used.get('speech')}`, "
@@ -299,22 +276,50 @@ def render(current, baseline_doc, run_url, release, skipped_schema=None, limit=N
         used.get("cleanup_digest"),
     ):
         footer += f" `main` was measured with speech `{before.get('speech')}`, language model `{before.get('cleanup')}`."
-    lines.append(footer)
-    lines.append(
-        "Scenarios: `bench/scenarios.json`. Cleanup prompt: `core/src/prompts/cleanup.txt`. "
-        "Each merge to `main` is measured again and attached to its nightly release as `performance.json`."
-    )
-    if run_url:
-        lines.append(f"[Run]({run_url})")
-    return "\n".join(lines) + "\n"
+    values = {
+        "commit": head_sha[:7] or "this branch",
+        "comparison": comparison,
+        "noise": f"{NOISE:.0%}",
+        "missing": block("", f"⚠️ No results from {', '.join(missing)}: that job failed or was cancelled.") if missing else "",
+        "seconds": next((round(p["transcription"]["audio_s"]) for p in current.values()), 0),
+        "transcription": "\n".join(transcription_rows),
+        "cleanup": "\n".join(cleanup_rows),
+        "scenarios": "\n".join(scenario_table(current, baseline)),
+        "changes": block("", "#### Changes from main", "", *[flip_line(*flip) for flip in changed]) if changed else "",
+        "verdict": "\n".join(verdict),
+        "failures": block(
+            "", "<details><summary>Scenarios that fail on this branch</summary>", "", *failing, "", "</details>"
+        )
+        if failing
+        else "",
+        "json": block(
+            "",
+            "<details><summary>Summary as JSON</summary>",
+            "",
+            "```json",
+            json.dumps(summary(current), indent=1, ensure_ascii=False),
+            "```",
+            "",
+            "</details>",
+        )
+        if with_json
+        else "",
+        "models": footer,
+        "run": f"[Run]({run_url})" if run_url else "",
+    }
+    body = Template(TEMPLATE.read_text(encoding="utf-8")).substitute(values)
+    lines = []
+    for line in body.splitlines():
+        if line or (lines and lines[-1]):
+            lines.append(line)
+    return "\n".join(lines).strip("\n") + "\n"
 
 
-def comment(current, baseline_doc, run_url, release, skipped_schema):
-    body = render(current, baseline_doc, run_url, release, skipped_schema, limit=FAILURE_ROWS)
-    if len(body) > COMMENT_LIMIT:
-        body = render(current, baseline_doc, run_url, release, skipped_schema, limit=FAILURE_ROWS, with_json=False)
-    if len(body) > COMMENT_LIMIT:
-        body = render(current, baseline_doc, run_url, release, skipped_schema, limit=0, with_json=False)
+def comment(current, baseline_doc, run_url, release, skipped_schema, head_sha=""):
+    for limit, with_json in ((FAILURE_ROWS, True), (FAILURE_ROWS, False), (0, False)):
+        body = render(current, baseline_doc, run_url, release, skipped_schema, limit, with_json, head_sha)
+        if len(body) <= COMMENT_LIMIT:
+            break
     return body
 
 
@@ -353,10 +358,10 @@ def main():
     }
     Path(args.out_json).write_text(json.dumps(record, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     release = args.baseline_release
-    Path(args.out_md).write_text(comment(current, baseline, args.run_url, release, skipped_schema), encoding="utf-8")
+    Path(args.out_md).write_text(comment(current, baseline, args.run_url, release, skipped_schema, args.head_sha), encoding="utf-8")
     if args.out_summary:
         Path(args.out_summary).write_text(
-            render(current, baseline, args.run_url, release, skipped_schema), encoding="utf-8"
+            render(current, baseline, args.run_url, release, skipped_schema, head_sha=args.head_sha), encoding="utf-8"
         )
 
 

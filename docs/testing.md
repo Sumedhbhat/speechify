@@ -68,7 +68,7 @@ On pull requests and on every push to `main`, `ci.yml` also measures performance
 
    The language model runs on the CPU under llama.cpp `b12211`, which `scripts/fetch-perf-llm.py` pins by SHA-256. CI gives each request 180 seconds instead of the app's 6, and sends short dictations to the model too, so the prompt is judged on its answers rather than on how fast the runner is.
 3. **Performance report** waits for every Measure job and runs `.github/actions/performance-report` with one input, `target`:
-   - `branch` (pull requests): downloads `performance.json` from the newest nightly release that has one, and posts one comment on the pull request, updated on every push, with a section each for Transcription, Cleanup and Scenarios.
+   - `branch` (pull requests): downloads `performance.json` from the newest nightly release that has one, and adds a new comment to the pull request on every run, headed with the commit it measured, so the comments read as a timeline of what each push changed. The layout is the template `bench/perf_comment.md`; `perf_report.py` fills in its `$name` fields, so a wording or order change goes in the template, not the script.
    - `main` (pushes to `main`): saves the three platforms as the `performance-baseline` artifact, only when all three were measured. `release.yml` attaches it to the nightly release as `performance.json`.
 
    The comment:
