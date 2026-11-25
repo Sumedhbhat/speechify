@@ -100,6 +100,7 @@ export type Stage =
   | "cleanup"
   | "paste"
   | "detect"
+  | "scan"
   | "piece"
   | "feed"
   | "model";

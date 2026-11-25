@@ -12,6 +12,7 @@ pub enum Stage {
     Cleanup,
     Paste,
     Detect,
+    Scan,
     Piece,
     Feed,
     Model,

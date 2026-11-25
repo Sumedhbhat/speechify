@@ -25,6 +25,11 @@ CREATE TABLE IF NOT EXISTS dictations (
     flagged INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS dictations_time ON dictations (created_at);
+CREATE TABLE IF NOT EXISTS attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at INTEGER NOT NULL, offset_min INTEGER NOT NULL,
+    ending TEXT NOT NULL, duration_ms INTEGER NOT NULL, error TEXT NOT NULL, trace TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS dictionary (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     heard TEXT NOT NULL, term TEXT NOT NULL, source TEXT NOT NULL,
@@ -139,6 +144,47 @@ pub struct Dictation {
     /// Each recognised word with how sure the recogniser was, 0 to 1.
     /// Empty when the recogniser does not report it.
     pub heard: Vec<crate::asr::Heard>,
+    pub trace: Vec<crate::trace::Span>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Ending {
+    #[default]
+    Silent,
+    Nothing,
+    Failed,
+    Cancelled,
+}
+
+impl Ending {
+    fn name(self) -> &'static str {
+        match self {
+            Ending::Silent => "silent",
+            Ending::Nothing => "nothing",
+            Ending::Failed => "failed",
+            Ending::Cancelled => "cancelled",
+        }
+    }
+
+    fn parse(name: &str) -> Ending {
+        match name {
+            "nothing" => Ending::Nothing,
+            "failed" => Ending::Failed,
+            "cancelled" => Ending::Cancelled,
+            _ => Ending::Silent,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct Attempt {
+    pub id: i64,
+    pub created_at: i64,
+    pub offset_min: i32,
+    pub ending: Ending,
+    pub duration_ms: u32,
+    pub error: String,
     pub trace: Vec<crate::trace::Span>,
 }
 
@@ -407,7 +453,10 @@ impl Store {
                 }
                 rows
             }
-            None => self.all()?,
+            None => {
+                self.conn.execute("DELETE FROM attempts", []).map_err(err)?;
+                self.all()?
+            }
         };
         for row in &rows {
             self.conn
@@ -424,7 +473,58 @@ impl Store {
 
     /// Applies the retention setting; returns audio files to remove.
     pub fn prune(&self, retention: Retention, clock: Clock) -> Result<Vec<String>> {
+        self.prune_attempts(retention, clock)?;
         self.delete_dictations(Some(&self.expired(retention, clock)?))
+    }
+
+    pub fn prune_attempts(&self, retention: Retention, clock: Clock) -> Result<()> {
+        let cutoff = match retention {
+            Retention::Keep => return Ok(()),
+            Retention::Day => clock.now - 86_400,
+            Retention::Never => i64::MAX,
+        };
+        self.conn
+            .execute("DELETE FROM attempts WHERE created_at < ?1", [cutoff])
+            .map_err(err)?;
+        Ok(())
+    }
+
+    pub fn add_attempt(&self, attempt: &Attempt) -> Result<i64> {
+        self.conn
+            .execute(
+                "INSERT INTO attempts (created_at, offset_min, ending, duration_ms, error, trace) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    attempt.created_at,
+                    attempt.offset_min,
+                    attempt.ending.name(),
+                    attempt.duration_ms,
+                    attempt.error,
+                    serde_json::to_string(&attempt.trace).map_err(err)?
+                ],
+            )
+            .map_err(err)?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn attempts(&self, limit: u32) -> Result<Vec<Attempt>> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT id, created_at, offset_min, ending, duration_ms, error, trace FROM attempts ORDER BY id DESC LIMIT ?1")
+            .map_err(err)?;
+        let rows = statement
+            .query_map([limit], |row| {
+                Ok(Attempt {
+                    id: row.get(0)?,
+                    created_at: row.get(1)?,
+                    offset_min: row.get(2)?,
+                    ending: Ending::parse(&row.get::<_, String>(3)?),
+                    duration_ms: row.get(4)?,
+                    error: row.get(5)?,
+                    trace: serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or_default(),
+                })
+            })
+            .map_err(err)?;
+        rows.collect::<rusqlite::Result<_>>().map_err(err)
     }
 
     /// The dictations the retention setting says should be gone by now.
@@ -938,6 +1038,53 @@ mod tests {
             })
             .unwrap();
         assert_eq!(store.dictation(id).unwrap().trace, trace);
+    }
+
+    #[test]
+    fn dictations_that_never_reach_history_keep_their_trace() {
+        use crate::trace::{Span, Stage};
+        let store = Store::memory();
+        let trace = vec![Span {
+            stage: Stage::Speech,
+            at_ms: 3,
+            ms: 200,
+            ..Span::default()
+        }];
+        for (at, ending) in [Ending::Silent, Ending::Nothing, Ending::Failed, Ending::Cancelled]
+            .into_iter()
+            .enumerate()
+        {
+            store
+                .add_attempt(&Attempt {
+                    created_at: 1_000 + at as i64 * 100_000,
+                    ending,
+                    error: format!("{ending:?}"),
+                    trace: trace.clone(),
+                    ..Attempt::default()
+                })
+                .unwrap();
+        }
+        let all = store.attempts(10).unwrap();
+        let endings: Vec<Ending> = all.iter().map(|attempt| attempt.ending).collect();
+        assert_eq!(
+            endings,
+            [Ending::Cancelled, Ending::Failed, Ending::Nothing, Ending::Silent]
+        );
+        assert_eq!((all[0].error.as_str(), &all[0].trace), ("Cancelled", &trace));
+        assert_eq!(store.attempts(1).unwrap().len(), 1);
+        let clock = Clock {
+            now: 250_000,
+            offset_min: 0,
+        };
+        store.prune_attempts(Retention::Keep, clock).unwrap();
+        assert_eq!(store.attempts(10).unwrap().len(), 4);
+        store.prune_attempts(Retention::Day, clock).unwrap();
+        assert_eq!(store.attempts(10).unwrap().len(), 2);
+        store.delete_dictations(None).unwrap();
+        assert!(store.attempts(10).unwrap().is_empty());
+        store.add_attempt(&Attempt::default()).unwrap();
+        store.prune_attempts(Retention::Never, clock).unwrap();
+        assert!(store.attempts(10).unwrap().is_empty());
     }
 
     #[test]
