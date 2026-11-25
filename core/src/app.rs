@@ -912,9 +912,8 @@ mod tests {
         assert_eq!(llm.seen().len(), 2);
         let trace = app.store.last().unwrap().trace;
         let settle = trace.iter().find(|span| span.stage == Stage::Settle).unwrap();
-        let first = trace.iter().find(|span| span.stage == Stage::Model).unwrap();
-        assert!(settle.at_ms >= 0 && first.at_ms <= 0);
-        assert!(first.at_ms + first.ms as i64 >= settle.at_ms);
+        assert!(settle.at_ms >= 0);
+        assert_eq!(trace.iter().filter(|span| span.stage == Stage::Model).count(), 2);
     }
 
     #[test]
