@@ -333,7 +333,7 @@ impl Binding {
         };
         let (tap, second) = match tap {
             Tap::Tapped { .. } if held => (Tap::Waiting, true),
-            Tap::Tapped { .. } => (tap, false),
+            Tap::Tapped { .. } if clean => (tap, false),
             Tap::First { since } if !held && clean && now.saturating_sub(since) < TAP_MS => {
                 (Tap::Tapped { at: now }, false)
             }
@@ -416,18 +416,19 @@ impl Tracker {
             .iter()
             .map(|binding| (binding.bind, binding.chord.clone()))
             .collect();
-        let mut doubled = false;
+        let mut doubled: Vec<Chord> = Vec::new();
         for binding in &mut self.bindings {
             let bind = binding.bind;
             let held = binding.chord.held_by(pressed);
             let clean = binding.chord.covers(pressed);
+            let mut second = false;
             if binding.phase == Phase::Up {
                 if binding.double {
                     if !binding.second_press(held, clean, now) {
                         continue;
                     }
-                    doubled = true;
-                } else if doubled && held {
+                    second = true;
+                } else if held && doubled.iter().any(|keys| binding.chord.held_by(&keys.0)) {
                     binding.phase = Phase::Spent;
                     continue;
                 }
@@ -489,6 +490,9 @@ impl Tracker {
                 }
                 down @ Phase::Down { .. } => down,
             };
+            if second && matches!(binding.phase, Phase::Settling { .. } | Phase::Down { .. }) {
+                doubled.push(binding.chord.clone());
+            }
         }
         if self.any_down && pressed.is_empty() {
             edges.push((Edge::Released, now));
@@ -973,6 +977,28 @@ mod tests {
         assert_eq!(
             tracker.edges(&keys(&[RightShift]), 3000 + SETTLE_MS),
             vec![Edge::Down(Bind::PushToTalk)]
+        );
+    }
+
+    #[test]
+    fn typing_between_the_taps_is_not_a_double_tap() {
+        let mut tracker = fresh(&double_right_shift());
+        tracker.edges(&keys(&[RightShift]), 0);
+        tracker.edges(&keys(&[]), 80);
+        tracker.edges(&keys(&[Char('A')]), 100);
+        tracker.edges(&keys(&[]), 120);
+        tracker.edges(&keys(&[RightShift]), 200);
+        assert_eq!(tracker.edges(&keys(&[]), 280), vec![Edge::Released]);
+    }
+
+    #[test]
+    fn a_rejected_second_tap_leaves_other_shortcuts_alone() {
+        let mut tracker = fresh(&double_right_shift());
+        tracker.edges(&keys(&[RightShift]), 0);
+        tracker.edges(&keys(&[]), 80);
+        assert_eq!(
+            tracker.edges(&keys(&[LeftAlt, RightShift, Char('Z')]), 200),
+            vec![Edge::Down(Bind::PasteLast)]
         );
     }
 

@@ -287,14 +287,14 @@ export function shortcut(
   const press = (event: KeyboardEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    if (!held || !event.code || held.includes(event.code)) return;
+    if (!held || !event.code || down.has(event.code) || held.includes(event.code)) return;
     if (!held.length) {
       clearTimeout(again);
       held = [...down];
-      pressedAt = Date.now();
     }
     down.add(event.code);
     held.push(event.code);
+    pressedAt = Date.now();
     if (binding.layout) letters[event.code] = event.key;
     show(chordName(held, letters));
   };

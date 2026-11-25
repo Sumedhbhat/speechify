@@ -101,6 +101,9 @@ pub struct Session {
     /// A press that stopped hands-free may be the first half of a
     /// double-tap; a second press before this only finishes it.
     echo_until: u64,
+    /// That press is still held: its release opens the window again, as
+    /// the second press of a double-tap is timed from it.
+    echo_held: bool,
 }
 
 impl Default for Session {
@@ -117,6 +120,7 @@ impl Session {
             copy_pending: false,
             undoable: false,
             echo_until: 0,
+            echo_held: false,
         }
     }
 
@@ -165,6 +169,13 @@ impl Session {
             }
 
             (State::Idle | State::Busy, Down(PushToTalk | HandsFree | Command)) if now < self.echo_until => vec![],
+            (State::Idle | State::Busy, Up(PushToTalk | HandsFree | Command))
+                if self.echo_held && now < self.echo_until =>
+            {
+                self.echo_held = false;
+                self.echo_until = now + TAP_MS;
+                vec![]
+            }
             (State::Idle, Down(by @ (PushToTalk | Command))) => {
                 let command = by == Command;
                 self.state = State::Held {
@@ -271,6 +282,7 @@ impl Session {
 
             (State::Locked { since, command, .. }, _) if starts => {
                 self.echo_until = now + TAP_MS;
+                self.echo_held = true;
                 if now.saturating_sub(since) < TAP_MS {
                     self.cancel()
                 } else {
@@ -445,6 +457,19 @@ mod tests {
         s.handle(Finished, 5300);
         assert_eq!(s.handle(Down(HandsFree), 5400), vec![]);
         assert_eq!(s.handle(Down(HandsFree), 5000 + TAP_MS), START_LOCKED);
+    }
+
+    #[test]
+    fn the_second_tap_after_a_slow_stopping_tap_does_not_restart() {
+        let mut s = Session::new();
+        s.handle(Down(HandsFree), 0);
+        assert_eq!(s.handle(Down(PushToTalk), 5000), vec![Effect::Stop { command: false }]);
+        s.handle(Finished, 5100);
+        assert_eq!(s.handle(Up(PushToTalk), 5200), vec![]);
+        assert_eq!(s.handle(Down(HandsFree), 5600), vec![]);
+        // Only the stopping press's release reopens the window.
+        assert_eq!(s.handle(Up(HandsFree), 5650), vec![]);
+        assert_eq!(s.handle(Down(PushToTalk), 5200 + TAP_MS), START);
     }
 
     #[test]

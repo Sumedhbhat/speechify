@@ -357,6 +357,33 @@ describe("shortcut", () => {
     expect(saved()).toBe("Ctrl+K");
   });
 
+  it("ignores a key repeating after its partner was let go", async () => {
+    const { record } = recorder();
+    record.click();
+    press("keydown", "ControlLeft");
+    press("keydown", "KeyK");
+    press("keyup", "ControlLeft");
+    press("keydown", "KeyK", true);
+    press("keydown", "KeyK");
+    press("keyup", "KeyK");
+    noSecondTap();
+    await settle();
+    expect(saved()).toBe("Ctrl+K");
+  });
+
+  it("times a tap from the key that completed it", async () => {
+    const { record } = recorder();
+    record.click();
+    press("keydown", "ControlLeft");
+    vi.advanceTimersByTime(TAP_MS);
+    press("keydown", "KeyK");
+    press("keyup", "KeyK");
+    press("keydown", "KeyK");
+    press("keyup", "KeyK");
+    await settle();
+    expect(saved()).toBe("Ctrl+K x2");
+  });
+
   it("counts a key still held from the first tap in the second", async () => {
     const { record } = recorder();
     record.click();
