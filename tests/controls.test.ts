@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   chordName,
   number,
   RECORD_LIMIT_MS,
   select,
   shortcut,
+  TAP_MS,
   text,
   toggle,
 } from "../src/controls";
@@ -235,7 +236,14 @@ describe("shortcut", () => {
 
   const saved = () => (ctx.api.saveSettings.mock.lastCall![0] as Settings).hotkeys.push_to_talk;
 
-  beforeEach(() => pause.mockClear());
+  beforeEach(() => {
+    pause.mockClear();
+    vi.useFakeTimers();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  /** A quick tap waits to see whether a second one makes it a double-tap. */
+  const noSecondTap = () => vi.advanceTimersByTime(TAP_MS);
 
   it("shows the keys, labelled, and does not pause until recording", () => {
     const { el, record, clear, keys } = recorder();
@@ -268,6 +276,8 @@ describe("shortcut", () => {
     press("keydown", "KeyZ");
     expect(keys().textContent).toBe("AltShiftZ");
     press("keyup", "KeyZ");
+    expect(keys().textContent).toBe("AltShiftZtap again for a double-tap");
+    noSecondTap();
     await settle();
     expect(saved()).toBe("Alt+Shift+Z");
     expect(pause).toHaveBeenLastCalledWith(false);
@@ -303,8 +313,87 @@ describe("shortcut", () => {
     record.click();
     press("keydown", "ShiftRight");
     press("keyup", "ShiftRight");
+    noSecondTap();
     await settle();
     expect(saved()).toBe("Right Shift");
+  });
+
+  it("records a double-tap, and shows it", async () => {
+    const { record, keys } = recorder();
+    record.click();
+    press("keydown", "ShiftRight");
+    press("keyup", "ShiftRight");
+    vi.advanceTimersByTime(TAP_MS - 1);
+    press("keydown", "ShiftRight");
+    vi.advanceTimersByTime(TAP_MS);
+    press("keyup", "ShiftRight");
+    await settle();
+    expect(saved()).toBe("Right Shift x2");
+    expect(pause).toHaveBeenLastCalledWith(false);
+    expect([...keys().children].map((k) => [k.tagName, k.textContent])).toEqual([
+      ["KBD", "Right Shift"],
+      ["SPAN", "twice"],
+    ]);
+  });
+
+  it("takes a held press at once, and other keys after a tap as a new shortcut", async () => {
+    const { record } = recorder();
+    record.click();
+    press("keydown", "ShiftRight");
+    vi.advanceTimersByTime(TAP_MS);
+    press("keyup", "ShiftRight");
+    await settle();
+    expect(saved()).toBe("Right Shift");
+    record.click();
+    press("keydown", "ShiftRight");
+    press("keyup", "ShiftRight");
+    press("keydown", "ControlLeft");
+    press("keydown", "KeyK");
+    press("keyup", "KeyK");
+    // That was a quick tap too, so it waits again for a second.
+    expect(ctx.api.saveSettings).toHaveBeenCalledTimes(1);
+    noSecondTap();
+    await settle();
+    expect(saved()).toBe("Ctrl+K");
+  });
+
+  it("ignores a key repeating after its partner was let go", async () => {
+    const { record } = recorder();
+    record.click();
+    press("keydown", "ControlLeft");
+    press("keydown", "KeyK");
+    press("keyup", "ControlLeft");
+    press("keydown", "KeyK", true);
+    press("keydown", "KeyK");
+    press("keyup", "KeyK");
+    noSecondTap();
+    await settle();
+    expect(saved()).toBe("Ctrl+K");
+  });
+
+  it("times a tap from the key that completed it", async () => {
+    const { record } = recorder();
+    record.click();
+    press("keydown", "ControlLeft");
+    vi.advanceTimersByTime(TAP_MS);
+    press("keydown", "KeyK");
+    press("keyup", "KeyK");
+    press("keydown", "KeyK");
+    press("keyup", "KeyK");
+    await settle();
+    expect(saved()).toBe("Ctrl+K x2");
+  });
+
+  it("counts a key still held from the first tap in the second", async () => {
+    const { record } = recorder();
+    record.click();
+    press("keydown", "ControlLeft");
+    press("keydown", "MetaLeft");
+    press("keyup", "MetaLeft");
+    press("keydown", "MetaLeft");
+    press("keyup", "MetaLeft");
+    await settle();
+    expect(saved()).toBe("Ctrl+Meta x2");
   });
 
   it("hides an old error when recording again", async () => {
@@ -313,6 +402,7 @@ describe("shortcut", () => {
     record.click();
     press("keydown", "ArrowUp");
     press("keyup", "ArrowUp");
+    noSecondTap();
     await settle();
     const error = el.querySelector<HTMLElement>(".field-error")!;
     expect(error.hidden).toBe(false);
@@ -326,23 +416,31 @@ describe("shortcut", () => {
     press("keydown", "ControlLeft", false, "Control");
     press("keydown", "KeyQ", false, "a");
     press("keyup", "KeyQ");
+    noSecondTap();
     await settle();
     expect(saved()).toBe("Ctrl+A");
   });
 
   it("gives up before the shell stops pausing shortcuts", () => {
-    vi.useFakeTimers();
-    try {
-      const { record, keys } = recorder();
-      record.click();
-      vi.advanceTimersByTime(RECORD_LIMIT_MS - 1);
-      expect(record.textContent).toBe("Press keys…");
-      vi.advanceTimersByTime(1);
-      expect(record.textContent).toBe("Record");
-      expect(pause).toHaveBeenLastCalledWith(false);
-      expect(keys().textContent).toBe("CtrlMetaSpace");
-    } finally {
-      vi.useRealTimers();
-    }
+    const { record, keys } = recorder();
+    record.click();
+    vi.advanceTimersByTime(RECORD_LIMIT_MS - 1);
+    expect(record.textContent).toBe("Press keys…");
+    vi.advanceTimersByTime(1);
+    expect(record.textContent).toBe("Record");
+    expect(pause).toHaveBeenLastCalledWith(false);
+    expect(keys().textContent).toBe("CtrlMetaSpace");
+  });
+
+  it("gives up waiting for a second tap when cancelled", async () => {
+    const { record, keys } = recorder();
+    record.click();
+    press("keydown", "ShiftRight");
+    press("keyup", "ShiftRight");
+    record.click();
+    noSecondTap();
+    await settle();
+    expect(ctx.api.saveSettings).not.toHaveBeenCalled();
+    expect(keys().textContent).toBe("CtrlMetaSpace");
   });
 });

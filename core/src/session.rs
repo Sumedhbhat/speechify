@@ -5,6 +5,7 @@ use serde::Serialize;
 
 /// A press shorter than this is a tap, not a dictation.
 pub const TAP_MS: u64 = 500;
+const LATE_MS: u64 = crate::hotkey::SETTLE_MS + 100;
 /// The user is warned here and stopped a minute later.
 pub const WARN_MS: u64 = 19 * 60_000;
 pub const LIMIT_MS: u64 = 20 * 60_000;
@@ -95,6 +96,8 @@ pub struct Session {
     paste_pending: bool,
     copy_pending: bool,
     undoable: bool,
+    echo_until: u64,
+    echo_held: bool,
 }
 
 impl Default for Session {
@@ -110,6 +113,8 @@ impl Session {
             paste_pending: false,
             copy_pending: false,
             undoable: false,
+            echo_until: 0,
+            echo_held: false,
         }
     }
 
@@ -157,6 +162,14 @@ impl Session {
                 copy.into_iter().chain(paste).collect()
             }
 
+            (State::Idle | State::Busy, Down(PushToTalk | HandsFree | Command)) if now < self.echo_until => vec![],
+            (State::Idle | State::Busy, Up(PushToTalk | HandsFree | Command))
+                if self.echo_held && now < self.echo_until =>
+            {
+                self.echo_held = false;
+                self.echo_until = now + TAP_MS;
+                vec![]
+            }
             (State::Idle, Down(by @ (PushToTalk | Command))) => {
                 let command = by == Command;
                 self.state = State::Held {
@@ -255,13 +268,15 @@ impl Session {
                 };
                 vec![Effect::Mode { command, locked: true }]
             }
-            (State::TapWait { until, .. }, Tick) if now >= until => {
+            (State::TapWait { until, .. }, Tick) if now >= until + LATE_MS => {
                 // A stray tap: nothing was meant, nothing is kept.
                 self.state = State::Idle;
                 vec![Effect::Discard { keep: false }]
             }
 
             (State::Locked { since, command, .. }, _) if starts => {
+                self.echo_until = now + TAP_MS;
+                self.echo_held = true;
                 if now.saturating_sub(since) < TAP_MS {
                     self.cancel()
                 } else {
@@ -333,6 +348,14 @@ mod tests {
         },
     ];
 
+    const START_LOCKED: [Effect; 2] = [
+        Effect::Start,
+        Effect::Mode {
+            command: false,
+            locked: true,
+        },
+    ];
+
     #[test]
     fn hold_to_dictate() {
         let mut s = Session::default();
@@ -355,7 +378,8 @@ mod tests {
         s.handle(Down(PushToTalk), 0);
         assert_eq!(s.handle(Up(PushToTalk), 200), vec![]);
         assert_eq!(s.handle(Tick, 400), vec![]);
-        assert_eq!(s.handle(Tick, 700), vec![Effect::Discard { keep: false }]);
+        assert_eq!(s.handle(Tick, 700 + LATE_MS - 1), vec![]);
+        assert_eq!(s.handle(Tick, 700 + LATE_MS), vec![Effect::Discard { keep: false }]);
         assert_eq!(s.handle(Undo, 800), vec![]);
     }
 
@@ -405,6 +429,37 @@ mod tests {
         assert_eq!(s.handle(Up(PushToTalk), 400), vec![]);
         assert_eq!(s.handle(Tick, 5000), vec![]);
         assert_eq!(s.handle(Down(PushToTalk), 9000), vec![Effect::Stop { command: false }]);
+    }
+
+    #[test]
+    fn a_double_tap_shortcut_locks_from_a_tap_and_stops_without_restarting() {
+        let mut s = Session::new();
+        s.handle(Down(PushToTalk), 0);
+        s.handle(Up(PushToTalk), 80);
+        assert_eq!(
+            s.handle(Down(HandsFree), 200),
+            vec![Effect::Mode {
+                command: false,
+                locked: true
+            }]
+        );
+        assert_eq!(s.handle(Down(PushToTalk), 5000), vec![Effect::Stop { command: false }]);
+        assert_eq!(s.handle(Down(PushToTalk), 5200), vec![]);
+        s.handle(Finished, 5300);
+        assert_eq!(s.handle(Down(HandsFree), 5400), vec![]);
+        assert_eq!(s.handle(Down(HandsFree), 5000 + TAP_MS), START_LOCKED);
+    }
+
+    #[test]
+    fn the_second_tap_after_a_slow_stopping_tap_does_not_restart() {
+        let mut s = Session::new();
+        s.handle(Down(HandsFree), 0);
+        assert_eq!(s.handle(Down(PushToTalk), 5000), vec![Effect::Stop { command: false }]);
+        s.handle(Finished, 5100);
+        assert_eq!(s.handle(Up(PushToTalk), 5200), vec![]);
+        assert_eq!(s.handle(Down(HandsFree), 5600), vec![]);
+        assert_eq!(s.handle(Up(HandsFree), 5650), vec![]);
+        assert_eq!(s.handle(Down(PushToTalk), 5200 + TAP_MS), START);
     }
 
     #[test]

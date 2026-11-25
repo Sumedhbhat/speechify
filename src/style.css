@@ -1674,6 +1674,11 @@ progress::-moz-progress-bar {
   color: var(--muted);
 }
 
+.shortcut-twice {
+  align-self: center;
+  font-size: 0.88em;
+}
+
 .btn[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--accent);

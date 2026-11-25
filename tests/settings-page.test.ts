@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TAP_MS } from "../src/controls";
 import { createSettingsPage } from "../src/pages/settings";
 import { byLabel, byText, change, makeDeps, settle, status } from "./fakes";
 
@@ -30,6 +31,7 @@ async function setup() {
 beforeEach(() => {
   ctx = makeDeps();
 });
+afterEach(() => vi.useRealTimers());
 
 describe("settings page", () => {
   it("records shortcuts by pressing them, pausing global shortcuts meanwhile", async () => {
@@ -38,10 +40,12 @@ describe("settings page", () => {
     const push = byLabel<HTMLButtonElement>(document, "Push to talk");
     const field = push.closest(".field")!;
     expect(field.querySelector(".shortcut-keys")!.textContent).toBe("CtrlMetaSpace");
+    vi.useFakeTimers();
     push.click();
     expect(ctx.api.pauseShortcuts).toHaveBeenLastCalledWith(true);
     press("keydown", "ShiftRight");
     press("keyup", "ShiftRight");
+    vi.advanceTimersByTime(TAP_MS);
     await settle();
     expect(ctx.api.pauseShortcuts).toHaveBeenLastCalledWith(false);
     expect(ctx.api.saveSettings).toHaveBeenLastCalledWith(
@@ -56,9 +60,11 @@ describe("settings page", () => {
     await setup();
     ctx.api.saveSettings.mockRejectedValueOnce("Unknown key “ArrowLeft”");
     const cancel = byLabel<HTMLButtonElement>(document, "Cancel");
+    vi.useFakeTimers();
     cancel.click();
     press("keydown", "ArrowLeft");
     press("keyup", "ArrowLeft");
+    vi.advanceTimersByTime(TAP_MS);
     await settle();
     const field = cancel.closest(".field")!;
     expect(field.querySelector(".shortcut-keys")!.textContent).toBe("Escape");
