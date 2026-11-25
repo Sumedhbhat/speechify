@@ -211,10 +211,18 @@ impl<P: Platform, E: Engines> Controller<P, E> {
     /// Feeds one input event through the state machine and carries out
     /// whatever it decides.
     pub fn handle(&mut self, event: Event) {
+        self.handle_ago(event, 0);
+    }
+
+    /// Like `handle`, for an event that happened `ago_ms` before now: a key
+    /// press waits in the queue while the microphone opens, yet its length
+    /// is from when the keys moved.
+    pub fn handle_ago(&mut self, event: Event, ago_ms: u64) {
         let settings = self.store.settings();
         let unsure = matches!(event, Event::Down(bind) if bind.unsure(&settings.hotkeys));
         let mut started = false;
-        for effect in self.session.handle(event, self.platform.now_ms()) {
+        let at = self.platform.now_ms().saturating_sub(ago_ms);
+        for effect in self.session.handle(event, at) {
             match effect {
                 Effect::Start => {
                     if !self.start(&settings, unsure) {
@@ -1069,6 +1077,18 @@ mod tests {
     }
 
     #[test]
+    fn a_tap_is_timed_from_its_keys_not_from_when_it_was_handled() {
+        let mut app = app(&[]);
+        app.handle(Event::Down(Bind::PushToTalk));
+        // The microphone took 700 ms to open; the key went up after 100.
+        app.platform.now += 700;
+        app.handle_ago(Event::Up(Bind::PushToTalk), 600);
+        assert_eq!(app.platform.log, vec!["start:"]);
+        app.handle_ago(Event::Down(Bind::PushToTalk), 450);
+        assert_eq!(app.platform.log, vec!["start:", "chime:Start"]);
+    }
+
+    #[test]
     fn a_tap_stays_quiet_and_a_double_tap_chimes_at_once() {
         let mut app = app(&[]);
         app.handle(Event::Down(Bind::PushToTalk));
@@ -1498,6 +1518,7 @@ mod tests {
         let mut app = app(&[]);
         app.session.handle(Event::Down(Bind::HandsFree), 0);
         app.session.handle(Event::BarClick, 5000);
+        app.platform.now = 6000;
         app.handle(Event::Down(Bind::PushToTalk));
         assert_eq!(
             app.platform.bars,

@@ -77,7 +77,7 @@ export function createSettingsPage({ api, settings: store }: Deps): Page {
         section(
           "Shortcuts",
           status.shortcuts
-            ? "Click Record and press the keys. A modifier pressed alone keeps its side, so Right Shift leaves the left one for typing; in a combination either side works."
+            ? "Click Record and press the keys, or tap them twice quickly for a double-tap. A modifier pressed alone keeps its side, so Right Shift leaves the left one for typing; in a combination either side works."
             : status.wayland
               ? "Global shortcuts are not available on Wayland. Bind “speechify --toggle” to a system shortcut instead."
               : status.platform === "macos"

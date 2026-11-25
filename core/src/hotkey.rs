@@ -189,6 +189,38 @@ impl std::fmt::Display for Chord {
     }
 }
 
+/// What settings write after a chord that is tapped twice.
+const TWICE: &str = " x2";
+
+/// A chord pressed once, or tapped twice in quick succession
+/// ("Right Shift x2").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shortcut {
+    chord: Chord,
+    double: bool,
+}
+
+impl Shortcut {
+    pub fn parse(text: &str) -> Result<Shortcut> {
+        let text = text.trim();
+        let lower = text.to_ascii_lowercase();
+        let (keys, double) = match lower.strip_suffix(TWICE.trim_start()) {
+            Some(rest) if rest.ends_with(char::is_whitespace) => (&text[..rest.len()], true),
+            _ => (text, false),
+        };
+        Ok(Shortcut {
+            chord: Chord::parse(keys)?,
+            double,
+        })
+    }
+}
+
+impl std::fmt::Display for Shortcut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}{}", self.chord, if self.double { TWICE } else { "" })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Bind {
@@ -225,7 +257,7 @@ impl Bind {
     /// still turn out to be typing for the first `UNSURE_MS` after it goes
     /// down.
     pub fn unsure(self, hotkeys: &crate::settings::Hotkeys) -> bool {
-        Chord::parse(self.shortcut(hotkeys)).is_ok_and(|chord| chord.modifiers_only())
+        Shortcut::parse(self.shortcut(hotkeys)).is_ok_and(|shortcut| shortcut.chord.modifiers_only())
     }
 }
 
@@ -249,6 +281,9 @@ pub const SETTLE_MS: u64 = 150;
 pub const ABORT_MS: u64 = crate::session::TAP_MS;
 /// How long after going down such a shortcut may still be aborted.
 pub const UNSURE_MS: u64 = ABORT_MS - SETTLE_MS;
+/// A double-tap is two presses shorter than this, the second starting this
+/// soon after the first is let go.
+const TAP_MS: u64 = crate::session::TAP_MS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -264,10 +299,52 @@ enum Phase {
     Spent,
 }
 
+/// How far a double-tap shortcut is before its second press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tap {
+    Waiting,
+    /// The first press, held alone since `since`.
+    First {
+        since: u64,
+    },
+    /// The first press was let go at `at`.
+    Tapped {
+        at: u64,
+    },
+    /// Held with other keys: typing. Waits for the keys to be let go.
+    Spoiled,
+}
+
 struct Binding {
     bind: Bind,
     chord: Chord,
+    double: bool,
     phase: Phase,
+    tap: Tap,
+}
+
+impl Binding {
+    /// For a double-tap shortcut, whether the keys going down now are its
+    /// second press. The first press and its release are only remembered.
+    fn second_press(&mut self, held: bool, clean: bool, now: u64) -> bool {
+        let tap = match self.tap {
+            Tap::Tapped { at } if now.saturating_sub(at) >= TAP_MS => Tap::Waiting,
+            tap => tap,
+        };
+        let (tap, second) = match tap {
+            Tap::Tapped { .. } if held => (Tap::Waiting, true),
+            Tap::Tapped { .. } => (tap, false),
+            Tap::First { since } if !held && clean && now.saturating_sub(since) < TAP_MS => {
+                (Tap::Tapped { at: now }, false)
+            }
+            _ if !held => (Tap::Waiting, false),
+            Tap::First { .. } if clean => (tap, false),
+            Tap::Waiting if clean => (Tap::First { since: now }, false),
+            _ => (Tap::Spoiled, false),
+        };
+        self.tap = tap;
+        second
+    }
 }
 
 pub struct Tracker {
@@ -282,15 +359,21 @@ impl Tracker {
             let text = bind.shortcut(hotkeys);
             // An empty shortcut switches the action off.
             if !text.trim().is_empty() {
+                let Shortcut { chord, double } = Shortcut::parse(text)?;
                 bindings.push(Binding {
                     bind,
-                    chord: Chord::parse(text)?,
+                    chord,
+                    double,
                     // Keys already held when the shortcuts change were
                     // pressed for something else.
                     phase: Phase::Spent,
+                    tap: Tap::Waiting,
                 });
             }
         }
+        // A double-tap goes first, so that its second press is not also a
+        // press of a shortcut on the same keys.
+        bindings.sort_by_key(|binding| !binding.double);
         Ok(Tracker {
             bindings,
             any_down: false,
@@ -311,6 +394,7 @@ impl Tracker {
     pub fn hold_off(&mut self) {
         for binding in &mut self.bindings {
             binding.phase = Phase::Spent;
+            binding.tap = Tap::Waiting;
         }
     }
 
@@ -322,18 +406,33 @@ impl Tracker {
             .any(|binding| matches!(binding.phase, Phase::Settling { .. }))
     }
 
-    /// Feeds the current key state and returns what changed. `now` is a
-    /// monotonic clock in milliseconds.
-    pub fn update(&mut self, pressed: &BTreeSet<Key>, now: u64) -> Vec<Edge> {
+    /// Feeds the current key state and returns what changed, each with the
+    /// time it happened: a press that settles is reported late but dated
+    /// when its keys went down. `now` is a monotonic clock in milliseconds.
+    pub fn update(&mut self, pressed: &BTreeSet<Key>, now: u64) -> Vec<(Edge, u64)> {
         let mut edges = Vec::new();
         let chords: Vec<(Bind, Chord)> = self
             .bindings
             .iter()
             .map(|binding| (binding.bind, binding.chord.clone()))
             .collect();
-        for Binding { bind, chord, phase } in &mut self.bindings {
-            let bind = *bind;
-            let held = chord.held_by(pressed);
+        let mut doubled = false;
+        for binding in &mut self.bindings {
+            let bind = binding.bind;
+            let held = binding.chord.held_by(pressed);
+            let clean = binding.chord.covers(pressed);
+            if binding.phase == Phase::Up {
+                if binding.double {
+                    if !binding.second_press(held, clean, now) {
+                        continue;
+                    }
+                    doubled = true;
+                } else if doubled && held {
+                    binding.phase = Phase::Spent;
+                    continue;
+                }
+            }
+            let chord = &binding.chord;
             // Extra keys are fine only when they extend this shortcut into
             // one that carries on dictating (Ctrl+Meta → Ctrl+Meta+Space).
             // Ctrl+Meta+Left is somebody else's shortcut, and Alt+Shift+Z
@@ -346,7 +445,7 @@ impl Tracker {
             let foreign = held && !ours;
             let extended = held && !foreign && !chord.covers(pressed);
             let quiet = chord.modifiers_only();
-            *phase = match *phase {
+            binding.phase = match binding.phase {
                 Phase::Up | Phase::Spent if !held => Phase::Up,
                 Phase::Spent => Phase::Spent,
                 Phase::Up if foreign => {
@@ -358,21 +457,21 @@ impl Tracker {
                 }
                 Phase::Up if quiet && !extended => Phase::Settling { since: now },
                 Phase::Up => {
-                    edges.push(Edge::Down(bind));
+                    edges.push((Edge::Down(bind), now));
                     Phase::Down { since: now }
                 }
-                Phase::Settling { .. } if !held => {
+                Phase::Settling { since } if !held => {
                     // Let go cleanly before settling: a tap, which counts.
                     // Let go as another key went down: typing.
                     if chord.covers(pressed) {
-                        edges.push(Edge::Down(bind));
-                        edges.push(Edge::Up(bind));
+                        edges.push((Edge::Down(bind), since));
+                        edges.push((Edge::Up(bind), now));
                     }
                     Phase::Up
                 }
                 Phase::Settling { .. } if foreign => Phase::Spent,
                 Phase::Settling { since } if extended || now.saturating_sub(since) >= SETTLE_MS => {
-                    edges.push(Edge::Down(bind));
+                    edges.push((Edge::Down(bind), since));
                     Phase::Down { since }
                 }
                 settling @ Phase::Settling { .. } => settling,
@@ -381,18 +480,18 @@ impl Tracker {
                     // typing, as when the letter joins first. Space left held
                     // from Shift+Space hands-free is not a letter.
                     let typed = quiet && !ours && now.saturating_sub(since) < ABORT_MS;
-                    edges.push(if typed { Edge::Abort(bind) } else { Edge::Up(bind) });
+                    edges.push((if typed { Edge::Abort(bind) } else { Edge::Up(bind) }, now));
                     Phase::Up
                 }
                 Phase::Down { since } if quiet && foreign && now.saturating_sub(since) < ABORT_MS => {
-                    edges.push(Edge::Abort(bind));
+                    edges.push((Edge::Abort(bind), now));
                     Phase::Spent
                 }
                 down @ Phase::Down { .. } => down,
             };
         }
         if self.any_down && pressed.is_empty() {
-            edges.push(Edge::Released);
+            edges.push((Edge::Released, now));
         }
         self.any_down = !pressed.is_empty();
         edges
@@ -428,10 +527,16 @@ mod tests {
         }
     }
 
+    impl Tracker {
+        fn edges(&mut self, pressed: &BTreeSet<Key>, now: u64) -> Vec<Edge> {
+            self.update(pressed, now).into_iter().map(|(edge, _)| edge).collect()
+        }
+    }
+
     /// A tracker that has seen the keyboard at rest.
     fn fresh(hotkeys: &Hotkeys) -> Tracker {
         let mut tracker = Tracker::new(hotkeys).unwrap();
-        assert_eq!(tracker.update(&keys(&[]), 0), vec![]);
+        assert_eq!(tracker.edges(&keys(&[]), 0), vec![]);
         tracker
     }
 
@@ -492,13 +597,13 @@ mod tests {
     #[test]
     fn either_side_holds_a_plain_modifier() {
         let mut tracker = fresh(&windows());
-        tracker.update(&keys(&[RightCtrl, LeftMeta]), 0);
+        tracker.edges(&keys(&[RightCtrl, LeftMeta]), 0);
         assert_eq!(
-            tracker.update(&keys(&[RightCtrl, LeftMeta]), 200),
+            tracker.edges(&keys(&[RightCtrl, LeftMeta]), 200),
             vec![Edge::Down(Bind::PushToTalk)]
         );
         assert_eq!(
-            tracker.update(&keys(&[LeftAlt, RightShift, Char('Z')]), 3000),
+            tracker.edges(&keys(&[LeftAlt, RightShift, Char('Z')]), 3000),
             vec![Edge::Up(Bind::PushToTalk), Edge::Down(Bind::PasteLast)]
         );
     }
@@ -506,27 +611,27 @@ mod tests {
     #[test]
     fn hold_settles_then_release() {
         let mut tracker = fresh(&windows());
-        assert_eq!(tracker.update(&keys(&[Ctrl]), 0), vec![]);
-        assert_eq!(tracker.update(&keys(&[Ctrl, Meta]), 10), vec![]);
+        assert_eq!(tracker.edges(&keys(&[Ctrl]), 0), vec![]);
+        assert_eq!(tracker.edges(&keys(&[Ctrl, Meta]), 10), vec![]);
         assert!(tracker.settling());
-        assert_eq!(tracker.update(&keys(&[Ctrl, Meta]), 100), vec![]);
+        assert_eq!(tracker.edges(&keys(&[Ctrl, Meta]), 100), vec![]);
         assert_eq!(
-            tracker.update(&keys(&[Ctrl, Meta]), 10 + SETTLE_MS),
+            tracker.edges(&keys(&[Ctrl, Meta]), 10 + SETTLE_MS),
             vec![Edge::Down(Bind::PushToTalk)]
         );
         assert!(!tracker.settling());
-        assert_eq!(tracker.update(&keys(&[Ctrl, Meta]), 1000), vec![]);
-        assert_eq!(tracker.update(&keys(&[Meta]), 2000), vec![Edge::Up(Bind::PushToTalk)]);
-        assert_eq!(tracker.update(&keys(&[]), 2010), vec![Edge::Released]);
-        assert_eq!(tracker.update(&keys(&[]), 2020), vec![]);
+        assert_eq!(tracker.edges(&keys(&[Ctrl, Meta]), 1000), vec![]);
+        assert_eq!(tracker.edges(&keys(&[Meta]), 2000), vec![Edge::Up(Bind::PushToTalk)]);
+        assert_eq!(tracker.edges(&keys(&[]), 2010), vec![Edge::Released]);
+        assert_eq!(tracker.edges(&keys(&[]), 2020), vec![]);
     }
 
     #[test]
     fn a_clean_tap_counts_before_it_settles() {
         let mut tracker = fresh(&windows());
-        tracker.update(&keys(&[Ctrl, Meta]), 0);
+        tracker.edges(&keys(&[Ctrl, Meta]), 0);
         assert_eq!(
-            tracker.update(&keys(&[Ctrl]), 80),
+            tracker.edges(&keys(&[Ctrl]), 80),
             vec![Edge::Down(Bind::PushToTalk), Edge::Up(Bind::PushToTalk)]
         );
     }
@@ -534,29 +639,29 @@ mod tests {
     #[test]
     fn extending_a_shortcut_keeps_the_first_one_down() {
         let mut tracker = fresh(&windows());
-        tracker.update(&keys(&[Ctrl, Meta]), 0);
-        tracker.update(&keys(&[Ctrl, Meta]), 200);
+        tracker.edges(&keys(&[Ctrl, Meta]), 0);
+        tracker.edges(&keys(&[Ctrl, Meta]), 200);
         assert_eq!(
-            tracker.update(&keys(&[Ctrl, Meta, Space]), 300),
+            tracker.edges(&keys(&[Ctrl, Meta, Space]), 300),
             vec![Edge::Down(Bind::HandsFree)]
         );
         assert_eq!(
-            tracker.update(&keys(&[]), 400),
+            tracker.edges(&keys(&[]), 400),
             vec![Edge::Up(Bind::PushToTalk), Edge::Up(Bind::HandsFree), Edge::Released]
         );
         // Extended at once, push-to-talk goes down without settling, then
         // Command Mode once it has settled.
         assert_eq!(
-            tracker.update(&keys(&[Ctrl, Meta, Space]), 1000),
+            tracker.edges(&keys(&[Ctrl, Meta, Space]), 1000),
             vec![Edge::Down(Bind::PushToTalk), Edge::Down(Bind::HandsFree)]
         );
-        tracker.update(&keys(&[]), 1100);
+        tracker.edges(&keys(&[]), 1100);
         assert_eq!(
-            tracker.update(&keys(&[Ctrl, Meta, Alt]), 2000),
+            tracker.edges(&keys(&[Ctrl, Meta, Alt]), 2000),
             vec![Edge::Down(Bind::PushToTalk)]
         );
         assert_eq!(
-            tracker.update(&keys(&[Ctrl, Meta, Alt]), 2000 + SETTLE_MS),
+            tracker.edges(&keys(&[Ctrl, Meta, Alt]), 2000 + SETTLE_MS),
             vec![Edge::Down(Bind::Command)]
         );
     }
@@ -564,17 +669,17 @@ mod tests {
     #[test]
     fn other_apps_shortcuts_do_not_trigger() {
         let mut tracker = fresh(&windows());
-        assert_eq!(tracker.update(&keys(&[Ctrl, Meta, Char('D')]), 0), vec![]);
+        assert_eq!(tracker.edges(&keys(&[Ctrl, Meta, Char('D')]), 0), vec![]);
         // Letting go of the extra key does not start it either: this press was for something else.
-        assert_eq!(tracker.update(&keys(&[Ctrl, Meta]), 50), vec![]);
-        assert_eq!(tracker.update(&keys(&[Ctrl, Meta]), 1000), vec![]);
-        assert_eq!(tracker.update(&keys(&[]), 1100), vec![Edge::Released]);
+        assert_eq!(tracker.edges(&keys(&[Ctrl, Meta]), 50), vec![]);
+        assert_eq!(tracker.edges(&keys(&[Ctrl, Meta]), 1000), vec![]);
+        assert_eq!(tracker.edges(&keys(&[]), 1100), vec![Edge::Released]);
         // A key pressed once dictation is under way does not interrupt it.
-        tracker.update(&keys(&[Ctrl, Meta]), 2000);
-        tracker.update(&keys(&[Ctrl, Meta]), 2000 + SETTLE_MS);
-        assert_eq!(tracker.update(&keys(&[Ctrl, Meta, Char('D')]), 2000 + ABORT_MS), vec![]);
+        tracker.edges(&keys(&[Ctrl, Meta]), 2000);
+        tracker.edges(&keys(&[Ctrl, Meta]), 2000 + SETTLE_MS);
+        assert_eq!(tracker.edges(&keys(&[Ctrl, Meta, Char('D')]), 2000 + ABORT_MS), vec![]);
         assert_eq!(
-            tracker.update(&keys(&[Escape]), 3000),
+            tracker.edges(&keys(&[Escape]), 3000),
             vec![Edge::Up(Bind::PushToTalk), Edge::Down(Bind::Cancel)]
         );
     }
@@ -582,26 +687,26 @@ mod tests {
     #[test]
     fn a_key_joining_soon_after_aborts() {
         let mut tracker = fresh(&windows());
-        tracker.update(&keys(&[Ctrl, Meta]), 0);
+        tracker.edges(&keys(&[Ctrl, Meta]), 0);
         assert_eq!(
-            tracker.update(&keys(&[Ctrl, Meta]), SETTLE_MS),
+            tracker.edges(&keys(&[Ctrl, Meta]), SETTLE_MS),
             vec![Edge::Down(Bind::PushToTalk)]
         );
         assert_eq!(
-            tracker.update(&keys(&[Ctrl, Meta, Char('D')]), 300),
+            tracker.edges(&keys(&[Ctrl, Meta, Char('D')]), 300),
             vec![Edge::Abort(Bind::PushToTalk)]
         );
-        assert_eq!(tracker.update(&keys(&[Ctrl, Meta]), 400), vec![]);
-        assert_eq!(tracker.update(&keys(&[Ctrl, Meta]), 2000), vec![]);
-        assert_eq!(tracker.update(&keys(&[]), 2100), vec![Edge::Released]);
+        assert_eq!(tracker.edges(&keys(&[Ctrl, Meta]), 400), vec![]);
+        assert_eq!(tracker.edges(&keys(&[Ctrl, Meta]), 2000), vec![]);
+        assert_eq!(tracker.edges(&keys(&[]), 2100), vec![Edge::Released]);
     }
 
     #[test]
     fn extra_keys_must_belong_to_a_single_extension() {
         let mut tracker = fresh(&windows());
-        assert!(tracker.update(&keys(&[Ctrl, Meta, Space, Alt]), 0).is_empty());
+        assert!(tracker.edges(&keys(&[Ctrl, Meta, Space, Alt]), 0).is_empty());
         assert_eq!(
-            tracker.update(&keys(&[Ctrl, Meta, Space]), 50),
+            tracker.edges(&keys(&[Ctrl, Meta, Space]), 50),
             vec![Edge::Down(Bind::HandsFree)]
         );
     }
@@ -610,51 +715,51 @@ mod tests {
     fn right_shift_only() {
         let mut tracker = fresh(&right_shift());
         // Left Shift is for typing.
-        assert_eq!(tracker.update(&keys(&[LeftShift]), 0), vec![]);
+        assert_eq!(tracker.edges(&keys(&[LeftShift]), 0), vec![]);
         assert!(!tracker.settling());
-        assert_eq!(tracker.update(&keys(&[LeftShift]), 1000), vec![]);
-        tracker.update(&keys(&[]), 1100);
+        assert_eq!(tracker.edges(&keys(&[LeftShift]), 1000), vec![]);
+        tracker.edges(&keys(&[]), 1100);
         // Right Shift held alone dictates.
-        tracker.update(&keys(&[RightShift]), 2000);
+        tracker.edges(&keys(&[RightShift]), 2000);
         assert_eq!(
-            tracker.update(&keys(&[RightShift]), 2000 + SETTLE_MS),
+            tracker.edges(&keys(&[RightShift]), 2000 + SETTLE_MS),
             vec![Edge::Down(Bind::PushToTalk)]
         );
         assert_eq!(
-            tracker.update(&keys(&[]), 5000),
+            tracker.edges(&keys(&[]), 5000),
             vec![Edge::Up(Bind::PushToTalk), Edge::Released]
         );
         // Both Shift keys together are not the shortcut.
-        assert_eq!(tracker.update(&keys(&[LeftShift, RightShift]), 6000), vec![]);
-        assert_eq!(tracker.update(&keys(&[RightShift]), 7000), vec![]);
-        tracker.update(&keys(&[]), 7100);
+        assert_eq!(tracker.edges(&keys(&[LeftShift, RightShift]), 6000), vec![]);
+        assert_eq!(tracker.edges(&keys(&[RightShift]), 7000), vec![]);
+        tracker.edges(&keys(&[]), 7100);
     }
 
     #[test]
     fn typing_with_right_shift_never_dictates() {
         let mut tracker = fresh(&right_shift());
         // A capital letter: the letter follows within the settling time.
-        assert_eq!(tracker.update(&keys(&[RightShift]), 0), vec![]);
-        assert_eq!(tracker.update(&keys(&[RightShift, Char('A')]), 80), vec![]);
-        assert_eq!(tracker.update(&keys(&[RightShift]), 150), vec![]);
+        assert_eq!(tracker.edges(&keys(&[RightShift]), 0), vec![]);
+        assert_eq!(tracker.edges(&keys(&[RightShift, Char('A')]), 80), vec![]);
+        assert_eq!(tracker.edges(&keys(&[RightShift]), 150), vec![]);
         // More capitals while Shift stays down.
-        assert_eq!(tracker.update(&keys(&[RightShift]), 600), vec![]);
-        assert_eq!(tracker.update(&keys(&[RightShift, Char('B')]), 700), vec![]);
-        assert_eq!(tracker.update(&keys(&[]), 800), vec![Edge::Released]);
+        assert_eq!(tracker.edges(&keys(&[RightShift]), 600), vec![]);
+        assert_eq!(tracker.edges(&keys(&[RightShift, Char('B')]), 700), vec![]);
+        assert_eq!(tracker.edges(&keys(&[]), 800), vec![Edge::Released]);
         // A slow capital starts and is aborted at once.
-        tracker.update(&keys(&[RightShift]), 1000);
+        tracker.edges(&keys(&[RightShift]), 1000);
         assert_eq!(
-            tracker.update(&keys(&[RightShift]), 1200),
+            tracker.edges(&keys(&[RightShift]), 1200),
             vec![Edge::Down(Bind::PushToTalk)]
         );
         assert_eq!(
-            tracker.update(&keys(&[RightShift, Char('C')]), 1250),
+            tracker.edges(&keys(&[RightShift, Char('C')]), 1250),
             vec![Edge::Abort(Bind::PushToTalk)]
         );
-        assert_eq!(tracker.update(&keys(&[]), 1300), vec![Edge::Released]);
+        assert_eq!(tracker.edges(&keys(&[]), 1300), vec![Edge::Released]);
         // Alt+Shift+Z with the right Shift pastes and does not dictate.
         assert_eq!(
-            tracker.update(&keys(&[LeftAlt, RightShift, Char('Z')]), 2000),
+            tracker.edges(&keys(&[LeftAlt, RightShift, Char('Z')]), 2000),
             vec![Edge::Down(Bind::PasteLast)]
         );
     }
@@ -663,29 +768,29 @@ mod tests {
     fn double_tap_right_shift() {
         let mut tracker = fresh(&right_shift());
         let tap = vec![Edge::Down(Bind::PushToTalk), Edge::Up(Bind::PushToTalk), Edge::Released];
-        tracker.update(&keys(&[RightShift]), 0);
-        assert_eq!(tracker.update(&keys(&[]), 90), tap);
-        tracker.update(&keys(&[RightShift]), 200);
-        assert_eq!(tracker.update(&keys(&[]), 290), tap);
+        tracker.edges(&keys(&[RightShift]), 0);
+        assert_eq!(tracker.edges(&keys(&[]), 90), tap);
+        tracker.edges(&keys(&[RightShift]), 200);
+        assert_eq!(tracker.edges(&keys(&[]), 290), tap);
     }
 
     #[test]
     fn keys_held_when_shortcuts_change_wait_to_be_let_go() {
         let mut tracker = Tracker::new(&right_shift()).unwrap();
-        assert_eq!(tracker.update(&keys(&[RightShift]), 0), vec![]);
-        assert_eq!(tracker.update(&keys(&[RightShift]), 1000), vec![]);
-        assert_eq!(tracker.update(&keys(&[]), 1100), vec![Edge::Released]);
-        tracker.update(&keys(&[RightShift]), 2000);
+        assert_eq!(tracker.edges(&keys(&[RightShift]), 0), vec![]);
+        assert_eq!(tracker.edges(&keys(&[RightShift]), 1000), vec![]);
+        assert_eq!(tracker.edges(&keys(&[]), 1100), vec![Edge::Released]);
+        tracker.edges(&keys(&[RightShift]), 2000);
         assert!(tracker.settling());
         // Recording a shortcut in Settings ends with Right Shift still down.
         assert_eq!(tracker.down(), vec![]);
         tracker.hold_off();
         assert!(!tracker.settling());
-        assert_eq!(tracker.update(&keys(&[RightShift]), 3000), vec![]);
-        tracker.update(&keys(&[]), 3100);
-        tracker.update(&keys(&[RightShift]), 4000);
+        assert_eq!(tracker.edges(&keys(&[RightShift]), 3000), vec![]);
+        tracker.edges(&keys(&[]), 3100);
+        tracker.edges(&keys(&[RightShift]), 4000);
         assert_eq!(
-            tracker.update(&keys(&[RightShift]), 4000 + SETTLE_MS),
+            tracker.edges(&keys(&[RightShift]), 4000 + SETTLE_MS),
             vec![Edge::Down(Bind::PushToTalk)]
         );
         assert_eq!(tracker.down(), vec![Bind::PushToTalk]);
@@ -697,14 +802,14 @@ mod tests {
             hands_free: "Shift+Space".into(),
             ..right_shift()
         });
-        tracker.update(&keys(&[RightShift]), 0);
+        tracker.edges(&keys(&[RightShift]), 0);
         assert_eq!(
-            tracker.update(&keys(&[RightShift, Space]), 50),
+            tracker.edges(&keys(&[RightShift, Space]), 50),
             vec![Edge::Down(Bind::PushToTalk), Edge::Down(Bind::HandsFree)]
         );
         // Letting go of Shift first is the end of the press, not typing.
         assert_eq!(
-            tracker.update(&keys(&[Space]), 150),
+            tracker.edges(&keys(&[Space]), 150),
             vec![Edge::Up(Bind::PushToTalk), Edge::Up(Bind::HandsFree)]
         );
     }
@@ -712,18 +817,18 @@ mod tests {
     #[test]
     fn letting_go_as_a_letter_goes_down_soon_after_is_typing() {
         let mut tracker = fresh(&right_shift());
-        tracker.update(&keys(&[RightShift]), 0);
-        tracker.update(&keys(&[RightShift]), SETTLE_MS);
+        tracker.edges(&keys(&[RightShift]), 0);
+        tracker.edges(&keys(&[RightShift]), SETTLE_MS);
         assert_eq!(
-            tracker.update(&keys(&[Char('A')]), 300),
+            tracker.edges(&keys(&[Char('A')]), 300),
             vec![Edge::Abort(Bind::PushToTalk)]
         );
         // Later it is just the end of the dictation.
-        tracker.update(&keys(&[]), 400);
-        tracker.update(&keys(&[RightShift]), 1000);
-        tracker.update(&keys(&[RightShift]), 1000 + SETTLE_MS);
+        tracker.edges(&keys(&[]), 400);
+        tracker.edges(&keys(&[RightShift]), 1000);
+        tracker.edges(&keys(&[RightShift]), 1000 + SETTLE_MS);
         assert_eq!(
-            tracker.update(&keys(&[Char('A')]), 1000 + ABORT_MS),
+            tracker.edges(&keys(&[Char('A')]), 1000 + ABORT_MS),
             vec![Edge::Up(Bind::PushToTalk)]
         );
     }
@@ -731,9 +836,155 @@ mod tests {
     #[test]
     fn letting_go_as_a_letter_goes_down_is_typing() {
         let mut tracker = fresh(&right_shift());
-        tracker.update(&keys(&[RightShift]), 0);
-        assert_eq!(tracker.update(&keys(&[Char('A')]), 60), vec![]);
-        assert_eq!(tracker.update(&keys(&[]), 120), vec![Edge::Released]);
+        tracker.edges(&keys(&[RightShift]), 0);
+        assert_eq!(tracker.edges(&keys(&[Char('A')]), 60), vec![]);
+        assert_eq!(tracker.edges(&keys(&[]), 120), vec![Edge::Released]);
+    }
+
+    fn double_right_shift() -> Hotkeys {
+        Hotkeys {
+            hands_free: "Right Shift x2".into(),
+            ..windows()
+        }
+    }
+
+    #[test]
+    fn parses_a_double_tap() {
+        for text in ["Right Shift x2", " right shift X2 ", "Right Shift  x2"] {
+            let shortcut = Shortcut::parse(text).unwrap();
+            assert!(shortcut.double, "{text}");
+            assert_eq!(shortcut.to_string(), "Right Shift x2", "{text}");
+        }
+        assert_eq!(Shortcut::parse("Ctrl+Win x2").unwrap().to_string(), "Ctrl+Meta x2");
+        let single = Shortcut::parse("Alt+Shift+Z").unwrap();
+        assert!(!single.double);
+        assert_eq!(single.to_string(), "Alt+Shift+Z");
+        assert_eq!(
+            Shortcut::parse("Right Shiftx2").unwrap_err(),
+            "Unknown key \"Right Shiftx2\""
+        );
+        assert_eq!(
+            Shortcut::parse("Z x2").unwrap_err(),
+            "A shortcut needs Ctrl, Alt, Shift or the Windows/Command key"
+        );
+        assert!(Bind::HandsFree.unsure(&double_right_shift()));
+    }
+
+    #[test]
+    fn a_double_tap_goes_down_on_its_second_press() {
+        let mut tracker = fresh(&double_right_shift());
+        assert_eq!(tracker.edges(&keys(&[RightShift]), 1000), vec![]);
+        assert_eq!(tracker.edges(&keys(&[RightShift]), 1050), vec![]);
+        assert_eq!(tracker.edges(&keys(&[]), 1090), vec![Edge::Released]);
+        // Other keys meanwhile leave the first tap waiting.
+        assert_eq!(tracker.edges(&keys(&[]), 1100), vec![]);
+        assert_eq!(tracker.edges(&keys(&[RightShift]), 1300), vec![]);
+        assert!(tracker.settling());
+        // It settles like any modifier-only shortcut, dated when it was pressed.
+        assert_eq!(
+            tracker.update(&keys(&[RightShift]), 1300 + SETTLE_MS),
+            vec![(Edge::Down(Bind::HandsFree), 1300)]
+        );
+        assert_eq!(
+            tracker.update(&keys(&[]), 3000),
+            vec![(Edge::Up(Bind::HandsFree), 3000), (Edge::Released, 3000)]
+        );
+        // A quick second tap counts when it is let go, dated when it went down.
+        tracker.edges(&keys(&[RightShift]), 4000);
+        tracker.edges(&keys(&[]), 4080);
+        tracker.edges(&keys(&[RightShift]), 4200);
+        assert_eq!(
+            tracker.update(&keys(&[]), 4280),
+            vec![
+                (Edge::Down(Bind::HandsFree), 4200),
+                (Edge::Up(Bind::HandsFree), 4280),
+                (Edge::Released, 4280)
+            ]
+        );
+        // A third tap starts over.
+        tracker.edges(&keys(&[RightShift]), 4400);
+        assert_eq!(tracker.edges(&keys(&[]), 4480), vec![Edge::Released]);
+    }
+
+    #[test]
+    fn only_two_quick_clean_taps_are_a_double_tap() {
+        let mut tracker = fresh(&double_right_shift());
+        let second_tap = |tracker: &mut Tracker, at: u64| {
+            tracker.edges(&keys(&[RightShift]), at);
+            tracker.edges(&keys(&[]), at + 80)
+        };
+        // A first press held too long is not a tap.
+        tracker.edges(&keys(&[RightShift]), 0);
+        tracker.edges(&keys(&[]), TAP_MS);
+        assert_eq!(second_tap(&mut tracker, TAP_MS + 100), vec![Edge::Released]);
+        // Nor is a second press that comes too late. That late press is a
+        // first tap of its own, so one more press makes a double-tap.
+        tracker.edges(&keys(&[]), 2000);
+        tracker.edges(&keys(&[RightShift]), 3000);
+        tracker.edges(&keys(&[]), 3080);
+        assert_eq!(second_tap(&mut tracker, 3080 + TAP_MS), vec![Edge::Released]);
+        assert_eq!(
+            second_tap(&mut tracker, 3080 + TAP_MS + 200),
+            vec![Edge::Down(Bind::HandsFree), Edge::Up(Bind::HandsFree), Edge::Released]
+        );
+        // A capital typed with the first press.
+        tracker.edges(&keys(&[RightShift]), 5000);
+        tracker.edges(&keys(&[RightShift, Char('A')]), 5050);
+        tracker.edges(&keys(&[RightShift]), 5080);
+        tracker.edges(&keys(&[]), 5100);
+        assert_eq!(second_tap(&mut tracker, 5200), vec![Edge::Released]);
+        // Let go as a letter goes down.
+        tracker.edges(&keys(&[]), 6000);
+        tracker.edges(&keys(&[RightShift]), 6100);
+        tracker.edges(&keys(&[Char('A')]), 6150);
+        tracker.edges(&keys(&[]), 6200);
+        assert_eq!(second_tap(&mut tracker, 6300), vec![Edge::Released]);
+        // A capital typed with the second press.
+        tracker.edges(&keys(&[]), 7000);
+        tracker.edges(&keys(&[RightShift]), 7100);
+        tracker.edges(&keys(&[]), 7180);
+        tracker.edges(&keys(&[RightShift]), 7300);
+        assert_eq!(tracker.edges(&keys(&[RightShift, Char('A')]), 7350), vec![]);
+        assert_eq!(tracker.edges(&keys(&[]), 7400), vec![Edge::Released]);
+    }
+
+    #[test]
+    fn a_double_tap_of_the_push_to_talk_key_is_not_also_a_press_of_it() {
+        let mut tracker = fresh(&Hotkeys {
+            push_to_talk: "Right Shift".into(),
+            ..double_right_shift()
+        });
+        tracker.edges(&keys(&[RightShift]), 0);
+        assert_eq!(
+            tracker.edges(&keys(&[]), 80),
+            vec![Edge::Down(Bind::PushToTalk), Edge::Up(Bind::PushToTalk), Edge::Released]
+        );
+        tracker.edges(&keys(&[RightShift]), 200);
+        assert_eq!(
+            tracker.edges(&keys(&[RightShift]), 200 + SETTLE_MS),
+            vec![Edge::Down(Bind::HandsFree)]
+        );
+        assert_eq!(
+            tracker.edges(&keys(&[]), 2000),
+            vec![Edge::Up(Bind::HandsFree), Edge::Released]
+        );
+        // Held on its own later, it is push-to-talk again.
+        tracker.edges(&keys(&[RightShift]), 3000);
+        assert_eq!(
+            tracker.edges(&keys(&[RightShift]), 3000 + SETTLE_MS),
+            vec![Edge::Down(Bind::PushToTalk)]
+        );
+    }
+
+    #[test]
+    fn holding_off_forgets_a_first_tap() {
+        let mut tracker = fresh(&double_right_shift());
+        tracker.edges(&keys(&[RightShift]), 0);
+        tracker.edges(&keys(&[]), 80);
+        tracker.hold_off();
+        tracker.edges(&keys(&[]), 90);
+        tracker.edges(&keys(&[RightShift]), 200);
+        assert_eq!(tracker.edges(&keys(&[]), 280), vec![Edge::Released]);
     }
 
     #[test]

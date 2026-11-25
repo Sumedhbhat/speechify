@@ -5,6 +5,9 @@ use serde::Serialize;
 
 /// A press shorter than this is a tap, not a dictation.
 pub const TAP_MS: u64 = 500;
+/// A modifier-only press is reported once it settles, dated when it went
+/// down, so a tap waits this much longer for a second press to arrive.
+const LATE_MS: u64 = crate::hotkey::SETTLE_MS + 100;
 /// The user is warned here and stopped a minute later.
 pub const WARN_MS: u64 = 19 * 60_000;
 pub const LIMIT_MS: u64 = 20 * 60_000;
@@ -95,6 +98,9 @@ pub struct Session {
     paste_pending: bool,
     copy_pending: bool,
     undoable: bool,
+    /// A press that stopped hands-free may be the first half of a
+    /// double-tap; a second press before this only finishes it.
+    echo_until: u64,
 }
 
 impl Default for Session {
@@ -110,6 +116,7 @@ impl Session {
             paste_pending: false,
             copy_pending: false,
             undoable: false,
+            echo_until: 0,
         }
     }
 
@@ -157,6 +164,7 @@ impl Session {
                 copy.into_iter().chain(paste).collect()
             }
 
+            (State::Idle | State::Busy, Down(PushToTalk | HandsFree | Command)) if now < self.echo_until => vec![],
             (State::Idle, Down(by @ (PushToTalk | Command))) => {
                 let command = by == Command;
                 self.state = State::Held {
@@ -255,13 +263,14 @@ impl Session {
                 };
                 vec![Effect::Mode { command, locked: true }]
             }
-            (State::TapWait { until, .. }, Tick) if now >= until => {
+            (State::TapWait { until, .. }, Tick) if now >= until + LATE_MS => {
                 // A stray tap: nothing was meant, nothing is kept.
                 self.state = State::Idle;
                 vec![Effect::Discard { keep: false }]
             }
 
             (State::Locked { since, command, .. }, _) if starts => {
+                self.echo_until = now + TAP_MS;
                 if now.saturating_sub(since) < TAP_MS {
                     self.cancel()
                 } else {
@@ -333,6 +342,14 @@ mod tests {
         },
     ];
 
+    const START_LOCKED: [Effect; 2] = [
+        Effect::Start,
+        Effect::Mode {
+            command: false,
+            locked: true,
+        },
+    ];
+
     #[test]
     fn hold_to_dictate() {
         let mut s = Session::default();
@@ -355,7 +372,9 @@ mod tests {
         s.handle(Down(PushToTalk), 0);
         assert_eq!(s.handle(Up(PushToTalk), 200), vec![]);
         assert_eq!(s.handle(Tick, 400), vec![]);
-        assert_eq!(s.handle(Tick, 700), vec![Effect::Discard { keep: false }]);
+        // A second press that is still settling may be dated before now.
+        assert_eq!(s.handle(Tick, 700 + LATE_MS - 1), vec![]);
+        assert_eq!(s.handle(Tick, 700 + LATE_MS), vec![Effect::Discard { keep: false }]);
         assert_eq!(s.handle(Undo, 800), vec![]);
     }
 
@@ -405,6 +424,27 @@ mod tests {
         assert_eq!(s.handle(Up(PushToTalk), 400), vec![]);
         assert_eq!(s.handle(Tick, 5000), vec![]);
         assert_eq!(s.handle(Down(PushToTalk), 9000), vec![Effect::Stop { command: false }]);
+    }
+
+    #[test]
+    fn a_double_tap_shortcut_locks_from_a_tap_and_stops_without_restarting() {
+        let mut s = Session::new();
+        s.handle(Down(PushToTalk), 0);
+        s.handle(Up(PushToTalk), 80);
+        assert_eq!(
+            s.handle(Down(HandsFree), 200),
+            vec![Effect::Mode {
+                command: false,
+                locked: true
+            }]
+        );
+        // Double-tapped again to stop: the first tap stops it, the second
+        // only finishes the double-tap, even once the dictation is done.
+        assert_eq!(s.handle(Down(PushToTalk), 5000), vec![Effect::Stop { command: false }]);
+        assert_eq!(s.handle(Down(PushToTalk), 5200), vec![]);
+        s.handle(Finished, 5300);
+        assert_eq!(s.handle(Down(HandsFree), 5400), vec![]);
+        assert_eq!(s.handle(Down(HandsFree), 5000 + TAP_MS), START_LOCKED);
     }
 
     #[test]

@@ -32,6 +32,8 @@ const PAUSE_LIMIT: Duration = Duration::from_secs(30);
 struct Queued {
     message: Msg,
     at: Instant,
+    /// When the keys behind an input moved, which can be before it was sent.
+    happened: Instant,
 }
 
 /// State shared between the worker, the key thread and the UI commands.
@@ -67,6 +69,10 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Shared {
     pub fn send(&self, msg: Msg) {
+        self.send_from(msg, Instant::now());
+    }
+
+    fn send_from(&self, msg: Msg, happened: Instant) {
         let input = matches!(msg, Msg::Input(_));
         if let Msg::Input(event) = &msg {
             if !matches!(event, Event::Tick) {
@@ -83,6 +89,7 @@ impl Shared {
             .send(Queued {
                 message: msg,
                 at: Instant::now(),
+                happened,
             })
             .is_err()
         {
@@ -104,6 +111,7 @@ impl Shared {
             .send(Queued {
                 message: Msg::Quit,
                 at: Instant::now(),
+                happened: Instant::now(),
             })
             .is_err()
         {
@@ -125,6 +133,7 @@ impl Shared {
         let _ = lock(&self.tx).send(Queued {
             message: Msg::Quit,
             at: Instant::now(),
+            happened: Instant::now(),
         });
         let (stopped, signal) = &self.stopped;
         let (stopped, _) = signal
@@ -317,13 +326,14 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
                 .as_mut()
                 .map(|tracker| tracker.update(&pressed, clock.elapsed().as_millis() as u64))
                 .unwrap_or_default();
-            for edge in edges {
-                keys.send(Msg::Input(match edge {
+            for (edge, at) in edges {
+                let event = match edge {
                     Edge::Down(bind) => Event::Down(bind),
                     Edge::Up(bind) => Event::Up(bind),
                     Edge::Abort(bind) => Event::Abort(bind),
                     Edge::Released => Event::Released,
-                }));
+                };
+                keys.send_from(Msg::Input(event), clock + Duration::from_millis(at));
             }
         }
     });
@@ -379,12 +389,14 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
                     Ok(Queued {
                         message: Msg::Input(event),
                         at,
+                        happened,
                     }) => {
                         state.wanted.fetch_sub(1, Ordering::SeqCst);
                         if at >= accept_after {
                             let was_idle = controller.is_idle();
                             let began = Instant::now();
-                            crate::diagnostics::scope("input.handle", || controller.handle(event));
+                            let ago = happened.elapsed().as_millis() as u64;
+                            crate::diagnostics::scope("input.handle", || controller.handle_ago(event, ago));
                             if controller.is_idle() && (!was_idle || began.elapsed() >= Duration::from_millis(100)) {
                                 accept_after = Instant::now();
                             }
@@ -442,7 +454,12 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
                     }
                     Err(RecvTimeoutError::Disconnected) => return,
                 };
-                if ticked.elapsed() >= Duration::from_millis(100) && !controller.is_idle() {
+                // Input still queued happened before now: time must not run
+                // past it, or a double-tap waiting on its second press expires.
+                if ticked.elapsed() >= Duration::from_millis(100)
+                    && !controller.is_idle()
+                    && state.wanted.load(Ordering::SeqCst) == 0
+                {
                     controller.handle(Event::Tick);
                     ticked = Instant::now();
                     if controller.is_idle() {

@@ -194,10 +194,33 @@ export function chordName(codes: string[], letters: Record<string, string> = {})
 /** Recording gives up before the shell's 30-second pause runs out. */
 export const RECORD_LIMIT_MS = 25_000;
 
+/** Settings write this after the keys of a shortcut that is tapped twice. */
+const TWICE = " x2";
+
+/**
+ * The shell's double-tap: a first press shorter than this, and a second
+ * starting within this of letting go.
+ */
+export const TAP_MS = 500;
+
+function shortcutKeys(value: string): (Node | string)[] {
+  if (!value) return ["Off"];
+  const twice = value.endsWith(TWICE);
+  const keys = twice ? value.slice(0, -TWICE.length) : value;
+  const names = keys.split("+").map((key): Node | string => h("kbd", { textContent: key }));
+  return twice
+    ? [...names, h("span", { className: "shortcut-twice", textContent: "twice" })]
+    : names;
+}
+
+const sameKeys = (a: string[], b: string[]) =>
+  a.length === b.length && a.every((code) => b.includes(code));
+
 /**
  * A shortcut setting, entered by pressing it: Record, then the keys. It is
- * taken when the first key is let go. Global shortcuts are paused meanwhile,
- * so pressing the current one does not start dictation.
+ * taken when the first key is let go, unless that was a quick tap: then the
+ * same keys tapped again soon after make a double-tap. Global shortcuts are
+ * paused meanwhile, so pressing the current one does not start dictation.
  */
 export function shortcut(
   store: SettingsStore,
@@ -223,11 +246,7 @@ export function shortcut(
     textContent: "Clear",
     "aria-label": `Clear ${binding.label}`,
   });
-  const show = (value: string) => {
-    keys.replaceChildren(
-      ...(value ? value.split("+").map((key) => h("kbd", { textContent: key })) : ["Off"]),
-    );
-  };
+  const show = (value: string) => keys.replaceChildren(...shortcutKeys(value));
   let saved = "";
   const commit = bind(
     store,
@@ -243,34 +262,59 @@ export function shortcut(
   let held: string[] | null = null;
   let letters: Record<string, string> = {};
   let limit: ReturnType<typeof setTimeout> | undefined;
+  const down = new Set<string>();
+  let pressedAt = 0;
+  let first: string[] = [];
+  let again: ReturnType<typeof setTimeout> | undefined;
   const pause = (paused: boolean) => void binding.pause(paused).catch(() => undefined);
   const stop = () => {
     const recording = held !== null;
     held = null;
     clearTimeout(limit);
-    window.removeEventListener("keydown", down, true);
-    window.removeEventListener("keyup", up, true);
+    clearTimeout(again);
+    down.clear();
+    first = [];
+    window.removeEventListener("keydown", press, true);
+    window.removeEventListener("keyup", release, true);
     record.textContent = "Record";
     record.setAttribute("aria-pressed", "false");
     if (recording) pause(false);
   };
-  const down = (event: KeyboardEvent) => {
+  const finish = (value: string) => {
+    stop();
+    void commit(value);
+  };
+  const press = (event: KeyboardEvent) => {
     event.preventDefault();
     event.stopPropagation();
     if (!held || !event.code || held.includes(event.code)) return;
+    if (!held.length) {
+      clearTimeout(again);
+      held = [...down];
+      pressedAt = Date.now();
+    }
+    down.add(event.code);
     held.push(event.code);
     if (binding.layout) letters[event.code] = event.key;
     show(chordName(held, letters));
   };
-  const up = (event: KeyboardEvent) => {
+  const release = (event: KeyboardEvent) => {
     event.preventDefault();
     event.stopPropagation();
+    down.delete(event.code);
     // Only a key that is part of the shortcut ends it: Enter can start
     // recording and be let go a moment later.
     if (!held?.includes(event.code)) return;
     const value = chordName(held, letters);
-    stop();
-    void commit(value);
+    if (first.length && sameKeys(held, first)) return finish(value + TWICE);
+    if (Date.now() - pressedAt >= TAP_MS) return finish(value);
+    first = held;
+    held = [];
+    keys.replaceChildren(
+      ...shortcutKeys(value),
+      h("span", { className: "shortcut-twice", textContent: "tap again for a double-tap" }),
+    );
+    again = setTimeout(() => finish(value), TAP_MS);
   };
   const cancel = () => {
     stop();
@@ -288,8 +332,8 @@ export function shortcut(
     record.textContent = "Press keys…";
     record.setAttribute("aria-pressed", "true");
     keys.replaceChildren("Listening…");
-    window.addEventListener("keydown", down, true);
-    window.addEventListener("keyup", up, true);
+    window.addEventListener("keydown", press, true);
+    window.addEventListener("keyup", release, true);
     pause(true);
   });
   // Clicking elsewhere or leaving the window gives up.

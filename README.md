@@ -58,10 +58,10 @@ Default shortcuts. To change one, click Record next to it in Settings and press 
 | Copy last dictation | Alt+Shift+X | Ctrl+Meta+C |
 | Cancel | Esc | Esc |
 
-Meta is the Windows key on Windows, Super on Linux and Command on a Mac. A shortcut can name one side of a modifier (Right Shift, Left Ctrl, Right Alt, Left Meta); plain Shift, Ctrl, Alt or Meta means either side. Upgrading keeps the shortcuts you already have.
+Meta is the Windows key on Windows, Super on Linux and Command on a Mac. A shortcut can name one side of a modifier (Right Shift, Left Ctrl, Right Alt, Left Meta); plain Shift, Ctrl, Alt or Meta means either side. Upgrading keeps the shortcuts you already have. Any shortcut can also be a double-tap: tap the keys twice quickly while recording it, and Settings shows it as "Right Shift twice" (stored as `Right Shift x2`). It goes off on the second press, which must start within half a second of letting go of the first.
 
 - **Hold** the push-to-talk shortcut, speak, let go. A press shorter than half a second is a tap and records nothing.
-- **Double-tap** push-to-talk, or press the hands-free shortcut, to keep recording without holding. Press any dictation shortcut again (or the stop button on the bar) to finish.
+- **Double-tap** push-to-talk, or press the hands-free shortcut, to keep recording without holding. Press any dictation shortcut again (or the stop button on the bar) to finish. A second press within half a second of that stop only completes a double-tap; it does not start a new recording.
 - **Hold push-to-talk, then add the hands-free shortcut's extra key** (for example Ctrl+Meta, then Space, with Ctrl+Meta+Space as hands-free) to switch without letting go.
 - **Shortcuts made only of modifiers** (Right Shift, Ctrl+Meta) open the microphone once held alone for 150 ms, or on a clean tap. The chime and the bar wait until half a second after the press. If another key joins before then, as in Shift+A or Ctrl+Meta+D, it was typing or another app's shortcut: the recording is dropped without a sound.
 - **Esc** throws the recording away. The bar offers Undo, which transcribes it after all.
