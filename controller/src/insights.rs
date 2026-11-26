@@ -1,7 +1,7 @@
 //! Usage statistics: how much, how fast, where and when.
 
-use crate::store::{Clock, Dictation, Outcome};
 use serde::Serialize;
+use speechify_core::store::{Clock, Dictation, Outcome};
 use std::collections::BTreeMap;
 
 /// Average typing speed that dictation is compared with.
@@ -193,8 +193,8 @@ pub fn compute(dictations: &[Dictation], clock: Clock) -> Insights {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::Category;
-    use crate::testing::dictation;
+    use speechify_core::context::Category;
+    use speechify_core::testing::dictation;
 
     // Wednesday 14 January 2026, 10:00 in India.
     const DAY: i64 = 20_467;

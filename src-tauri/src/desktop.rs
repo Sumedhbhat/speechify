@@ -1,7 +1,7 @@
-//! `Platform` for a real desktop: the OS adapters behind the core's trait.
+//! `Platform` for a real desktop: the OS adapters behind the controller's trait.
 
 use crate::{diagnostics, shell};
-use speechify_core::app::{Bar, Focus, Platform};
+use speechify_controller::app::{Bar, Focus, Platform};
 use speechify_core::audio::{self, Chime};
 use speechify_core::context::{PasteKeys, Target};
 use speechify_core::store::Clock;

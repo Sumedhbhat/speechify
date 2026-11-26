@@ -230,6 +230,28 @@ jobs:
           gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "Speechify $VERSION" \
             --notes "$notes" --generate-notes $prerelease
 
+      - name: Reuse the last performance results
+        if: env.CHANNEL == 'nightly' && hashFiles('performance/performance.json') == ''
+        continue-on-error: true
+        env:
+          TAG: v${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh release view "$TAG" --json assets --jq 'any(.assets[]; .name == "performance.json")')" = true ]; then
+            echo "$TAG already has performance.json"
+            exit 0
+          fi
+          found="$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
+            --jq '.[] | select((.draft | not) and .tag_name != env.TAG and (.tag_name | test("-nightly\\.")) and any(.assets[]; .name == "performance.json")) | .tag_name')"
+          previous="${found%%$'\n'*}"
+          if [ -z "$previous" ]; then
+            echo "No earlier nightly release has performance.json"
+            exit 0
+          fi
+          mkdir -p performance
+          gh release download "$previous" --pattern performance.json --dir performance
+          echo "Reusing performance.json from $previous"
+
       - name: Attach the performance results
         if: env.CHANNEL == 'nightly' && hashFiles('performance/performance.json') != ''
         continue-on-error: true

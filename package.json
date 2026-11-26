@@ -3,18 +3,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
-    "build": "tsc --noEmit && vite build",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
+    "dev": "vite ui --host 127.0.0.1",
+    "build": "tsc --noEmit -p ui && vite build ui",
+    "test": "vitest run --root ui",
+    "test:coverage": "vitest run --root ui --coverage",
     "tauri": "tauri",
-    "format": "prettier --write src tests index.html bar.html",
-    "format:check": "prettier --check src tests index.html bar.html"
+    "format": "prettier --write ui",
+    "format:check": "prettier --check ui"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4"
   },
   "devDependencies": {
+    "@moonrepo/cli": "2.6.5",
     "@tauri-apps/cli": "2.12.4",
     "@vitest/coverage-v8": "5.1.0",
     "jsdom": "30.1.3",

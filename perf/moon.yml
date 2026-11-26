@@ -1,0 +1,51 @@
+language: rust
+layer: tool
+tags: ["engine", "gate"]
+dependsOn: ["core"]
+
+tasks:
+  lint:
+    script: "cargo fmt -p speechify-perf --check && cargo clippy -p speechify-perf --all-targets --locked -- -D warnings"
+    inputs:
+      - "**/*"
+      - "project://^?filter=**/*&filter=!**/*.md"
+      - "group://rust"
+      - "group://workspace"
+      - "/rustfmt.toml"
+  test:
+    command: "cargo test -p speechify-perf --locked"
+    inputs:
+      - "**/*"
+      - "project://^?filter=**/*&filter=!**/*.md"
+      - "group://rust"
+      - "group://workspace"
+      - "$SPEECHIFY_REQUIRE_NATIVE"
+  test-report:
+    command: 'python3 -m unittest discover -s perf -p "test_*.py"'
+    inputs:
+      - "**/*"
+      - "group://workspace"
+  release:
+    command: "cargo build --release --locked -p speechify-perf --bin perf"
+    inputs:
+      - "**/*"
+      - "!**/*.md"
+      - "project://^?filter=**/*&filter=!**/*.md"
+      - "group://toolchain"
+      - "group://native"
+      - "group://workspace"
+      - "/.github/actions/performance-report/**/*"
+    options:
+      cache: false
+  measure:
+    command: "bash perf/measure.sh"
+    inputs:
+      - "**/*"
+      - "!**/*.md"
+      - "project://^?filter=**/*&filter=!**/*.md"
+      - "group://toolchain"
+      - "group://native"
+      - "group://workspace"
+      - "/.github/actions/performance-report/**/*"
+    options:
+      cache: false

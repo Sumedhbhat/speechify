@@ -367,13 +367,13 @@ pub fn vet_command(output: &str) -> Option<String> {
     Some(unwrap_answer(output)).filter(|text| !text.is_empty())
 }
 
-#[cfg(test)]
-pub(crate) struct Scripted {
+#[cfg(any(test, feature = "fakes"))]
+pub struct Scripted {
     pub answers: std::cell::RefCell<Vec<Result<String>>>,
     pub seen: std::cell::RefCell<Vec<(String, String)>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fakes"))]
 impl Scripted {
     pub fn new(answers: Vec<Result<String>>) -> Scripted {
         Scripted {
@@ -383,7 +383,7 @@ impl Scripted {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fakes"))]
 impl Rewriter for Scripted {
     fn rewrite(&self, system: &str, user: &str) -> Result<String> {
         self.seen.borrow_mut().push((system.into(), user.into()));
@@ -396,11 +396,11 @@ impl Rewriter for Scripted {
 }
 
 /// A `Scripted` that other threads can use too.
-#[cfg(test)]
+#[cfg(any(test, feature = "fakes"))]
 #[derive(Clone)]
-pub(crate) struct Sharing(pub std::sync::Arc<std::sync::Mutex<Scripted>>);
+pub struct Sharing(pub std::sync::Arc<std::sync::Mutex<Scripted>>);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fakes"))]
 impl Sharing {
     pub fn new(answers: Vec<Result<String>>) -> Sharing {
         Sharing(std::sync::Arc::new(std::sync::Mutex::new(Scripted::new(answers))))
@@ -412,7 +412,7 @@ impl Sharing {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fakes"))]
 impl Rewriter for Sharing {
     fn rewrite(&self, system: &str, user: &str) -> Result<String> {
         self.0.lock().unwrap().rewrite(system, user)

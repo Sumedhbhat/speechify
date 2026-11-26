@@ -2,9 +2,9 @@
 
 use crate::desktop::Desktop;
 use crate::models::{Models, SpeechStatus};
-use speechify_core::app::Controller;
-use speechify_core::hotkey::{Edge, Key, Tracker};
-use speechify_core::session::Event;
+use speechify_controller::app::Controller;
+use speechify_controller::hotkey::{Edge, Key, Tracker};
+use speechify_controller::session::Event;
 use speechify_core::store::Store;
 use speechify_os::keys::Keyboard;
 use std::collections::{BTreeSet, HashMap};
@@ -403,15 +403,15 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
                             event,
                             Event::BarClick
                                 | Event::Down(
-                                    speechify_core::hotkey::Bind::PushToTalk
-                                        | speechify_core::hotkey::Bind::HandsFree
-                                        | speechify_core::hotkey::Bind::Command
+                                    speechify_controller::hotkey::Bind::PushToTalk
+                                        | speechify_controller::hotkey::Bind::HandsFree
+                                        | speechify_controller::hotkey::Bind::Command
                                 )
                         ) {
                             crate::diagnostics::event("input.stale", "discarded");
                             crate::shell::show_bar(
                                 &app,
-                                &speechify_core::app::Bar::Notice {
+                                &speechify_controller::app::Bar::Notice {
                                     message: "Speechify was busy. Try the shortcut again.".into(),
                                     error: false,
                                     undo: false,
@@ -513,7 +513,7 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
             }
             crate::shell::show_bar(
                 &app,
-                &speechify_core::app::Bar::Notice {
+                &speechify_controller::app::Bar::Notice {
                     message: message.into(),
                     error: true,
                     undo: false,

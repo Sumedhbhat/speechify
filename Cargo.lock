@@ -4561,6 +4561,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "speechify-controller",
  "speechify-core",
  "speechify-os",
  "tauri",
@@ -4574,6 +4575,16 @@ dependencies = [
 name = "speechify-bench"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+ "speechify-core",
+]
+
+[[package]]
+name = "speechify-controller"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
  "serde",
  "serde_json",
  "speechify-core",
@@ -4604,6 +4615,15 @@ dependencies = [
  "enigo",
  "uiautomation",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "speechify-perf"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "speechify-core",
 ]
 
 [[package]]

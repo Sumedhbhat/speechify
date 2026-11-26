@@ -985,6 +985,44 @@ mod tests {
     }
 
     #[test]
+    fn finishing_waits_for_a_block_still_with_the_model() {
+        let store = Store::memory();
+        let settings = Settings::default();
+        let audio = spoken();
+        let mut asr = Fixed::detecting(&[FIRST, "and that is all for this week"]);
+        let mut draft = drafted(&mut asr, &audio);
+        let llm = crate::llm::Sharing::new(vec![
+            Ok("The plan is simple.".into()),
+            Ok("That is all for this week.".into()),
+        ]);
+        let target = Target::default();
+        let to = Destination {
+            target: &target,
+            category: Category::Other,
+            settings: &settings,
+            store: &store,
+            rewriter: Some(&llm),
+        };
+        let mut circuit = RewriteCircuit::default();
+        assert!(!draft.clean(&to, (&mut circuit, 0)));
+        assert!(draft.cleaning());
+        let (paste, record, _) = text(run_live(
+            &request(&audio, "A"),
+            &mut draft,
+            &settings,
+            &store,
+            &mut asr,
+            Some(&llm),
+            (&mut circuit, 0),
+        ));
+        assert_eq!(paste, "The plan is simple. That is all for this week. ");
+        assert_eq!(
+            record.trace.iter().filter(|span| span.stage == Stage::Settle).count(),
+            1
+        );
+    }
+
+    #[test]
     fn a_dictionary_change_while_the_model_thinks_counts_the_right_entry() {
         let store = Store::memory();
         store.add_word("review", "code review", "manual", NOW).unwrap();

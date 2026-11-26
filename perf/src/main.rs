@@ -118,7 +118,7 @@ fn destination(category: &str) -> (Target, Category) {
 }
 
 fn transcription(runtime: &Path, model: &Path) -> Result<Value> {
-    let pcm = audio::decode_wav(include_bytes!("../../../core/tests/fixtures/jfk.wav"))?;
+    let pcm = audio::decode_wav(include_bytes!("../../core/tests/fixtures/jfk.wav"))?;
     let start = Instant::now();
     let engine = Engine::open(runtime, model, "cpu")?;
     let load_ms = ms(start);
@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn every_scenario_in_the_suite_is_valid() {
-        let scenarios: Vec<Scenario> = serde_json::from_str(include_str!("../../scenarios.json")).unwrap();
+        let scenarios: Vec<Scenario> = serde_json::from_str(include_str!("../scenarios.json")).unwrap();
         validate(&scenarios).unwrap();
         assert!(scenarios.len() >= 30);
     }

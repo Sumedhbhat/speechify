@@ -299,8 +299,8 @@ pub fn chime(kind: Chime, rate: u32) -> Vec<f32> {
     out
 }
 
-#[cfg(test)]
-pub(crate) fn tone(ms: usize, amplitude: f32) -> Vec<f32> {
+#[cfg(any(test, feature = "fakes"))]
+pub fn tone(ms: usize, amplitude: f32) -> Vec<f32> {
     (0..ms * 16).map(|i| (i as f32 * 0.05).sin() * amplitude).collect()
 }
 

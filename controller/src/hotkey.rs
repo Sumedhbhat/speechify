@@ -4,8 +4,8 @@
 //! went down or up. Working from state rather than key events means a
 //! missed key-up can never leave dictation stuck on.
 
-use crate::Result;
 use serde::{Deserialize, Serialize};
+use speechify_core::Result;
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -239,7 +239,7 @@ impl Bind {
         Bind::Cancel,
     ];
 
-    fn shortcut(self, hotkeys: &crate::settings::Hotkeys) -> &str {
+    fn shortcut(self, hotkeys: &speechify_core::settings::Hotkeys) -> &str {
         match self {
             Bind::PushToTalk => &hotkeys.push_to_talk,
             Bind::HandsFree => &hotkeys.hands_free,
@@ -253,7 +253,7 @@ impl Bind {
     /// Whether this shortcut is made only of modifiers, so that a press may
     /// still turn out to be typing for the first `UNSURE_MS` after it goes
     /// down.
-    pub fn unsure(self, hotkeys: &crate::settings::Hotkeys) -> bool {
+    pub fn unsure(self, hotkeys: &speechify_core::settings::Hotkeys) -> bool {
         Shortcut::parse(self.shortcut(hotkeys)).is_ok_and(|shortcut| shortcut.chord.modifiers_only())
     }
 }
@@ -338,7 +338,7 @@ pub struct Tracker {
 }
 
 impl Tracker {
-    pub fn new(hotkeys: &crate::settings::Hotkeys) -> Result<Tracker> {
+    pub fn new(hotkeys: &speechify_core::settings::Hotkeys) -> Result<Tracker> {
         let mut bindings = Vec::new();
         for bind in Bind::ALL {
             let text = bind.shortcut(hotkeys);
@@ -487,7 +487,7 @@ impl Tracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::Hotkeys;
+    use speechify_core::settings::Hotkeys;
     use Key::*;
 
     fn keys(list: &[Key]) -> BTreeSet<Key> {

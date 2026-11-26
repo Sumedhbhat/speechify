@@ -1,0 +1,22 @@
+language: rust
+layer: tool
+tags: ["engine"]
+dependsOn: ["core"]
+
+tasks:
+  lint:
+    script: "cargo fmt -p speechify-bench --check && cargo clippy -p speechify-bench --all-targets --locked -- -D warnings"
+    inputs:
+      - "**/*"
+      - "project://^?filter=**/*&filter=!**/*.md"
+      - "group://rust"
+      - "group://workspace"
+      - "/rustfmt.toml"
+  test:
+    command: "cargo test -p speechify-bench --locked"
+    inputs:
+      - "**/*"
+      - "project://^?filter=**/*&filter=!**/*.md"
+      - "group://rust"
+      - "group://workspace"
+      - "$SPEECHIFY_REQUIRE_NATIVE"

@@ -49,7 +49,7 @@ cargo build -p speechify
 ## Check the build
 
 ```
-npm run build                         # tsc --noEmit, then vite build into dist/
+npm run build                         # tsc --noEmit, then vite build into ui/dist/
 cargo build -p speechify --locked     # what CI runs
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -75,7 +75,8 @@ Output lands in `target/release/bundle/`. The Linux package depends on `libasoun
 
 ## Where things are
 
-- Cargo workspace root: `Cargo.toml` (members `core`, `os`, `src-tauri`). The version lives only here.
-- Tauri config: `src-tauri/tauri.conf.json`. Windows are `main` (`index.html`) and `bar` (`bar.html`).
+- Cargo workspace root: `Cargo.toml` (members `core`, `controller`, `os`, `src-tauri`, `bench`, `perf`). The version lives only here.
+- moon workspace: `.moon/workspace.yml` lists the projects, `.moon/tasks/all.yml` holds the shared file groups, and each project directory has a `moon.yml`. `npx moon run :lint :test :build` runs every check; see [architecture.md](architecture.md#projects-and-their-gates).
+- Tauri config: `src-tauri/tauri.conf.json`. Windows are `main` (`ui/index.html`) and `bar` (`ui/bar.html`); the built interface is `ui/dist`.
 - The bundled runtime is listed under `bundle.resources` as `resources/native/**/*`.
 - Dependencies are pinned to exact versions in the manifests and locked in `Cargo.lock` and `package-lock.json`. Use `--locked` and `npm ci`.

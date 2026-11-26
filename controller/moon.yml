@@ -1,0 +1,33 @@
+language: rust
+layer: library
+tags: ["app"]
+dependsOn: ["core"]
+
+tasks:
+  lint:
+    script: "cargo fmt -p speechify-controller --check && cargo clippy -p speechify-controller --all-targets --locked -- -D warnings"
+    inputs:
+      - "**/*"
+      - "project://^?filter=**/*&filter=!**/*.md"
+      - "group://rust"
+      - "group://workspace"
+      - "/rustfmt.toml"
+  test:
+    command: "cargo test -p speechify-controller --locked"
+    inputs:
+      - "**/*"
+      - "project://^?filter=**/*&filter=!**/*.md"
+      - "group://rust"
+      - "group://workspace"
+      - "$SPEECHIFY_REQUIRE_NATIVE"
+  coverage:
+    command: "bash scripts/coverage.sh controller"
+    inputs:
+      - "**/*"
+      - "project://^?filter=**/*&filter=!**/*.md"
+      - "group://rust"
+      - "group://workspace"
+      - "/scripts/coverage.sh"
+    options:
+      cache: false
+      mutex: "coverage"

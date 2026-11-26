@@ -15,7 +15,7 @@ updates:
         update-types: [minor, patch]
 
   - package-ecosystem: cargo
-    directory: /        # one workspace: core, os and src-tauri
+    directory: /        # one workspace: every crate
     schedule:
       interval: daily
     cooldown:

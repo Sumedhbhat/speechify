@@ -30,5 +30,5 @@ $failures
 $json
 
 $models
-Scenarios: `bench/scenarios.json`. Cleanup prompt: `core/src/prompts/cleanup.txt`. Each merge to `main` is measured again and attached to its nightly release as `performance.json`.
+Scenarios: `perf/scenarios.json`. Cleanup prompt: `core/src/prompts/cleanup.txt`. Each merge to `main` that changes the engine is measured again; every nightly release carries the latest results as `performance.json`.
 $run

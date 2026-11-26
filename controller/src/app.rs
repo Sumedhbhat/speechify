@@ -4,18 +4,18 @@
 //! the outside world only through `Platform` and `Engines`, so the whole
 //! behaviour of the app is tested here without a microphone or a screen.
 
-use crate::asr::{Hint, Recognizer};
-use crate::audio::Chime;
-use crate::context::{categorize, restore_delay_ms, Os, PasteKeys, Target};
-use crate::live::Live;
-use crate::llm::Rewriter;
-use crate::pipeline::{self, Destination, Draft, Outcome, Request, RewriteCircuit};
 use crate::session::{Effect, Event, Notice, Session};
-use crate::settings::{Retention, Settings};
-use crate::store::{self, Clock, Store};
-use crate::trace::{Stage, Timed};
-use crate::{teacher, Result};
 use serde::Serialize;
+use speechify_core::asr::{Hint, Recognizer};
+use speechify_core::audio::Chime;
+use speechify_core::context::{categorize, restore_delay_ms, Os, PasteKeys, Target};
+use speechify_core::live::Live;
+use speechify_core::llm::Rewriter;
+use speechify_core::pipeline::{self, Destination, Draft, Outcome, Request, RewriteCircuit};
+use speechify_core::settings::{Retention, Settings};
+use speechify_core::store::{self, Clock, Store};
+use speechify_core::trace::{Stage, Timed};
+use speechify_core::{teacher, Result};
 use std::time::Instant;
 
 /// Whether the focused control accepts typed text.
@@ -106,7 +106,7 @@ fn same_app(now: &Target, then: &Target) -> bool {
 
 /// Whether a saved dictation's recogniser (a model file's name, or a
 /// server's model) is the one these settings use.
-fn same_recogniser(name: &str, speech: &crate::settings::Speech) -> bool {
+fn same_recogniser(name: &str, speech: &speechify_core::settings::Speech) -> bool {
     if speech.remote_url.trim().is_empty() {
         !speech.active_model().is_empty() && name.starts_with(speech.active_model())
     } else {
@@ -144,9 +144,9 @@ pub struct Controller<P: Platform, E: Engines> {
     /// long the next recording's pieces must be.
     piece_cost_ms: u64,
     /// The speech settings `piece_cost_ms` was measured with.
-    cost_for: crate::settings::Speech,
+    cost_for: speechify_core::settings::Speech,
     rewrite_circuit: RewriteCircuit,
-    rewrite_settings: crate::settings::Rewrite,
+    rewrite_settings: speechify_core::settings::Rewrite,
 }
 
 impl<P: Platform, E: Engines> Controller<P, E> {
@@ -494,7 +494,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
             created_at: clock.now,
             offset_min: clock.offset_min,
             ending,
-            duration_ms: (samples as u64 * 1000 / crate::audio::RATE as u64) as u32,
+            duration_ms: (samples as u64 * 1000 / speechify_core::audio::RATE as u64) as u32,
             error,
             trace: draft.trace(Instant::now()),
             ..store::Attempt::default()
@@ -661,10 +661,10 @@ impl<P: Platform, E: Engines> Controller<P, E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::asr::{Fixed, Shared};
-    use crate::audio::tone;
     use crate::hotkey::Bind;
-    use crate::llm::{Scripted, Sharing};
+    use speechify_core::asr::{Fixed, Shared};
+    use speechify_core::audio::tone;
+    use speechify_core::llm::{Scripted, Sharing};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
@@ -963,7 +963,7 @@ mod tests {
     #[test]
     fn the_first_recording_goes_by_the_last_saved_dictation() {
         let store = Store::memory();
-        let mut slow = crate::testing::dictation("an old one", "Slack", 1_800_000_000);
+        let mut slow = speechify_core::testing::dictation("an old one", "Slack", 1_800_000_000);
         slow.asr_ms = 30_000;
         slow.speech_model = "whisper-large-v3-turbo-Q8_0".into();
         store.add_dictation(&slow).unwrap();
@@ -984,7 +984,7 @@ mod tests {
         assert_eq!(fresh.piece_cost_ms, 30_000);
         assert_eq!(std::mem::take(&mut app.piece_cost_ms), 0);
         // Only a dictation made with the model now in use says anything.
-        let mut speech = crate::settings::Settings::default().speech;
+        let mut speech = speechify_core::settings::Settings::default().speech;
         assert!(same_recogniser("whisper-large-v3-turbo-Q8_0", &speech));
         speech.model = "parakeet-tdt-0.6b-v3".into();
         assert!(!same_recogniser("whisper-large-v3-turbo-Q8_0", &speech));
@@ -1704,7 +1704,7 @@ mod tests {
     fn failed_history_insert_deletes_audio_and_preserves_delivery_status() {
         for pasted in [true, false] {
             let mut app = app(&["please save these dictated words"]);
-            let path = crate::testing::temp_dir("failed-history").join("history.db");
+            let path = speechify_core::testing::temp_dir("failed-history").join("history.db");
             app.store = Store::open(&path).unwrap();
             let db = rusqlite::Connection::open(&path).unwrap();
             db.execute_batch(

@@ -2,7 +2,7 @@ name: Performance report
 description: >-
   Merges the Measure results of every platform. With target "branch" it compares them
   with the performance.json of the latest nightly release and adds a new comment to
-  the pull request on every run, filled in from bench/perf_comment.md. With target
+  the pull request on every run, filled in from perf/perf_comment.md. With target
   "main" it saves them as the performance-baseline artifact, which the nightly release
   attaches as performance.json.
 
@@ -73,7 +73,7 @@ runs:
         else
           args+=(--complete)
         fi
-        python3 bench/perf_report.py .build/perf/platforms "${args[@]}"
+        python3 perf/perf_report.py .build/perf/platforms "${args[@]}"
         cat .build/perf/summary.md >> "$GITHUB_STEP_SUMMARY"
 
     - name: Comment on the pull request

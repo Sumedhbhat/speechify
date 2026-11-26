@@ -1,36 +1,91 @@
 # Architecture
 
-Speechify is a Cargo workspace with three crates and a TypeScript interface.
+Speechify is a moon workspace. Each directory below is one moon project, and each Rust one is also a crate in the Cargo workspace.
 
 ```
 speechify/
-  core/       speechify-core   all decisions; no devices, no windows
-  os/         speechify-os     microphone, key state, clipboard, focused window
-  src-tauri/  speechify        window, tray and threads; the binary
-  src/        TypeScript UI (main window and the floating bar), built with Vite
-  scripts/    fetch-native.py, coverage.sh, Linux bootstrap helpers
+  core/        core        speechify-core        the engine: recognition, cleanup, formatting, storage, learning
+  controller/  controller  speechify-controller  shortcuts, the dictation session, the controller, the bar's click areas, insights
+  os/          os          speechify-os          microphone, key state, clipboard, focused window
+  src-tauri/   desktop     speechify             window, tray and threads; the binary
+  ui/          ui          (TypeScript)          main window and floating bar, built with Vite
+  perf/        perf        speechify-perf        the performance gate: speed of the default models and the cleanup scenarios
+  bench/       bench       speechify-bench       offline evaluation of the engine on recorded clips
+  scripts/     fetch-native.py, coverage.sh, Linux bootstrap helpers
+  tools/       ci/plan.mjs (what CI runs), ci/check-graph.mjs (moon's edges match Cargo)
+  .moon/       workspace.yml (the project list), tasks/all.yml (shared file groups)
 ```
 
-## Why the logic lives in `core`
+The arrows go one way. `perf` and `bench` use `core` only, so nothing in `controller`, `os`, `desktop` or `ui` can change what they measure, and the compiler enforces it.
 
-Dictation touches a microphone, global key state, the clipboard and other people's windows. None of that can run in a headless test. So `core` never touches any of it. It asks for what it needs through two traits in `core/src/app.rs`, and the tests supply fakes.
+```
+ui ─────────────┐
+os ─────────────┼──▶ desktop
+controller ─────┤
+core ──┬────────┘
+       ├──▶ controller
+       ├──▶ perf
+       └──▶ bench
+```
+
+## Projects and their gates
+
+Each project's tasks and their inputs are in its `moon.yml`. Inputs that several projects share, such as the Rust toolchain files or the CI setup, are file groups in `.moon/tasks/all.yml`. A task also depends on the files of the projects it uses, except their Markdown.
+
+The edges are `dependsOn` in each `moon.yml`. moon does not read Cargo, so `tools/ci/check-graph.mjs` compares them with the path dependencies in each `Cargo.toml` and fails CI if they differ. `desktop` also lists `ui`, because it embeds the built interface.
+
+| Project | Targets | Runs when |
+| --- | --- | --- |
+| `core` | `lint`, `test`, `coverage` | `core/` changes, or `Cargo.lock`, the toolchain, or the CI and moon setup |
+| `controller` | `lint`, `test`, `coverage` | `controller/` or `core/` changes, or the shared Rust files above |
+| `os` | `lint`, `test` | `os/` changes, or the shared Rust files |
+| `desktop` | `lint`, `test`, `build` | anything it is built from: `src-tauri/`, `controller`, `core`, `os`, or the `ui` build |
+| `ui` | `lint`, `test`, `build`, `coverage` | `ui/`, `package.json` or `package-lock.json` changes |
+| `perf` | `lint`, `test`, `test-report`, `release`, `measure` | `measure` runs when `perf/` or `core/` changes, or the toolchain, the speech runtime pin, the report action, or the CI and moon setup. Not for `Cargo.lock` alone |
+| `bench` | `lint`, `test` | `bench/` or `core/` changes |
+
+`measure` is the performance gate. It leaves `Cargo.lock` out on purpose. Every dependency is pinned in the `Cargo.toml` of the crate that uses it, so a change to what `core` uses changes `core/Cargo.toml`, and that triggers the gate. A lockfile-only change is a transitive bump, and it still runs every Rust test.
+
+The CI and moon setup means `.moon/`, `tools/ci/` and `.github/workflows/ci.yml`. A change there reaches every task. A change only to `docs/` or a top-level Markdown file reaches none.
+
+To see what a change would run, and why (each task lists the files that reached it):
+
+```
+npx moon query affected --downstream deep                  # uncommitted changes
+npx moon query affected origin/main:HEAD --downstream deep        # the branch since main
+echo '{"files":["core/src/llm.rs"]}' | npx moon query affected --downstream deep
+npx moon query projects                                    # projects and their edges
+```
+
+## Why the logic lives in `core` and `controller`
+
+Dictation touches a microphone, global key state, the clipboard and other people's windows. None of that can run in a headless test. So neither crate touches any of it. The controller asks for what it needs through two traits in `controller/src/app.rs`, and the tests supply fakes. The fakes of the engine's recogniser and rewriter live in `core` behind the `fakes` feature, which only `controller`'s tests turn on.
 
 - **`Platform`** is the operating system: start and stop capture, report the focused app and whether it takes text, read the selection, paste, copy, press Enter, play a chime, mute audio, show the bar, save and load WAV files, and tell the time.
 - **`Engines`** is the loaded models: the everyday recogniser and rewriter, the teacher's larger pair, and a `warm` hook.
 
 `Controller<P: Platform, E: Engines>` owns the state machine and drives the pipeline. Its tests run whole dictations ("hold, speak, paste") with a fake `Platform` and fake engines, so the behaviour of the app is tested without a screen. The clock is also passed in (`Clock { now, offset_min }`), so nothing in `core` reads the time itself.
 
-This is why the coverage gate can demand every line of `core`. The other two crates are kept thin on purpose.
+This is why the coverage gate can demand every line of `core` and `controller`. The other crates are kept thin on purpose.
 
 `os` has no dependency on `core`, so its Windows and macOS code can be compile-checked from any machine. `src-tauri` joins them: `desktop.rs` implements `Platform` with the `os` adapters, and `models.rs` implements `Engines` with the real runtime and Ollama client.
 
-## Modules in `core`
+## Modules
+
+`controller`:
 
 | Module | Role |
 | --- | --- |
 | `app` | `Controller`, `Platform`, `Engines`, the `Bar` states |
 | `session` | The state machine: hold, tap, double-tap lock, cancel, limits |
 | `hotkey` | Parses shortcuts, tracks chords over raw key state |
+| `pointer` | Which parts of the bar take clicks |
+| `insights` | Statistics from history |
+
+`core`:
+
+| Module | Role |
+| --- | --- |
 | `pipeline` | One dictation from audio to text; `compose` turns words into typed text; `Draft` cleans up long dictations in blocks while they are spoken |
 | `live` | Recognises a recording piece by piece, at pauses, while it is still being made |
 | `format/*` | The deterministic formatter, one file per pass |
@@ -39,7 +94,6 @@ This is why the coverage gate can demand every line of `core`. The other two cra
 | `native` | On-device recognition through the transcribe.cpp library, loaded at run time |
 | `catalog` | Pinned model list, download with resume and checksum |
 | `store` | SQLite: settings, history, dictionary, snippets, notes, examples |
-| `insights` | Statistics from history |
 | `learn`, `diff` | Word alignment, finding corrections worth keeping, word error rate |
 | `teacher` | The nightly review, learning from edits, training export |
 | `context` | Sorting apps into categories, paste keys, clipboard restore delay |
@@ -50,7 +104,7 @@ This is why the coverage gate can demand every line of `core`. The other two cra
 
 Three threads matter, all started in `src-tauri/src/worker.rs`.
 
-1. **UI thread.** Tauri's event loop and webviews. Commands from the UI (`src-tauri/src/commands.rs`, mirrored one-to-one by `src/api.ts`) run here or on Tauri's async pool, and use the UI's own database connection (`Shared::db`).
+1. **UI thread.** Tauri's event loop and webviews. Commands from the UI (`src-tauri/src/commands.rs`, mirrored one-to-one by `ui/src/api.ts`) run here or on Tauri's async pool, and use the UI's own database connection (`Shared::db`).
 2. **Keyboard thread.** Polls the key state every 12 ms. When it changes, the `Tracker` turns it into `Down`, `Up` and `Released` edges and sends them to the worker. Polling state instead of listening for events means a missed key-up cannot leave dictation stuck on. It does not read keys at all on Wayland.
 3. **Worker thread.** Owns the microphone, the models and the `Controller`, with its own database connection. It waits on a channel for input events, settings reloads and "run the teacher". With nothing to do it sends a `Tick` (every 100 ms while recording or processing) to drive tap timeouts and the 20-minute limit, and once a minute checks whether the nightly review is due.
 
@@ -176,9 +230,9 @@ When the run ends, the teacher's models are released. `learn_from_edit` is the s
 
 ## The interface
 
-`src/` is plain TypeScript with no framework: `app.ts` is the shell with the sidebar and the page host, `pages/*.ts` are the nine pages (Home with History, Insights, Dictionary, Snippets, Style, Notes, Models, Learning, Settings), and `bar-view.ts` draws the floating bar. `api.ts` is the contract with the Rust side: one function per Tauri command and one listener per event. Everything else receives `api` through `deps.ts`, so the tests give it fakes (`tests/fakes.ts`).
+`ui/src/` is plain TypeScript with no framework: `app.ts` is the shell with the sidebar and the page host, `pages/*.ts` are the nine pages (Home with History, Insights, Dictionary, Snippets, Style, Notes, Models, Learning, Settings), and `bar-view.ts` draws the floating bar. `api.ts` is the contract with the Rust side: one function per Tauri command and one listener per event. Everything else receives `api` through `deps.ts`, so the tests give it fakes (`ui/tests/fakes.ts`).
 
-The bar is its own window (`bar.html`), transparent, always on top, not focusable. Its size follows its state so it never covers more of the screen than it needs: 220 by 48 at rest, taller for notices and the copy card. It is placed at the bottom centre of the monitor's work area.
+The bar is its own window (`ui/bar.html`), transparent, always on top, not focusable. Its size follows its state so it never covers more of the screen than it needs: 220 by 48 at rest, taller for notices and the copy card. It is placed at the bottom centre of the monitor's work area.
 
 ## Adding a speech model
 
@@ -194,5 +248,5 @@ The bar is its own window (`bar.html`), transparent, always on top, not focusabl
 3. Write the tests first, in the same file, as input and output pairs. Include cases the rule must leave alone. The corrections and list passes show how: a table of ordinary sentences that must come out unchanged.
 4. If the language model could do the same job, add a sentence to `cleanup_prompt` in `llm.rs`. The rule still matters, because it is the fallback.
 5. If the rule must hold even after the model has written the text (spelling, grouping, tone), put it in `format::finish`, not only in `format::format`.
-6. Run `cargo test -p speechify-core` and `bash scripts/coverage.sh`. Every line must be covered.
+6. Run `cargo test -p speechify-core` and `bash scripts/coverage.sh core`. Every line must be covered. The change also runs the performance gate on the pull request, so check the scenarios in its comment.
 7. Add an example to [features.md](features.md), copied from the test.
