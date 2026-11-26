@@ -21,9 +21,10 @@
 use crate::asr::{is_phantom, isolate, strip_tags, Heard, Hint, Recognizer, Streamed};
 use crate::audio::{self, Trimmed, RATE};
 use crate::job::Job;
+use crate::trace::{self, Detail, Stage, Timed};
 use crate::Result;
 use std::ops::Range;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const MS: usize = RATE as usize / 1000;
 /// Pieces are at least this long: the recogniser does better with some context.
@@ -84,7 +85,7 @@ pub struct Transcript {
 
 /// A piece being recognised on a thread of its own: its words, what the
 /// recogniser made of each, and how long it took.
-type Answer = (String, Vec<Heard>, u64);
+type Answer = (String, Vec<Heard>, Instant, Duration);
 
 #[derive(Debug)]
 struct Flight {
@@ -118,11 +119,12 @@ pub struct Live {
     flight: Option<Flight>,
     /// Set when the recogniser is a model made to stream.
     stream: Option<Stream>,
+    spans: Vec<Timed>,
 }
 
 /// What a streaming model gives back for some audio: its text, and how
 /// much of that audio was speech.
-type Fed = (Streamed, u64);
+type Fed = (Streamed, u64, Instant, Duration);
 
 /// A recording given to a model made to stream, as it is made.
 #[derive(Debug, Default)]
@@ -186,6 +188,34 @@ impl Live {
         &self.pieces
     }
 
+    pub fn take_spans(&mut self) -> Vec<Timed> {
+        std::mem::take(&mut self.spans)
+    }
+
+    fn mark(&mut self, stage: Stage, start: Instant, took: Duration, detail: Detail) {
+        let chunk = self.spans.iter().filter(|span| span.stage == stage).count() as u32;
+        self.spans.push(Timed {
+            stage,
+            start,
+            took,
+            detail: Detail {
+                chunk: Some(chunk),
+                ..detail
+            },
+        });
+    }
+
+    fn isolate(&mut self, recognizer: &mut dyn Recognizer, audio: &[f32]) -> Result<Trimmed> {
+        let started = Instant::now();
+        let trimmed = isolate(recognizer, audio)?;
+        let detail = Detail {
+            audio_ms: Some((audio.len() / MS) as u32),
+            ..Detail::default()
+        };
+        self.mark(Stage::Detect, started, started.elapsed(), detail);
+        Ok(trimmed)
+    }
+
     /// Recognises the finished part of what has been recorded so far, if a
     /// pause ends it. `pending` is the recording from `done()` on. Returns
     /// whether a piece was recognised. On an error nothing is lost: the same
@@ -215,7 +245,7 @@ impl Live {
         }
         self.looked = length;
         let Some(cut) = self.find_cut(pending, recognizer)? else { return Ok(false) };
-        let trimmed = isolate(recognizer, &pending[..cut])?;
+        let trimmed = self.isolate(recognizer, &pending[..cut])?;
         // Silence needs no recogniser.
         let shared = if trimmed.samples.is_empty() { None } else { recognizer.share() };
         if let Some(shared) = shared {
@@ -246,7 +276,7 @@ impl Live {
             let _ = self.land(cut, speech_ms, job.wait());
         }
         let rest = &recording[self.done.min(recording.len())..];
-        let trimmed = isolate(recognizer, rest)?;
+        let trimmed = self.isolate(recognizer, rest)?;
         self.take(trimmed, recognizer, hint)?;
         Ok(self.spoke.then(|| Transcript {
             raw: self.pieces.join(" "),
@@ -313,14 +343,19 @@ impl Live {
     /// any sentences it has settled. On an error the stream is given up,
     /// and the whole recording is recognised when it ends.
     fn fed(&mut self, length: usize, answer: Result<Fed>) -> Result<bool> {
-        let stream = self.stream.as_mut().expect("a stream");
-        let (streamed, speech_ms) = match answer {
+        let (streamed, speech_ms, start, took) = match answer {
             Ok(answer) => answer,
             Err(error) => {
-                stream.broken = true;
+                self.stream.as_mut().expect("a stream").broken = true;
                 return Err(error);
             }
         };
+        let detail = Detail {
+            audio_ms: Some((length / MS) as u32),
+            ..Detail::default()
+        };
+        self.mark(Stage::Feed, start, took, detail);
+        let stream = self.stream.as_mut().expect("a stream");
         self.done += length;
         self.speech_ms += speech_ms;
         stream.answered = true;
@@ -359,16 +394,26 @@ impl Live {
         let ended = if stream.broken {
             Err(String::new())
         } else {
-            feed(recognizer, rest, &stop).and_then(|(_, speech_ms)| {
+            feed(recognizer, rest, &stop).and_then(|(_, speech_ms, start, took)| {
+                let detail = Detail {
+                    audio_ms: Some((rest.len() / MS) as u32),
+                    ..Detail::default()
+                };
+                self.mark(Stage::Feed, start, took, detail);
                 self.speech_ms += speech_ms;
-                recognizer.stream_end(&stop)
+                let started = Instant::now();
+                let ended = recognizer.stream_end(&stop);
+                self.mark(Stage::Piece, started, started.elapsed(), Detail::default());
+                ended
             })
         };
         let Ok(ended) = ended else {
             // Start again, as if nothing had been streamed.
             let handed = !self.pieces.is_empty();
+            let spans = self.take_spans();
             *self = Live::costing(self.cost_ms);
-            let trimmed = isolate(recognizer, recording)?;
+            self.spans = spans;
+            let trimmed = self.isolate(recognizer, recording)?;
             self.take(trimmed, recognizer, hint)?;
             return Ok(self.spoke.then(|| Transcript {
                 raw: self.pieces.join(" "),
@@ -453,8 +498,7 @@ impl Live {
                 ..*hint
             },
         )?;
-        let cost_ms = started.elapsed().as_millis() as u64;
-        self.record(&raw, recognizer.heard(), trimmed.speech_ms, cost_ms);
+        self.record(&raw, recognizer.heard(), trimmed.speech_ms, started, started.elapsed());
         Ok(())
     }
 
@@ -471,22 +515,28 @@ impl Live {
             };
             let started = Instant::now();
             let raw = recognizer.transcribe_until(&samples, &hint, stop)?;
-            Ok((raw, recognizer.heard(), started.elapsed().as_millis() as u64))
+            Ok((raw, recognizer.heard(), started, started.elapsed()))
         })
     }
 
     /// Takes in a piece recognised elsewhere. On an error nothing moves on,
     /// so the piece is tried again.
     fn land(&mut self, cut: usize, speech_ms: u64, answer: Result<Answer>) -> Result<()> {
-        let (raw, heard, cost_ms) = answer?;
-        self.record(&raw, heard, speech_ms, cost_ms);
+        let (raw, heard, start, took) = answer?;
+        self.record(&raw, heard, speech_ms, start, took);
         self.done += cut;
         Ok(())
     }
 
-    fn record(&mut self, raw: &str, heard: Vec<Heard>, speech_ms: u64, cost_ms: u64) {
+    fn record(&mut self, raw: &str, heard: Vec<Heard>, speech_ms: u64, start: Instant, took: Duration) {
         let raw = strip_tags(raw);
-        self.cost_ms = cost_ms;
+        let detail = Detail {
+            audio_ms: Some(speech_ms as u32),
+            words: trace::words(&raw),
+            ..Detail::default()
+        };
+        self.mark(Stage::Piece, start, took, detail);
+        self.cost_ms = took.as_millis() as u64;
         self.spoke = true;
         self.taken += 1;
         self.speech_ms += speech_ms;
@@ -510,6 +560,7 @@ impl Stream {
 
 /// Gives a stream more audio, and finds how much of it was speech.
 fn feed(recognizer: &mut dyn Recognizer, audio: &[f32], stop: &std::sync::atomic::AtomicBool) -> Result<Fed> {
+    let started = Instant::now();
     let speech = match audio::normalize(audio) {
         None => 0,
         Some(loud) => match recognizer.detect(&loud, audio::DETECTION.threshold) {
@@ -518,7 +569,7 @@ fn feed(recognizer: &mut dyn Recognizer, audio: &[f32], stop: &std::sync::atomic
         },
     };
     let streamed = recognizer.stream_feed(audio, stop)?;
-    Ok((streamed, (speech / MS) as u64))
+    Ok((streamed, (speech / MS) as u64, started, started.elapsed()))
 }
 
 /// Where the last whole sentence in `text` after byte `from` ends: just
@@ -831,6 +882,13 @@ mod tests {
         assert_eq!((heard.speech_ms, heard.pieces), (3500, 1));
         // The stream was started once and given every sample once.
         assert_eq!((asr.started, asr.fed), (1, recording.len()));
+        let spans = live.take_spans();
+        let feeds: Vec<_> = spans.iter().filter(|span| span.stage == Stage::Feed).collect();
+        assert_eq!(feeds.len(), 4);
+        assert_eq!(feeds[3].detail.chunk, Some(3));
+        assert_eq!(feeds[0].detail.audio_ms, Some(1000));
+        assert_eq!(spans.last().unwrap().stage, Stage::Piece);
+        assert!(live.take_spans().is_empty());
         assert_eq!(asr.transcribe(&[], &HINT).unwrap(), "");
         assert_eq!(asr.name(), "talker");
     }
@@ -875,6 +933,11 @@ mod tests {
         assert!(live.advance(&recording[..1000 * MS], &mut asr, &HINT).unwrap());
         let heard = live.finish(&recording, &mut asr, &HINT).unwrap().unwrap();
         assert_eq!((heard.raw.as_str(), heard.revised), ("Done and more.", true));
+        let stages: Vec<Stage> = live.take_spans().iter().map(|span| span.stage).collect();
+        assert_eq!(
+            stages,
+            [Stage::Feed, Stage::Feed, Stage::Piece, Stage::Detect, Stage::Piece]
+        );
     }
 
     #[test]

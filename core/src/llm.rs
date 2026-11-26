@@ -4,15 +4,19 @@ use crate::context::{Category, Target};
 use crate::diff::normalize;
 use crate::http::Http;
 use crate::settings::{Cleanup, NumberSystem, Spelling, Style};
+use crate::trace::ModelTime;
 use crate::Result;
 use regex::Regex;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::sync::LazyLock;
 use std::time::Duration;
 
 /// Anything that can rewrite text given instructions.
 pub trait Rewriter {
     fn rewrite(&self, system: &str, user: &str) -> Result<String>;
+    fn rewrite_timed(&self, system: &str, user: &str) -> Result<(String, ModelTime)> {
+        self.rewrite(system, user).map(|text| (text, ModelTime::default()))
+    }
     fn model(&self) -> &str;
     /// Another handle on this model, for a thread of its own, if it can be
     /// used from one. `None` means it works only where it is.
@@ -94,16 +98,21 @@ impl Chat {
         failure.map_or(Ok(()), Err)
     }
 
-    fn ask(&self, system: &str, user: &str, think_off: bool) -> Result<String> {
+    fn ask(&self, system: &str, user: &str, think_off: bool) -> Result<(String, ModelTime)> {
         let messages = json!([{"role": "system", "content": system}, {"role": "user", "content": user}]);
         if self.openai() {
             let body = json!({"model": self.model, "messages": messages, "temperature": 0, "stream": false});
             let answer = self
                 .http
                 .post_json(&format!("{}/chat/completions", self.url), &self.key, &body)?;
+            let time = ModelTime {
+                prompt_tokens: count(&answer["usage"]["prompt_tokens"]),
+                answer_tokens: count(&answer["usage"]["completion_tokens"]),
+                ..ModelTime::default()
+            };
             return answer["choices"][0]["message"]["content"]
                 .as_str()
-                .map(str::to_string)
+                .map(|text| (text.to_string(), time))
                 .ok_or_else(|| "The language model sent an empty answer".to_string());
         }
         let mut body = json!({"model": self.model, "messages": messages, "stream": false, "keep_alive": "30m", "options": {"temperature": 0}});
@@ -113,15 +122,36 @@ impl Chat {
         let answer = self
             .http
             .post_json(&format!("{}/api/chat", self.url), &self.key, &body)?;
+        let time = ModelTime {
+            load_ms: nanos_to_ms(&answer["load_duration"]),
+            prompt_ms: nanos_to_ms(&answer["prompt_eval_duration"]),
+            answer_ms: nanos_to_ms(&answer["eval_duration"]),
+            prompt_tokens: count(&answer["prompt_eval_count"]),
+            answer_tokens: count(&answer["eval_count"]),
+        };
         answer["message"]["content"]
             .as_str()
-            .map(str::to_string)
+            .map(|text| (text.to_string(), time))
             .ok_or_else(|| "The language model sent an empty answer".to_string())
     }
 }
 
+fn count(value: &Value) -> Option<u32> {
+    value.as_u64().map(|n| n.min(u32::MAX as u64) as u32)
+}
+
+fn nanos_to_ms(value: &Value) -> Option<u32> {
+    value
+        .as_u64()
+        .map(|nanos| (nanos / 1_000_000).min(u32::MAX as u64) as u32)
+}
+
 impl Rewriter for Chat {
     fn rewrite(&self, system: &str, user: &str) -> Result<String> {
+        self.rewrite_timed(system, user).map(|(text, _)| text)
+    }
+
+    fn rewrite_timed(&self, system: &str, user: &str) -> Result<(String, ModelTime)> {
         // Reasoning models think by default, which is slow and unwanted here.
         // Models without a thinking mode reject the switch, so retry without it.
         match self.ask(system, user, true) {
@@ -448,6 +478,41 @@ mod tests {
         assert_eq!(chat.rewrite("s", "u").unwrap(), "ok");
         assert!(body(&server, 1).get("think").is_none());
         assert!(chat.rewrite("s", "u").unwrap_err().contains("out of memory"));
+    }
+
+    #[test]
+    fn ollama_reports_where_the_model_spent_its_time() {
+        let server = Server::start(vec![Reply::json(
+            r#"{"message":{"content":"Hi."},"load_duration":2500000,"prompt_eval_count":612,"prompt_eval_duration":1100000000,"eval_count":40,"eval_duration":300000000}"#,
+        )]);
+        let (text, time) = chat(&server, "").rewrite_timed("s", "u").unwrap();
+        assert_eq!(text, "Hi.");
+        assert_eq!(
+            time,
+            ModelTime {
+                load_ms: Some(2),
+                prompt_ms: Some(1100),
+                answer_ms: Some(300),
+                prompt_tokens: Some(612),
+                answer_tokens: Some(40),
+            }
+        );
+    }
+
+    #[test]
+    fn openai_compatible_servers_report_tokens_only() {
+        let server = Server::start(vec![Reply::json(
+            r#"{"choices":[{"message":{"content":"Hi."}}],"usage":{"prompt_tokens":90,"completion_tokens":7}}"#,
+        )]);
+        let (_, time) = chat(&server, "/v1").rewrite_timed("s", "u").unwrap();
+        assert_eq!(
+            time,
+            ModelTime {
+                prompt_tokens: Some(90),
+                answer_tokens: Some(7),
+                ..ModelTime::default()
+            }
+        );
     }
 
     #[test]

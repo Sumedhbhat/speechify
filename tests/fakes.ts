@@ -150,6 +150,7 @@ export function dictation(over: Partial<Dictation> = {}): Dictation {
     teacher_wer: null,
     reviewed_at: null,
     flagged: false,
+    trace: [],
     ...over,
   };
 }

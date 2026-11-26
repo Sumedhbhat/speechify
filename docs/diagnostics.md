@@ -10,6 +10,44 @@ The file rotates at 1 MiB, retaining one `diagnostics.previous.log`. Each line h
 
 Logs record shortcut binding events, initial and live changes in global-key access, stage boundaries and timing for capture, focus lookup, speech detection, transcription, rewriting, selection, copy, paste and Enter, plus bar state and explicit exit requests. An operation returning an error records `error`; the message is deliberately omitted because library errors can include server responses or user content. Rust panics record only the source filename and line, without the panic payload or absolute build path. Panic logging uses a nonblocking lock so it cannot deadlock behind a failed logger write. Speechify never logs audio, transcripts, selected or clipboard text, window titles, raw key state, remote URLs or credentials through this logger. Native libraries and the default Rust panic hook may independently print more detail to stderr; inspect redirected stderr before sharing it.
 
+## Timing traces
+
+Every dictation saved to History has a `trace` column in `speechify.db` (in the app data directory, `org.sumedhbhat.speechify`). It is a JSON array of spans. Each span has:
+
+- `stage`: what ran (see below).
+- `at_ms`: when it started, in milliseconds from the key release. Work done while you were still speaking is negative.
+- `ms`: how long it took.
+- `chunk`: its number among spans of the same stage, from 0. A piece's chunk is its order in the recording; a model span's chunk is its order among requests.
+- `audio_ms`: the audio it covered. For pieces this is the speech in them; for speech detection and stream feeds it is the whole stretch.
+- `words`: words recognised (pieces) or sent to the model (model requests).
+- `model`: what the language model reported: `load_ms`, `prompt_ms`, `answer_ms`, `prompt_tokens`, `answer_tokens`. Missing fields were not reported.
+
+Steps after the release, which run one after another and add up to the wait:
+
+| Stage | What it covers |
+| --- | --- |
+| `stop` | Stopping the microphone, and reading the selection in Command Mode |
+| `load` | Getting the models ready (normally instant; a model loaded late shows here) |
+| `speech` | Finishing recognition: a piece still in progress, speech detection and the audio after the last pause |
+| `settle` | Waiting for a block the language model was still cleaning up |
+| `cleanup` | The last clean-up: rules, and the language model request if it was used |
+| `paste` | Checking the focused app and pasting |
+
+Work spans, which can run alongside the steps or before the release:
+
+| Stage | What it covers |
+| --- | --- |
+| `piece` | Recognising one piece of the recording (or finishing a stream) |
+| `detect` | Finding the speech in a piece before it is recognised |
+| `feed` | Giving a streaming model more audio |
+| `model` | One language model request |
+
+To look at recent traces:
+
+```sh
+sqlite3 speechify.db "SELECT id, total_ms, trace FROM dictations ORDER BY id DESC LIMIT 5"
+```
+
 ## Downloading a support file
 
 Open Settings → Diagnostics → Download diagnostics. The app writes a uniquely named `speechify-diagnostics-*.json` file in Downloads and shows the saved path. Nothing is uploaded. If Downloads is unavailable or unwritable, the page shows an error and lets you retry.

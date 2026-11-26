@@ -13,8 +13,10 @@ use crate::pipeline::{self, Destination, Draft, Outcome, Request, RewriteCircuit
 use crate::session::{Effect, Event, Notice, Session};
 use crate::settings::{Retention, Settings};
 use crate::store::{self, Clock, Store};
+use crate::trace::{Stage, Timed};
 use crate::{teacher, Result};
 use serde::Serialize;
+use std::time::Instant;
 
 /// Whether the focused control accepts typed text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,6 +240,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                     }
                 }
                 Effect::Stop { command } => {
+                    let released = Instant::now();
                     self.reveal(&settings, None);
                     let audio = self.platform.stop_capture();
                     self.unmute();
@@ -246,7 +249,9 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                     }
                     let target = self.target.clone();
                     let selection = if command { self.platform.selection() } else { String::new() };
-                    let draft = std::mem::take(&mut self.draft);
+                    let mut draft = std::mem::take(&mut self.draft);
+                    draft.released = Some(released);
+                    draft.mark(Timed::since(Stage::Stop, released));
                     self.process(&settings, audio, draft, target, command, selection);
                     self.session.handle(Event::Finished, self.platform.now_ms());
                 }
@@ -384,6 +389,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
         command: bool,
         selection: String,
     ) {
+        let released = *draft.released.get_or_insert_with(Instant::now);
         self.platform.show(Bar::Processing);
         let clock = self.platform.clock();
         let request = Request {
@@ -397,7 +403,9 @@ impl<P: Platform, E: Engines> Controller<P, E> {
         let now_ms = self.platform.now_ms();
         let mut active = settings.clone();
         active.rewrite.enabled &= !self.rewrite_circuit.cooling(now_ms) || command;
+        let loading = Instant::now();
         let outcome = self.engines.everyday(&active).and_then(|(recognizer, rewriter)| {
+            draft.mark(Timed::since(Stage::Load, loading));
             pipeline::run_live(
                 &request,
                 &mut draft,
@@ -419,7 +427,9 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                 mut record,
                 press_enter,
             }) => {
+                let pasting = Instant::now();
                 let pasted = self.deliver(&paste, &target, press_enter);
+                record.trace.push(Timed::since(Stage::Paste, pasting).at(released));
                 record.outcome = if pasted { store::Outcome::Pasted } else { store::Outcome::Copied };
                 // A bare "press enter" typed nothing, so there is nothing to keep.
                 let typed = !record.text.is_empty();
@@ -905,6 +915,10 @@ mod tests {
             "paste:The plan is simple. That is all for this week. |Standard|usual delay"
         );
         assert_eq!(llm.seen().len(), 2);
+        let trace = app.store.last().unwrap().trace;
+        let settle = trace.iter().find(|span| span.stage == Stage::Settle).unwrap();
+        assert!(settle.at_ms >= 0);
+        assert_eq!(trace.iter().filter(|span| span.stage == Stage::Model).count(), 2);
     }
 
     #[test]
@@ -1138,6 +1152,16 @@ mod tests {
         );
         assert!(saved.audio.ends_with(".wav"));
         assert_eq!(app.platform.saved.len(), 1);
+        let steps: Vec<Stage> = saved
+            .trace
+            .iter()
+            .filter(|span| span.at_ms >= 0)
+            .map(|span| span.stage)
+            .collect();
+        for stage in [Stage::Stop, Stage::Load, Stage::Speech, Stage::Cleanup, Stage::Paste] {
+            assert!(steps.contains(&stage), "{stage:?} in {steps:?}");
+        }
+        assert_eq!(saved.trace.last().unwrap().stage, Stage::Paste);
     }
 
     #[test]
