@@ -38,14 +38,18 @@ Work spans, which can run alongside the steps or before the release:
 | Stage | What it covers |
 | --- | --- |
 | `piece` | Recognising one piece of the recording (or finishing a stream) |
+| `scan` | Looking for a pause to end a piece at, while you speak (about every 400 ms once a piece could end) |
 | `detect` | Finding the speech in a piece before it is recognised |
 | `feed` | Giving a streaming model more audio |
 | `model` | One language model request |
+
+Dictations that never reach History keep their trace too, in the `attempts` table: `ending` is `silent` (no speech heard), `nothing` (speech that came to nothing, such as fillers), `failed` (with the error shown in `error`) or `cancelled`. Each row also has `created_at`, `offset_min` and `duration_ms` (the recording's length), and no text. A model request whose answer came to nothing is still in the trace. These rows follow the History retention setting: kept, deleted after a day, or never stored. Deleting all history deletes them as well.
 
 To look at recent traces:
 
 ```sh
 sqlite3 speechify.db "SELECT id, total_ms, trace FROM dictations ORDER BY id DESC LIMIT 5"
+sqlite3 speechify.db "SELECT id, ending, error, trace FROM attempts ORDER BY id DESC LIMIT 5"
 ```
 
 ## Downloading a support file

@@ -54,7 +54,6 @@ pub struct Composed {
     /// snippet, row id), counted only once the whole dictation is done, so a
     /// cancelled one counts nothing.
     pub fired: Vec<(bool, i64)>,
-    pub asked: Option<Box<Timed>>,
 }
 
 /// Back off after two failed rewrites. The controller supplies monotonic time;
@@ -124,7 +123,7 @@ pub fn compose_guarded(
         store,
         rewriter,
     };
-    compose_part(raw, &to, circuit, Part::Whole)
+    compose_part(raw, &to, circuit, Part::Whole).0
 }
 
 /// Where composed text is going and with what.
@@ -149,15 +148,17 @@ enum Part<'a> {
     Block { before: &'a str, said: usize, last: bool },
 }
 
-fn compose_part(raw: &str, to: &Destination, circuit: (&mut RewriteCircuit, u64), part: Part) -> Option<Composed> {
+type Composing = (Option<Composed>, Option<Timed>);
+
+fn compose_part(raw: &str, to: &Destination, circuit: (&mut RewriteCircuit, u64), part: Part) -> Composing {
     match prepare(raw, to, (&*circuit.0, circuit.1), part) {
         Ok(asking) => ask_now(asking, to, circuit),
-        Err(done) => done,
+        Err(done) => (done, None),
     }
 }
 
 /// Asks the model and waits for its answer.
-fn ask_now(asking: Asking, to: &Destination, circuit: (&mut RewriteCircuit, u64)) -> Option<Composed> {
+fn ask_now(asking: Asking, to: &Destination, circuit: (&mut RewriteCircuit, u64)) -> Composing {
     let rewriter = to.rewriter.expect("only a model is asked");
     let started = Instant::now();
     let answer = rewriter.rewrite_timed(&asking.system, &asking.user);
@@ -292,7 +293,7 @@ fn conclude(
     (answer, start, took): Answered,
     to: &Destination,
     (circuit, now_ms): (&mut RewriteCircuit, u64),
-) -> Option<Composed> {
+) -> Composing {
     let Asking {
         mut out,
         heard,
@@ -305,7 +306,7 @@ fn conclude(
     let options = options(to, &rules, whole);
     out.rewrite_ms = took.as_millis() as u32;
     let model = answer.as_ref().ok().map(|(_, time)| *time);
-    out.asked = Some(Box::new(Timed {
+    let asked = Some(Timed {
         stage: Stage::Model,
         start,
         took,
@@ -314,12 +315,12 @@ fn conclude(
             model,
             ..Detail::default()
         },
-    }));
+    });
     let vetted = answer.map(|(text, _)| vet_cleanup_after(&heard, &text, &before));
     circuit.record(now_ms, matches!(vetted, Ok(Some(_))));
     let mut result = by_rules.clone();
     match vetted {
-        Ok(Some(text)) if text.is_empty() => return None,
+        Ok(Some(text)) if text.is_empty() => return (None, asked),
         Ok(Some(text)) => {
             // The model did the rewriting; the rule pass's count is the best
             // estimate of how much it fixed.
@@ -344,7 +345,7 @@ fn conclude(
     hits(&mut out, to, &rules, &result.fired, whole);
     out.fixes = result.edits.total();
     out.text = result.text;
-    (!out.text.is_empty() || out.press_enter).then_some(out)
+    ((!out.text.is_empty() || out.press_enter).then_some(out), asked)
 }
 
 /// What is pasted: a trailing space lets the next dictation continue the
@@ -364,14 +365,14 @@ fn finish_blocks(
     rest: &[String],
     to: &Destination,
     circuit: (&mut RewriteCircuit, u64),
-) -> Option<Composed> {
+) -> Composing {
     let literal = to.category.literal();
     let before = join_blocks(
         blocks.iter().map(|(raw, block)| (raw.as_str(), block.text.as_str())),
         literal,
     );
     let rest = rest.join(" ");
-    let last = compose_part(
+    let (last, asked) = compose_part(
         &rest,
         to,
         circuit,
@@ -400,7 +401,7 @@ fn finish_blocks(
     out.rewritten = all.iter().any(|(_, block)| block.rewritten);
     out.fixes = all.iter().map(|(_, block)| block.fixes).sum();
     out.fallback = all.iter().rev().find_map(|(_, block)| block.fallback.clone());
-    (!out.text.is_empty() || out.press_enter).then_some(out)
+    ((!out.text.is_empty() || out.press_enter).then_some(out), asked)
 }
 
 pub fn run(
@@ -492,6 +493,12 @@ impl Draft {
         }
     }
 
+    pub fn trace(&mut self, fallback: Instant) -> Vec<trace::Span> {
+        let mut spans = std::mem::take(&mut self.spans);
+        spans.extend(self.live.take_spans());
+        trace::spans(&spans, self.released.unwrap_or(fallback))
+    }
+
     pub fn mark(&mut self, timed: Timed) {
         let chunk = self.spans.iter().filter(|span| span.stage == timed.stage).count() as u32;
         self.spans.push(Timed {
@@ -503,13 +510,11 @@ impl Draft {
         });
     }
 
-    fn keep(&mut self, raw: String, composed: Option<Composed>) {
-        if let Some(mut block) = composed {
-            if let Some(asked) = block.asked.take() {
-                self.mark(*asked);
-            }
-            self.blocks.push((raw, block));
+    fn keep(&mut self, raw: String, (composed, asked): Composing) {
+        if let Some(asked) = asked {
+            self.mark(asked);
         }
+        self.blocks.extend(composed.map(|block| (raw, block)));
     }
 
     /// The text cleaned up so far.
@@ -663,8 +668,9 @@ pub fn run_live(
         previous: "",
     };
     let (circuit, now_ms) = circuit;
-    let Some(heard) = draft.live.finish(request.audio, recognizer, &hint)? else { return Ok(Outcome::Silent) };
+    let finished = draft.live.finish(request.audio, recognizer, &hint);
     draft.mark(Timed::since(Stage::Speech, started));
+    let Some(heard) = finished? else { return Ok(Outcome::Silent) };
     let raw = heard.raw;
     let asr_ms = started.elapsed().as_millis() as u32;
     if raw.is_empty() {
@@ -692,14 +698,15 @@ pub fn run_live(
         let rewriter = rewriter.ok_or("Command Mode needs the language model. Turn it on in Settings.")?;
         let (system, user) = command_prompt(request.selection, &raw, &vocabulary);
         let asked = Instant::now();
-        let (answer, model) = rewriter.rewrite_timed(&system, &user)?;
+        let answered = rewriter.rewrite_timed(&system, &user);
         let call = Timed::since(Stage::Model, asked).with(Detail {
             words: trace::words(&raw),
-            model: Some(model),
+            model: answered.as_ref().ok().map(|(_, model)| *model),
             ..Detail::default()
         });
         draft.mark(call);
         draft.mark(Timed::since(Stage::Cleanup, asked));
+        let (answer, _) = answered?;
         record.rewrite_ms = asked.elapsed().as_millis() as u32;
         record.text = vet_command(&answer).ok_or("The language model returned nothing for that command")?;
         record.rewritten = true;
@@ -729,13 +736,14 @@ pub fn run_live(
         } else {
             finish_blocks(blocks, rest, &to, (circuit, now_ms))
         };
-        let Some(mut composed) = composed else {
-            return Ok(Outcome::Nothing);
-        };
-        if let Some(asked) = composed.asked.take() {
-            draft.mark(*asked);
+        let (composed, asked) = composed;
+        if let Some(asked) = asked {
+            draft.mark(asked);
         }
         draft.mark(Timed::since(Stage::Cleanup, cleaning));
+        let Some(composed) = composed else {
+            return Ok(Outcome::Nothing);
+        };
         record.text = composed.text;
         record.rewritten = composed.rewritten;
         record.rewrite_ms = composed.rewrite_ms;
@@ -747,9 +755,7 @@ pub fn run_live(
     }
     record.words = record.text.split_whitespace().count() as u32;
     record.total_ms = started.elapsed().as_millis() as u32;
-    let mut spans = std::mem::take(&mut draft.spans);
-    spans.extend(draft.live.take_spans());
-    record.trace = trace::spans(&spans, draft.released.unwrap_or(started));
+    record.trace = draft.trace(started);
     let paste = if request.command { record.text.clone() } else { paste_form(&record.text, category) };
     Ok(Outcome::Text {
         paste,

@@ -244,7 +244,14 @@ impl Live {
             return Ok(false);
         }
         self.looked = length;
-        let Some(cut) = self.find_cut(pending, recognizer)? else { return Ok(false) };
+        let scanning = Instant::now();
+        let found = self.find_cut(pending, recognizer);
+        let detail = Detail {
+            audio_ms: Some((pending.len() / MS) as u32),
+            ..Detail::default()
+        };
+        self.mark(Stage::Scan, scanning, scanning.elapsed(), detail);
+        let Some(cut) = found? else { return Ok(false) };
         let trimmed = self.isolate(recognizer, &pending[..cut])?;
         // Silence needs no recogniser.
         let shared = if trimmed.samples.is_empty() { None } else { recognizer.share() };
@@ -619,6 +626,9 @@ mod tests {
         assert!(live.advance(&recording[..4800 * MS], &mut asr, &HINT).unwrap());
         assert_eq!(live.done(), 4400 * MS);
         assert_eq!(asr.heard.len(), 1);
+        let scans = live.spans.iter().filter(|span| span.stage == Stage::Scan).count();
+        assert_eq!(scans, 2);
+        assert_eq!(live.spans[0].detail.audio_ms, Some(4300));
         // The second piece has not ended; it is recognised when the recording does.
         let rest = &recording[live.done()..];
         assert!(!live.advance(&rest[..2500 * MS], &mut asr, &HINT).unwrap());

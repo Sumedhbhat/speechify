@@ -257,8 +257,20 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                 }
                 Effect::Discard { keep } => {
                     self.unsure = None;
+                    let released = Instant::now();
                     let audio = self.platform.stop_capture();
-                    self.draft = Draft::default();
+                    let mut draft = std::mem::take(&mut self.draft);
+                    draft.released = Some(released);
+                    draft.mark(Timed::since(Stage::Stop, released));
+                    if keep {
+                        self.note(
+                            &settings,
+                            &mut draft,
+                            store::Ending::Cancelled,
+                            String::new(),
+                            audio.len(),
+                        );
+                    }
                     self.unmute();
                     self.kept = keep.then(|| {
                         let selection = if self.command { self.platform.selection() } else { String::new() };
@@ -419,6 +431,15 @@ impl<P: Platform, E: Engines> Controller<P, E> {
         // The last speech actually recognised says how slow the recogniser
         // is; a silent ending says nothing and leaves the measure as it was.
         self.piece_cost_ms = draft.live.cost_ms();
+        let ending = match &outcome {
+            Ok(Outcome::Silent) => Some((store::Ending::Silent, String::new())),
+            Ok(Outcome::Nothing) => Some((store::Ending::Nothing, String::new())),
+            Err(error) => Some((store::Ending::Failed, error.clone())),
+            Ok(Outcome::Text { .. }) => None,
+        };
+        if let Some((ending, error)) = ending {
+            self.note(settings, &mut draft, ending, error, audio.len());
+        }
         match outcome {
             Ok(Outcome::Silent) => self.notice("No speech heard. Is your microphone muted?", true, false),
             Ok(Outcome::Nothing) => self.notice("Didn't catch that", false, false),
@@ -461,6 +482,23 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                 self.notice(&error, true, true);
             }
         }
+    }
+
+    fn note(&mut self, settings: &Settings, draft: &mut Draft, ending: store::Ending, error: String, samples: usize) {
+        if settings.retention == Retention::Never {
+            return;
+        }
+        let clock = self.platform.clock();
+        let _ = self.store.prune_attempts(settings.retention, clock);
+        let _ = self.store.add_attempt(&store::Attempt {
+            created_at: clock.now,
+            offset_min: clock.offset_min,
+            ending,
+            duration_ms: (samples as u64 * 1000 / crate::audio::RATE as u64) as u32,
+            error,
+            trace: draft.trace(Instant::now()),
+            ..store::Attempt::default()
+        });
     }
 
     /// Pastes into the focused field, or shows the copy card when there is
@@ -563,6 +601,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
     /// whether anything was removed, so the shell can refresh History.
     pub fn apply_retention(&mut self) -> bool {
         let settings = self.store.settings();
+        let _ = self.store.prune_attempts(settings.retention, self.platform.clock());
         let expired = self
             .store
             .expired(settings.retention, self.platform.clock())
@@ -1042,6 +1081,7 @@ mod tests {
         assert_eq!(app.platform.log, vec!["start:", "stop"]);
         assert_eq!(app.platform.bars, vec![Bar::Idle]);
         assert!(app.is_idle());
+        assert!(app.store.attempts(10).unwrap().is_empty());
 
         // Held on, it chimes and shows the bar once it cannot be typing.
         app.handle(Event::Down(Bind::PushToTalk));
@@ -1310,6 +1350,9 @@ mod tests {
         app.platform.now += 900;
         app.handle(Event::Tick);
         app.handle(Event::Down(Bind::Cancel));
+        let cancelled = &app.store.attempts(1).unwrap()[0];
+        assert_eq!(cancelled.ending, store::Ending::Cancelled);
+        assert_eq!(cancelled.trace.last().unwrap().stage, Stage::Stop);
         assert_eq!(
             app.platform.bars[1..],
             [
@@ -1339,6 +1382,7 @@ mod tests {
         let before = app.platform.log.len();
         app.handle(Event::Undo);
         assert_eq!(app.platform.log.len(), before);
+        assert_eq!(app.store.attempts(10).unwrap().len(), 1);
     }
 
     #[test]
@@ -1377,6 +1421,18 @@ mod tests {
             }
         );
         assert_eq!(app.platform.log.last().unwrap(), "chime:Error");
+        let attempts = app.store.attempts(10).unwrap();
+        let endings: Vec<store::Ending> = attempts.iter().map(|attempt| attempt.ending).collect();
+        assert_eq!(
+            endings,
+            [store::Ending::Failed, store::Ending::Nothing, store::Ending::Silent]
+        );
+        assert_eq!(attempts[0].error, "The speech model is still downloading");
+        assert_eq!(attempts[2].duration_ms, 2000);
+        let stages = |attempt: &store::Attempt| attempt.trace.iter().map(|span| span.stage).collect::<Vec<_>>();
+        assert!(stages(&attempts[2]).contains(&Stage::Speech));
+        assert!(stages(&attempts[1]).contains(&Stage::Piece));
+        assert_eq!(stages(&attempts[0]), [Stage::Stop]);
         app.engines.broken = None;
         app.engines.asr = Fixed::new(&["now it works fine"]);
         app.handle(Event::Undo);
@@ -1430,6 +1486,9 @@ mod tests {
         set(&mut app, |s| s.retention = Retention::Never);
         dictate(&mut app);
         assert!(app.store.all().unwrap().is_empty());
+        app.platform.audio = vec![0.0; 32_000];
+        dictate(&mut app);
+        assert!(app.store.attempts(10).unwrap().is_empty());
     }
 
     #[test]
@@ -1442,9 +1501,16 @@ mod tests {
             ..store::Dictation::default()
         };
         app.store.add_dictation(&old).unwrap();
+        app.store
+            .add_attempt(&store::Attempt {
+                created_at: 1_700_000_000,
+                ..store::Attempt::default()
+            })
+            .unwrap();
         set(&mut app, |s| s.retention = Retention::Day);
         dictate(&mut app);
         assert!(app.platform.log.contains(&"delete:old.wav".to_string()));
+        assert!(app.store.attempts(10).unwrap().is_empty());
         app.platform.save_fails = true;
         dictate(&mut app);
         assert_eq!(app.store.last().unwrap().audio, "");
