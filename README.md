@@ -76,7 +76,7 @@ If no text field has focus, or the paste fails, the bar shows a **copy card** ab
 
 ## First-run setup
 
-1. Open the Models page and download a speech model. Whisper large-v3 turbo (about 0.9 GB) is the default and needs a graphics card to feel fast. Parakeet TDT 0.6B v3 is the recommended choice without one.
+1. Open the Models page and download Parakeet Unified 0.6B (about 0.7 GB), which recognises speech as you talk. It needs a graphics card to keep up. Whisper large-v3 (about 1.7 GB) is optional: it reviews the day's dictations overnight.
 2. Optional: install [Ollama](https://ollama.com), then on the Models page pull the cleanup model (`qwen3:1.7b` by default). Without it, the rule-based formatter does the cleanup.
 3. Optional: pull a larger model for the nightly teacher (`qwen3.5:9b-q4_K_M` by default) and download Whisper large-v3 for it.
 4. On macOS, allow the microphone when asked. Accessibility access is needed to type into other apps. You allow it once: Speechify updates itself from Settings or the menu bar, and updates keep the permission.

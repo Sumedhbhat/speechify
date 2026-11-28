@@ -6,12 +6,11 @@ use std::sync::LazyLock;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Defaults {
+    /// The one model dictation uses, made to recognise speech as it is spoken.
     pub speech_model: String,
-    pub cpu_speech_model: String,
-    pub streaming_model: String,
     pub cleanup_model: String,
+    /// The one model the nightly review uses.
     pub teacher_speech_model: String,
-    pub cpu_teacher_speech_model: String,
     pub teacher_cleanup_model: String,
 }
 
@@ -126,8 +125,6 @@ impl Default for Styles {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Speech {
-    /// Catalog id of the on-device model.
-    pub model: String,
     /// "auto", "cpu", "vulkan", "metal" or "cuda".
     pub device: String,
     pub language: String,
@@ -135,35 +132,16 @@ pub struct Speech {
     pub remote_url: String,
     pub remote_key: String,
     pub remote_model: String,
-    /// Dictate with a model made to recognise speech as it is spoken,
-    /// instead of `model`.
-    pub streaming: bool,
-    /// Catalog id of that streaming model.
-    pub streaming_model: String,
-}
-
-impl Speech {
-    /// The catalog id of the model dictation uses.
-    pub fn active_model(&self) -> &str {
-        if self.streaming {
-            &self.streaming_model
-        } else {
-            &self.model
-        }
-    }
 }
 
 impl Default for Speech {
     fn default() -> Self {
         Self {
-            model: DEFAULTS.speech_model.clone(),
             device: "auto".into(),
             language: "en".into(),
             remote_url: String::new(),
             remote_key: String::new(),
             remote_model: "whisper-large-v3-turbo".into(),
-            streaming: false,
-            streaming_model: DEFAULTS.streaming_model.clone(),
         }
     }
 }
@@ -204,7 +182,6 @@ pub struct Teacher {
     pub enabled: bool,
     /// Local hour (0-23) after which the nightly review may run.
     pub hour: u32,
-    pub speech_model: String,
     pub rewrite_model: String,
     /// A correction seen this many times is added to the dictionary.
     pub learn_after: u32,
@@ -217,7 +194,6 @@ impl Default for Teacher {
         Self {
             enabled: true,
             hour: 2,
-            speech_model: DEFAULTS.teacher_speech_model.clone(),
             rewrite_model: DEFAULTS.teacher_cleanup_model.clone(),
             learn_after: 2,
             batch: 200,
@@ -299,14 +275,10 @@ mod tests {
     }
 
     #[test]
-    fn dictation_uses_the_streaming_model_only_when_streaming() {
-        let mut speech = Speech {
-            model: "whole".into(),
-            streaming_model: "pieces".into(),
-            ..Speech::default()
-        };
-        assert_eq!(speech.active_model(), "whole");
-        speech.streaming = true;
-        assert_eq!(speech.active_model(), "pieces");
+    fn model_choices_saved_by_older_versions_are_ignored() {
+        let old = r#"{"speech":{"model":"whisper-small","streaming":true,"streaming_model":"x","language":"de"},"teacher":{"speech_model":"whisper-small","hour":4}}"#;
+        let settings: Settings = serde_json::from_str(old).unwrap();
+        assert_eq!((settings.speech.language.as_str(), settings.teacher.hour), ("de", 4));
+        assert!(!serde_json::to_string(&settings).unwrap().contains("whisper-small"));
     }
 }

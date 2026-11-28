@@ -27,14 +27,11 @@ export function settings(): Settings {
     },
     styles: { personal: "casual", work: "formal", email: "formal", other: "casual" },
     speech: {
-      model: "turbo",
       device: "auto",
       language: "en",
       remote_url: "",
       remote_key: "",
       remote_model: "",
-      streaming: false,
-      streaming_model: "unified",
     },
     rewrite: {
       level: "light",
@@ -48,7 +45,6 @@ export function settings(): Settings {
     teacher: {
       enabled: false,
       hour: 3,
-      speech_model: "large",
       rewrite_model: "qwen2.5:7b",
       learn_after: 3,
       batch: 50,

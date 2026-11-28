@@ -20,14 +20,11 @@ export interface Settings {
   };
   styles: { personal: Style; work: Style; email: Style; other: Style };
   speech: {
-    model: string;
     device: string; // "auto" | "cpu" | "vulkan" | "metal" | "cuda"
     language: string;
     remote_url: string;
     remote_key: string;
     remote_model: string;
-    streaming: boolean; // dictate with streaming_model instead of model
-    streaming_model: string;
   };
   rewrite: {
     level: "none" | "light" | "medium";
@@ -41,7 +38,6 @@ export interface Settings {
   teacher: {
     enabled: boolean;
     hour: number;
-    speech_model: string;
     rewrite_model: string;
     learn_after: number;
     batch: number;

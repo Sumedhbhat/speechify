@@ -70,13 +70,11 @@ fn target() -> Target {
         ..Target::default()
     }
 }
-fn settings(model: &str) -> Settings {
+fn settings() -> Settings {
     let mut s = Settings::default();
-    s.speech.model = model.into();
     s.speech.device = "cpu".into();
     s.rewrite.enabled = false;
     s.styles.work = Style::Formal;
-    s.teacher.speech_model = "whisper-large-v3-turbo".into();
     s.teacher.batch = 1;
     s
 }
@@ -202,7 +200,7 @@ fn student(clips: &[Clip], study: &Path, model: &str, phase: &str) -> Result<()>
         let learned = Store::open(&store_path(study, &c.scenario))?;
         let empty = Store::memory();
         let store = if phase == "learned" || c.split == "history" { &learned } else { &empty };
-        let row = pipeline_row(c, &settings(model), store, &mut engine)?;
+        let row = pipeline_row(c, &settings(), store, &mut engine)?;
         if phase == "baseline" && c.split == "history" {
             if let Some(value) = row.get("record").filter(|v| !v.is_null()) {
                 let mut d: speechify_core::store::Dictation =
@@ -271,7 +269,7 @@ fn review(clips: &[Clip], study: &Path, model: &str, history_only: bool) -> Resu
             save(&marker, &json!({"scenario": scenario, "id": c.id}))?;
             let store = Store::open(&store_path(study, scenario))?;
             let start = Instant::now();
-            let report = teacher::review(&store, &settings(model), &mut engine, None, &samples, CLOCK, &|| true)?;
+            let report = teacher::review(&store, &settings(), &mut engine, None, &samples, CLOCK, &|| true)?;
             let row = store.dictation(d.id)?;
             result
                 .rows
@@ -293,7 +291,7 @@ fn review(clips: &[Clip], study: &Path, model: &str, history_only: bool) -> Resu
         if result.rows.iter().any(|v| v["id"] == c.id) {
             continue;
         }
-        let row = pipeline_row(c, &settings(model), &Store::memory(), &mut engine)?;
+        let row = pipeline_row(c, &settings(), &Store::memory(), &mut engine)?;
         result.rows.push(row);
         save(&output, &result)?;
         eprintln!("teacher test {} {:.1}ms", c.id, engine.elapsed_ms);
@@ -350,7 +348,7 @@ fn formatting(cases_path: &Path, output: &Path, llm: bool, timeout_secs: u64) ->
         if rows.iter().any(|v| v["id"] == c.id) {
             continue;
         }
-        let mut s = settings("");
+        let mut s = settings();
         s.rewrite.enabled = llm;
         s.rewrite.min_words = 0;
         let start = Instant::now();
@@ -388,7 +386,7 @@ impl Recognizer for Replay {
     }
 }
 fn cleanup_row(c: &Clip, raw: &str, phase: &str, store: &Store, chat: &Capture<'_>) -> Value {
-    let mut s = settings("");
+    let mut s = settings();
     s.rewrite.enabled = true; // Keep the everyday six-word minimum.
     let start = Instant::now();
     let composed = pipeline::compose(raw, &target(), Category::Work, &s, store, Some(chat));
@@ -482,7 +480,7 @@ fn cleanup_study(clips: &[Clip], native_study: &Path, output_dir: &Path) -> Resu
             .map_err(|e| e.to_string())?;
             save(&marker, &json!({"scenario":scenario,"id":c.id}))?;
             let store = Store::open(&store_path(output_dir, scenario))?;
-            let mut s = settings("");
+            let mut s = settings();
             s.rewrite.enabled = true;
             let start = Instant::now();
             let report = teacher::review(
@@ -549,7 +547,7 @@ fn quiet_probe(model: &str, path: &str, output: &Path) -> Result<()> {
                 selection: "",
                 clock: CLOCK,
             },
-            &settings(model),
+            &settings(),
             &Store::memory(),
             &mut engine,
             None,
@@ -592,7 +590,7 @@ fn example_probe(study: &Path, output: &Path) -> Result<()> {
     };
     let report = teacher::review(
         &store,
-        &settings(""),
+        &settings(),
         &mut recognizer,
         None,
         &|name| samples(&Path::new(ROOT).join("audio").join(name).to_string_lossy()),
@@ -674,7 +672,7 @@ fn history_audit(clips: &[Clip], native: &Path, output: &Path) -> Result<()> {
             })?;
             teacher::review(
                 &store,
-                &settings(""),
+                &settings(),
                 &mut Replay { raw: heard.into() },
                 None,
                 &samples,
@@ -694,7 +692,7 @@ fn history_audit(clips: &[Clip], native: &Path, output: &Path) -> Result<()> {
                 ("corroborated", &store),
                 ("single-sighting", &naive),
             ] {
-                let composed = pipeline::compose(raw, &target(), Category::Work, &settings(""), dictionary, None);
+                let composed = pipeline::compose(raw, &target(), Category::Work, &settings(), dictionary, None);
                 rows.push(json!({"id":c.id,"scenario":scenario,"split":"history","reference":c.reference,"raw":raw,"phase":phase,"text":composed.map(|v|v.text).unwrap_or_default()}));
             }
         }

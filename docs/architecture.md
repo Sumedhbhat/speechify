@@ -179,7 +179,7 @@ The model is asked on a thread of its own too. A cancel forgets the block. A key
 
 ### Streaming models
 
-Some models are trained to recognise speech as it arrives, rather than a finished recording: Parakeet Unified is the one in the catalog (`streaming: true`). They are a separate setup. On the Models page they have their own section; choosing one sets `speech.streaming` and `speech.streaming_model`, and choosing an ordinary model turns streaming off again. `Speech::active_model` says which model dictation uses, and only that one is loaded. Streaming models are never offered as the teacher.
+Dictation always uses Parakeet Unified (`catalog::dictation()`), a model trained to recognise speech as it arrives rather than a finished recording (`streaming: true`). It is the only dictation model in the catalog and there is no setting to choose another. The nightly review always uses Whisper large-v3 (`catalog::teacher()`), the catalog's only other model. A remote speech server, when set, still replaces the local dictation model.
 
 `Live` notices a streaming recogniser (`Recognizer::streams`) on its first tick and then does not look for pauses at all. Every 480 ms of new audio goes to the model through transcribe.cpp's stream API (`transcribe_stream_begin`, `_feed`, `_finalize`), on a job thread like a piece. The model reports the text it has settled on, which later audio cannot change. Each settled sentence, once the next one has begun, becomes a piece, so `Draft` cleans up blocks exactly as before. On key-up only the audio since the last feed is left: it is fed, the stream is finalised (which flushes the model's one-second lookahead), and the final text is used.
 
