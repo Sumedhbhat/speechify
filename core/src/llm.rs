@@ -103,7 +103,7 @@ impl Chat {
         if self.openai() {
             let mut body = json!({"model": self.model, "messages": messages, "temperature": 0, "stream": false});
             if think_off {
-                // llama.cpp and vLLM hand these to the chat template; Qwen3's
+                // OpenAI-compatible servers hand these to the chat template; Qwen3's
                 // reads enable_thinking, and templates without it ignore it.
                 body["chat_template_kwargs"] = json!({"enable_thinking": false});
             }
