@@ -171,16 +171,20 @@ jobs:
         with:
           path: .build/default-models
           key: default-models-${{ hashFiles('core/defaults.json', 'core/src/catalog.rs') }}
+      # Only the CPU part of Ollama (tens of MB) is kept and cached. The cleanup model
+      # is pulled from Ollama's registry on every run instead: a few GB per platform
+      # and branch would push the other caches out of the repository's 10 GB.
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: .build/llm/llama-*
-          key: llama-server-${{ runner.os }}-${{ hashFiles('perf/fetch-llm.py') }}
-      - name: Fetch the language model server and model
-        run: '"${{ matrix.python }}" perf/fetch-llm.py .build/llm'
+          path: .build/llm/ollama
+          key: ollama-${{ runner.os }}-${{ hashFiles('perf/fetch-ollama.py') }}
+      - name: Fetch Ollama
+        run: '"${{ matrix.python }}" perf/fetch-ollama.py .build/llm'
       - name: Measure speed and run the scenarios
         env:
           PERF_PLATFORM: ${{ matrix.platform }}
           PERF_MODELS_DIR: .build/default-models
+          PYTHON: ${{ matrix.python }}
         run: |
           chmod +x ".build/perf-bin/perf${{ matrix.exe }}"
           source .build/test-env.sh

@@ -76,7 +76,7 @@ The jobs run in this order:
    - **Cleanup**: raw text to the typed text. It reports the rule formatter's time over every scenario, and the language model's typical and slowest call times. It also counts how many of the model's answers the app rejected, using the rules instead.
    - **Scenarios**: each case in `perf/scenarios.json` runs through the rules alone and through the default language model, with the real system prompt (`core/src/prompts/cleanup.txt`), vetting and fallback. Results are grouped by `kind`: corrections, repetition, lists, paragraphs, fillers, formatting, and keep as said.
 
-   The language model runs on the CPU under llama.cpp `b12211`, which `perf/fetch-llm.py` pins by SHA-256. CI gives each request 180 seconds instead of the app's 6, and sends short dictations to the model too, so the prompt is judged on its answers rather than on how fast the runner is.
+   The language model runs under Ollama `v0.40.19`, which `perf/fetch-ollama.py` pins by SHA-256, and is called through Ollama's own `/api/chat` with thinking off, the way the app calls it by default. `perf/run.sh` starts an Ollama of its own on port 8089 (`PERF_LLM_PORT`) with its models in `.build/llm/models`, one request at a time and a 4096-token context. On Linux and Windows the fetch keeps only Ollama's CPU libraries, leaving out the CUDA and Vulkan ones, so the model runs on the CPU; on macOS Ollama uses Metal when the machine offers it, as the app does. CI gives each request 180 seconds instead of the app's 6, and sends short dictations to the model too, so the prompt is judged on its answers rather than on how fast the runner is.
 3. **Performance report** waits for every Measure job and runs `.github/actions/performance-report` with one input, `target`:
    - `branch` (pull requests): downloads `performance.json` from the newest nightly release that has one, and adds a new comment to the pull request on every run, headed with the commit it measured, so the comments read as a timeline of what each push changed. The layout is the template `perf/perf_comment.md`; `perf_report.py` fills in its `$name` fields, so a wording or order change goes in the template, not the script.
    - `main` (pushes to `main`): saves the three platforms as the `performance-baseline` artifact, only when all three were measured. `release.yml` attaches it to the nightly release as `performance.json`. When there is none, because the gate was skipped or a platform was missing, `release.yml` copies `performance.json` from the newest earlier nightly that has one.
@@ -106,20 +106,20 @@ None of this fails a pull request over a slower number or a worse scenario. The 
 - `teacher_speech_model` and `cpu_teacher_speech_model`: the nightly review's speech models, with and without a graphics card.
 - `teacher_cleanup_model`: the nightly review's cleanup model.
 
-Speech models are catalog ids (`core/src/catalog.rs`), and CI downloads them through the catalog with its pinned checksum. For the cleanup model, `perf/fetch-llm.py` reads the Ollama tag, looks it up in Ollama's registry, and downloads the same weights Ollama would, checked against the digest the registry gives. Ollama tags can move, so the results record that digest. Changing a default changes the app and the next CI measurement together. The catalog test fails if a speech default is not in the catalog.
+Speech models are catalog ids (`core/src/catalog.rs`), and CI downloads them through the catalog with its pinned checksum. For the cleanup model, `perf/run.sh` pulls the Ollama tag into its own Ollama, which checks the download against the registry's digests. Ollama tags can move, so the results record the digest of the weights that were pulled (`perf/fetch-ollama.py digest`). Changing a default changes the app and the next CI measurement together. The catalog test fails if a speech default is not in the catalog.
 
 `release.yml` grants its `Tests` job `pull-requests: write` because Performance report asks for it, and a reusable workflow cannot ask for more than its caller. On pushes it does not comment.
 
 Each scenario needs an `id`, a `kind`, the `raw` text and at least one check. `perf` refuses to run on an unknown key, a duplicate id, `items` without `list`, or an unknown category, so a misspelt check cannot pass silently. Scenario checks: `equals` (exact text), `contains` (each entry a phrase, or a list of alternatives), `absent` (phrases that must not remain, matched as whole words), `list` (`numbered`, `bullets` or `none`) with `items`, `paragraphs` (blocks separated by a blank line) and `min_lines`. `category` is `work` (the default, typing into Slack), `email`, `code` or `personal`. Some scenarios describe behaviour the app does not have yet, such as bullet points for items that are listed without being counted. They fail until it does, and the comment shows when that changes.
 
-To run it locally (Linux):
+To run it locally (Linux or macOS):
 
 ```
 npx moon run perf:measure          # perf/measure.sh: fetches, builds and writes .build/perf/local.json
 python3 perf/perf_report.py .build/perf --head-sha local --out-json .build/perf/record.json --out-md .build/perf/comment.md
 ```
 
-`perf/measure.sh` runs `fetch-test-fixtures.sh`, `perf/fetch-llm.py .build/llm`, the release build, and `perf/run.sh`. Without `PERF_LLM_URL`, `target/release/perf perf/scenarios.json OUT.json` skips the cleanup model and runs everything else.
+`perf/measure.sh` runs `fetch-test-fixtures.sh`, `perf/fetch-ollama.py .build/llm`, the release build, and `perf/run.sh`, which needs port 8089 free; set `PERF_LLM_PORT` to use another. It never uses an Ollama you already run. Without `PERF_LLM_URL`, `target/release/perf perf/scenarios.json OUT.json` skips the cleanup model and runs everything else.
 
 Tests: `npx moon run perf:test` (`cargo test -p speechify-perf`) covers the scenario checker and validation, and `npx moon run perf:test-report` (`python3 -m unittest discover -s perf -p 'test_*.py'`) covers the report. CI runs the first on every platform and the second on Linux, whenever `perf/` is affected.
 
