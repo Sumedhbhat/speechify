@@ -32,11 +32,6 @@ pub fn get_settings(shared: App) -> Settings {
 pub fn save_settings(app: AppHandle, shared: App, settings: Settings) -> Result<()> {
     // Reject unusable shortcuts before anything is stored.
     Tracker::new(&settings.hotkeys)?;
-    catalog::find(&settings.speech.model)?;
-    if settings.speech.streaming && !catalog::find(&settings.speech.streaming_model)?.streaming {
-        return Err("That model cannot recognise speech as you speak".into());
-    }
-    catalog::find(&settings.teacher.speech_model)?;
     let launcher = app.autolaunch();
     let launch_result = if settings.launch_at_login { launcher.enable() } else { launcher.disable() };
     launch_result.map_err(|error| format!("Could not update launch at login: {error}"))?;
@@ -293,14 +288,14 @@ pub struct SpeechModel {
 
 #[tauri::command]
 pub fn models(shared: App) -> Vec<SpeechModel> {
-    let settings = shared.db().settings();
     let dir = shared.models_dir();
+    let (dictation, teacher) = (catalog::dictation().id, catalog::teacher().id);
     catalog::models()
         .into_iter()
         .map(|model| SpeechModel {
             installed: catalog::installed(&dir, &model),
-            active: settings.speech.active_model() == model.id,
-            teacher: settings.teacher.speech_model == model.id,
+            active: model.id == dictation,
+            teacher: model.id == teacher,
             id: model.id,
             name: model.name,
             bytes: model.bytes,

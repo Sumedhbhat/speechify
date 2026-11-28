@@ -22,96 +22,29 @@ const button = (root: ParentNode, text: string) => byText<HTMLButtonElement>(roo
 beforeEach(() => {
   ctx = makeDeps();
   ctx.api.models.mockResolvedValue([
-    model(),
-    model({
-      id: "small",
-      name: "Whisper small",
-      bytes: 480_000_000,
-      wants_gpu: false,
-      active: false,
-      teacher: false,
-    }),
+    model({ id: "unified", name: "Parakeet Unified", streaming: true }),
     model({ id: "large", name: "Whisper large", installed: false, active: false, teacher: true }),
-    model({ id: "medium", name: "Whisper medium", active: false, teacher: true }),
   ]);
 });
 
 describe("models page", () => {
-  it("shows speech models with their size and state", async () => {
+  it("shows the dictation and nightly review models with their size and state", async () => {
     await setup();
-    const turbo = card("Whisper turbo");
-    expect(turbo.classList.contains("active")).toBe(true);
-    expect(turbo.textContent).toContain("1.6 GB");
-    expect(turbo.textContent).toContain("Needs a graphics card");
-    expect(turbo.textContent).toContain("Used for dictation");
-    expect(button(turbo, "In use").disabled).toBe(true);
-    expect(card("Whisper small").textContent).toContain("480 MB");
-    expect(card("Whisper small").textContent).not.toContain("Needs a graphics card");
-    expect(card("Whisper large").textContent).toContain("Teacher");
-    expect(button(card("Whisper large"), "Download")).toBeTruthy();
-    expect(button(card("Whisper medium"), "Teacher").disabled).toBe(true);
-  });
-
-  it("picks models for dictation and for the teacher", async () => {
-    await setup();
-    button(card("Whisper small"), "Use for dictation").click();
-    await settle();
-    expect(ctx.api.saveSettings).toHaveBeenLastCalledWith(
-      expect.objectContaining({ speech: expect.objectContaining({ model: "small" }) }),
-    );
-    expect(ctx.api.models).toHaveBeenCalledTimes(2);
-
-    button(card("Whisper small"), "Use as teacher").click();
-    await settle();
-    expect(ctx.api.saveSettings).toHaveBeenLastCalledWith(
-      expect.objectContaining({ teacher: expect.objectContaining({ speech_model: "small" }) }),
-    );
-
-    ctx.api.saveSettings.mockRejectedValueOnce("That model is not installed.");
-    button(card("Whisper small"), "Use for dictation").click();
-    await settle();
-    expect(ctx.api.models).toHaveBeenCalledTimes(3);
-    expect(ctx.onError).toHaveBeenCalledWith("That model is not installed.");
-  });
-
-  it("keeps streaming models apart and switches between the two setups", async () => {
-    ctx.api.models.mockResolvedValue([
-      model(),
-      model({ id: "unified", name: "Parakeet Unified", streaming: true, active: false }),
-    ]);
-    await setup();
-    const streaming = byText(document, "h2", "Recognise as you speak").closest("section")!;
     const unified = card("Parakeet Unified");
-    expect(streaming.contains(unified)).toBe(true);
-    expect(streaming.contains(card("Whisper turbo"))).toBe(false);
-    // The teacher should be the most accurate model, never a streaming one.
-    expect(unified.textContent).not.toContain("Use as teacher");
-
-    // Once chosen, the list comes back with the streaming model in use.
-    ctx.api.models.mockResolvedValue([
-      model({ active: false }),
-      model({ id: "unified", name: "Parakeet Unified", streaming: true, active: true }),
-    ]);
-    button(unified, "Use for dictation").click();
-    await settle();
-    expect(ctx.api.saveSettings).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        speech: expect.objectContaining({
-          streaming: true,
-          streaming_model: "unified",
-          model: "turbo",
-        }),
-      }),
-    );
-
-    expect(button(card("Parakeet Unified"), "In use").disabled).toBe(true);
-    button(card("Whisper turbo"), "Use for dictation").click();
-    await settle();
-    expect(ctx.api.saveSettings).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        speech: expect.objectContaining({ streaming: false, model: "turbo" }),
-      }),
-    );
+    expect(unified.classList.contains("active")).toBe(true);
+    expect(unified.textContent).toContain("1.6 GB");
+    expect(unified.textContent).toContain("Needs a graphics card");
+    expect(unified.textContent).toContain("Used for dictation");
+    expect(unified.textContent).not.toContain("Nightly review");
+    expect(button(unified, "Delete")).toBeTruthy();
+    const large = card("Whisper large");
+    expect(large.classList.contains("active")).toBe(false);
+    expect(large.textContent).toContain("Nightly review");
+    expect(button(large, "Download")).toBeTruthy();
+    // There is nothing to choose between.
+    expect(document.body.textContent).not.toContain("Use for dictation");
+    expect(document.body.textContent).not.toContain("Use as teacher");
+    expect(document.body.textContent).not.toContain("Recognise as you speak");
   });
 
   it("downloads with live progress and can cancel", async () => {
@@ -148,7 +81,7 @@ describe("models page", () => {
     ctx.emit("modelProgress", { id: "large", done: 1, total: 1, finished: true, error: "" });
     await settle();
     expect(card("Whisper large").querySelector("progress")).toBeNull();
-    expect(button(card("Whisper large"), "Use for dictation")).toBeTruthy();
+    expect(button(card("Whisper large"), "Delete")).toBeTruthy();
   });
 
   it("shows progress started elsewhere and failed downloads", async () => {
@@ -185,11 +118,11 @@ describe("models page", () => {
 
   it("deletes an installed model after confirming", async () => {
     await setup();
-    const remove = button(card("Whisper small"), "Delete");
+    const remove = button(card("Parakeet Unified"), "Delete");
     remove.click();
     remove.click();
     await settle();
-    expect(ctx.api.deleteModel).toHaveBeenCalledWith("small");
+    expect(ctx.api.deleteModel).toHaveBeenCalledWith("unified");
     expect(ctx.api.models).toHaveBeenCalledTimes(2);
   });
 

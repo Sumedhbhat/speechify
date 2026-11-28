@@ -1,4 +1,4 @@
-// Models: speech models to download and pick, the device, the language model.
+// Models: the two speech models to download, the device, the language model.
 
 import type { Progress, RewriteStatus, Settings, SpeechModel, Status } from "../api";
 import { number, select, text, toggle } from "../controls";
@@ -64,7 +64,6 @@ export function createModelsPage(deps: Deps): Page {
   let modelInput: HTMLInputElement | undefined;
 
   const cards = h("div", { className: "model-grid" });
-  const streamCards = h("div", { className: "model-grid" });
   const device = h("div");
   const language = h("div");
   const pullMeter = h("div", { className: "pull" });
@@ -116,19 +115,13 @@ export function createModelsPage(deps: Deps): Page {
     renderCards();
   }
 
-  /** Saves a model choice; the cards are redrawn once it is accepted. */
-  async function choose(change: (settings: Settings) => void): Promise<void> {
-    const error = await store.update(change);
-    if (!error) await guard(reloadModels);
-  }
-
   function card(model: SpeechModel): HTMLElement {
     const progress = downloads.get(model.id);
     const tags = h("p", { className: "tags" }, [
       h("span", { className: "chip", textContent: formatBytes(model.bytes) }),
       model.wants_gpu && h("span", { className: "chip", textContent: "Needs a graphics card" }),
       model.active && h("span", { className: "chip accent", textContent: "Used for dictation" }),
-      model.teacher && h("span", { className: "chip", textContent: "Teacher" }),
+      model.teacher && h("span", { className: "chip", textContent: "Nightly review" }),
     ]);
     let actions: HTMLElement;
     if (progress) {
@@ -153,28 +146,6 @@ export function createModelsPage(deps: Deps): Page {
       ]);
     } else {
       actions = h("div", { className: "model-actions" }, [
-        h("button", {
-          type: "button",
-          className: "btn primary",
-          textContent: model.active ? "In use" : "Use for dictation",
-          disabled: model.active,
-          onclick: () =>
-            void choose((s) => {
-              // Picking a model from either list sets which setup dictation uses.
-              s.speech.streaming = model.streaming;
-              if (model.streaming) s.speech.streaming_model = model.id;
-              else s.speech.model = model.id;
-            }),
-        }),
-        // The nightly teacher wants the most accurate model, not a streaming one.
-        !model.streaming &&
-          h("button", {
-            type: "button",
-            className: "btn",
-            textContent: model.teacher ? "Teacher" : "Use as teacher",
-            disabled: model.teacher,
-            onclick: () => void choose((s) => (s.teacher.speech_model = model.id)),
-          }),
         confirmButton(
           "Delete",
           "Delete it?",
@@ -192,8 +163,7 @@ export function createModelsPage(deps: Deps): Page {
 
   function renderCards(): void {
     meters.clear();
-    cards.replaceChildren(...models.filter((model) => !model.streaming).map(card));
-    streamCards.replaceChildren(...models.filter((model) => model.streaming).map(card));
+    cards.replaceChildren(...models.map(card));
   }
 
   async function download(model: SpeechModel): Promise<void> {
@@ -423,17 +393,12 @@ export function createModelsPage(deps: Deps): Page {
   });
 
   const el = h("div", { className: "page models" }, [
-    pageHeader("Models", "Everything runs on this computer. Pick what fits your hardware."),
+    pageHeader("Models", "Everything runs on this computer."),
     section(
       "Speech models",
-      "Bigger models are more accurate but slower. Without a graphics card, pick a small one.",
+      "Dictation hears your words while you talk, so the text is ready almost as soon as you stop. " +
+        "A larger model reviews the day's dictations overnight to learn your corrections.",
       [cards, device],
-    ),
-    section(
-      "Recognise as you speak",
-      "A streaming model hears your words while you talk, so the text is ready almost as soon as you stop. " +
-        "It needs a graphics card to keep up. Pick a model above to go back.",
-      [streamCards],
     ),
     section("Language model", "", [language]),
   ]);

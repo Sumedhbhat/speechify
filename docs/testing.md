@@ -99,14 +99,12 @@ None of this fails a pull request over a slower number or a worse scenario. The 
 
 `core/defaults.json` holds the models the app starts with and the ones CI measures:
 
-- `speech_model`: the speech model on a machine with a graphics card. It is also the model in `Settings::default()`, and the one Transcription measures.
-- `cpu_speech_model`: what first start picks without a graphics card.
-- `streaming_model`
+- `speech_model`: the one speech model dictation uses (Parakeet Unified, a streaming model), and the one Transcription measures. There is no setting for it.
 - `cleanup_model`: the Ollama tag for cleanup, which Cleanup and Scenarios use.
-- `teacher_speech_model` and `cpu_teacher_speech_model`: the nightly review's speech models, with and without a graphics card.
+- `teacher_speech_model`: the nightly review's speech model (Whisper large-v3). There is no setting for it either.
 - `teacher_cleanup_model`: the nightly review's cleanup model.
 
-Speech models are catalog ids (`core/src/catalog.rs`), and CI downloads them through the catalog with its pinned checksum. For the cleanup model, `perf/fetch-llm.py` reads the Ollama tag, looks it up in Ollama's registry, and downloads the same weights Ollama would, checked against the digest the registry gives. Ollama tags can move, so the results record that digest. Changing a default changes the app and the next CI measurement together. The catalog test fails if a speech default is not in the catalog.
+Speech models are catalog ids (`core/src/catalog.rs`), and CI downloads them through the catalog with its pinned checksum. For the cleanup model, `perf/fetch-llm.py` reads the Ollama tag, looks it up in Ollama's registry, and downloads the same weights Ollama would, checked against the digest the registry gives. Ollama tags can move, so the results record that digest. Changing a default changes the app and the next CI measurement together. The catalog test fails if a speech default is not in the catalog, which holds only these two speech models.
 
 `release.yml` grants its `Tests` job `pull-requests: write` because Performance report asks for it, and a reusable workflow cannot ask for more than its caller. On pushes it does not comment.
 
