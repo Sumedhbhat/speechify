@@ -364,7 +364,8 @@ pub fn vet_cleanup_after(raw: &str, output: &str, before: &str) -> Option<String
         return None;
     }
     let kept = written.iter().filter(|word| heard.contains(word)).count();
-    if (kept as f64) < written.len() as f64 * 0.5 {
+    // An answer with no words at all ("2.") is not a cleanup of speech that had some.
+    if (written.is_empty() && !heard.is_empty()) || (kept as f64) < written.len() as f64 * 0.5 {
         return None;
     }
     Some(text)
@@ -722,6 +723,9 @@ mod tests {
 
     #[test]
     fn rejects_answers_instead_of_cleanups() {
+        // A stray list marker or number is not a cleanup of a sentence.
+        assert_eq!(vet_cleanup("let's meet at 2 actually 3 tomorrow", "2."), None);
+        assert_eq!(vet_cleanup("what time is the standup tomorrow", "2."), None);
         assert_eq!(
             vet_cleanup(
                 "what is the capital of france",
