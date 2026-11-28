@@ -14,9 +14,6 @@ pub const LIMIT_MS: u64 = 20 * 60_000;
 pub enum Event {
     Down(Bind),
     Up(Bind),
-    /// The shortcut turned out to be part of another key combination, such
-    /// as Shift+A: drop the recording without a word.
-    Abort(Bind),
     /// All keys are up.
     Released,
     /// The bar was clicked at rest, or its stop button while recording.
@@ -147,11 +144,6 @@ impl Session {
                 self.paste_pending = !self.is_recording();
                 vec![]
             }
-            (_, Abort(PasteLast | CopyLast)) => {
-                self.paste_pending = false;
-                self.copy_pending = false;
-                vec![]
-            }
             (State::Idle | State::Busy, Down(CopyLast)) => {
                 self.copy_pending = true;
                 vec![]
@@ -226,18 +218,6 @@ impl Session {
                     warned,
                 };
                 vec![Effect::Mode { command, locked: true }]
-            }
-            // A double-tap whose second press was the start of a capital is
-            // not a lock either.
-            (State::Held { by, .. }, Abort(aborted)) if aborted == by => {
-                self.state = State::Idle;
-                vec![Effect::Discard { keep: false }]
-            }
-            // Only the press that locked can still be aborted: any later
-            // dictation shortcut stops the recording when it goes down.
-            (State::Locked { .. }, Abort(PushToTalk | HandsFree | Command)) => {
-                self.state = State::Idle;
-                vec![Effect::Discard { keep: false }]
             }
             (State::Held { since, by, command, .. }, Up(released)) if released == by => {
                 if now.saturating_sub(since) < TAP_MS {
@@ -381,37 +361,6 @@ mod tests {
         assert_eq!(s.handle(Tick, 700 + LATE_MS - 1), vec![]);
         assert_eq!(s.handle(Tick, 700 + LATE_MS), vec![Effect::Discard { keep: false }]);
         assert_eq!(s.handle(Undo, 800), vec![]);
-    }
-
-    #[test]
-    fn an_aborted_press_is_dropped_silently() {
-        let mut s = Session::new();
-        s.handle(Down(PushToTalk), 0);
-        // Another shortcut aborting does not touch this recording.
-        assert_eq!(s.handle(Abort(Command), 100), vec![]);
-        assert_eq!(s.handle(Abort(PushToTalk), 200), vec![Effect::Discard { keep: false }]);
-        assert!(!s.is_recording());
-        assert_eq!(s.handle(Up(PushToTalk), 300), vec![]);
-        assert_eq!(s.handle(Undo, 400), vec![]);
-        // It does not count as the first half of a double-tap.
-        assert_eq!(s.handle(Down(PushToTalk), 500), START);
-        assert!(!s.awaits_tap());
-    }
-
-    #[test]
-    fn a_double_tap_whose_second_press_was_typing_is_dropped() {
-        let mut s = Session::new();
-        s.handle(Down(PushToTalk), 0);
-        s.handle(Up(PushToTalk), 100);
-        assert!(s.awaits_tap());
-        s.handle(Down(PushToTalk), 300);
-        assert_eq!(s.handle(Abort(PushToTalk), 400), vec![Effect::Discard { keep: false }]);
-        // A modifier-only hands-free shortcut that was the start of Ctrl+C.
-        s.handle(Down(HandsFree), 1000);
-        // Paste and copy leave a recording running, and so does their abort.
-        assert_eq!(s.handle(Abort(PasteLast), 1050), vec![]);
-        assert_eq!(s.handle(Abort(HandsFree), 1100), vec![Effect::Discard { keep: false }]);
-        assert!(!s.is_recording());
     }
 
     #[test]
@@ -588,11 +537,6 @@ mod tests {
         assert_eq!(s.handle(Released, 60), vec![]);
         assert_eq!(s.handle(Down(CopyLast), 70), vec![]);
         assert_eq!(s.handle(Released, 80), vec![Effect::CopyLast]);
-        // The start of another shortcut does not paste or copy.
-        s.handle(Down(PasteLast), 90);
-        s.handle(Down(CopyLast), 91);
-        assert_eq!(s.handle(Abort(CopyLast), 92), vec![]);
-        assert_eq!(s.handle(Released, 93), vec![]);
         s.handle(Down(PushToTalk), 100);
         assert_eq!(s.handle(Down(PasteLast), 200), vec![]);
         assert_eq!(s.handle(Down(CopyLast), 210), vec![]);

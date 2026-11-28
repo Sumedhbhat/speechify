@@ -329,7 +329,6 @@ pub fn start(app: AppHandle) -> Result<Arc<Shared>, Box<dyn std::error::Error>> 
                 let event = match edge {
                     Edge::Down(bind) => Event::Down(bind),
                     Edge::Up(bind) => Event::Up(bind),
-                    Edge::Abort(bind) => Event::Abort(bind),
                     Edge::Released => Event::Released,
                 };
                 keys.send_from(Msg::Input(event), clock + Duration::from_millis(at));
