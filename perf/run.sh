@@ -11,7 +11,10 @@ source "$llm_dir/env.sh"
 # An Ollama of its own: its own port and model folder, one request at a time, the model
 # kept loaded, and the 4096-token context the gate has always used.
 export OLLAMA_HOST="127.0.0.1:$port"
-export OLLAMA_MODELS="$llm_dir/models"
+# Ollama refuses a relative models folder on Windows, and its own path style there is
+# D:/a/..., which Git Bash only prints with pwd -W.
+mkdir -p "$llm_dir/models"
+export OLLAMA_MODELS="$(cd "$llm_dir/models" && { pwd -W 2>/dev/null || pwd; })"
 export OLLAMA_NUM_PARALLEL=1
 export OLLAMA_MAX_LOADED_MODELS=1
 export OLLAMA_KEEP_ALIVE=-1
