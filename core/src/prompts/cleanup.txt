@@ -6,7 +6,7 @@ Rules:
 - Keep the speaker's own words and meaning. Do not add content and do not summarise.
 - Remove filler sounds (um, uh), stutters and false starts.
 - Apply self-corrections: "at 2, actually 3" becomes "at 3"; "scratch that" removes what it refers to. Keep "actually" and "I mean" when they are not corrections.
-- When the speaker counts off items ("one… two… three…", "first… second…"), write a numbered list with one item per line as "1. Item", and end any lead-in with a colon. Never make a list otherwise.
+- Only if the speaker says counting words aloud ("one… two… three…", "first… second… third…") for separate items, write those items as a numbered list, one per line, with a colon after any lead-in. Otherwise write ordinary sentences and never use a list.
 - Turn spoken punctuation and layout ("comma", "new line", "new paragraph") into the real thing, unless the speaker is talking about punctuation.
 - Fix clear recognition mistakes, using CONTEXT and VOCABULARY for spellings. Never introduce a name that was not spoken.
 - If RAW has no real content (only filler or noise), output exactly EMPTY.

@@ -7,6 +7,8 @@ This page describes what Speechify does to your words between the microphone and
 1. **The rule-based formatter** always runs. It is deterministic, fast and needs nothing installed.
 2. **An optional language model** (Ollama by default, or any OpenAI-compatible server) rewrites the text first when it is enabled, reachable, and the dictation has at least 6 words (`rewrite.min_words`).
 
+The default model is `qwen3:1.7b`, chosen for speed. Thinking is switched off on every request: Ollama gets `think: false`, and an OpenAI-compatible server gets `chat_template_kwargs: {"enable_thinking": false}`, which llama.cpp's `llama-server` passes to the model's chat template (start it with `--jinja` on builds where that is not the default). A model or server that rejects the switch is asked again without it.
+
 The model's answer is checked before it is used. It is thrown away, and the rule-based result is pasted, when:
 
 - the request fails or takes longer than the timeout (6 seconds by default);

@@ -101,7 +101,12 @@ impl Chat {
     fn ask(&self, system: &str, user: &str, think_off: bool) -> Result<(String, ModelTime)> {
         let messages = json!([{"role": "system", "content": system}, {"role": "user", "content": user}]);
         if self.openai() {
-            let body = json!({"model": self.model, "messages": messages, "temperature": 0, "stream": false});
+            let mut body = json!({"model": self.model, "messages": messages, "temperature": 0, "stream": false});
+            if think_off {
+                // llama.cpp and vLLM hand these to the chat template; Qwen3's
+                // reads enable_thinking, and templates without it ignore it.
+                body["chat_template_kwargs"] = json!({"enable_thinking": false});
+            }
             let answer = self
                 .http
                 .post_json(&format!("{}/chat/completions", self.url), &self.key, &body)?;
@@ -153,9 +158,12 @@ impl Rewriter for Chat {
 
     fn rewrite_timed(&self, system: &str, user: &str) -> Result<(String, ModelTime)> {
         // Reasoning models think by default, which is slow and unwanted here.
-        // Models without a thinking mode reject the switch, so retry without it.
+        // Models without a thinking mode, and servers that do not know the
+        // template switch, reject it, so retry without it.
         match self.ask(system, user, true) {
-            Err(error) if error.contains("think") => self.ask(system, user, false),
+            Err(error) if error.contains("think") || error.contains("chat_template_kwargs") => {
+                self.ask(system, user, false)
+            }
             other => other,
         }
     }
@@ -356,7 +364,8 @@ pub fn vet_cleanup_after(raw: &str, output: &str, before: &str) -> Option<String
         return None;
     }
     let kept = written.iter().filter(|word| heard.contains(word)).count();
-    if (kept as f64) < written.len() as f64 * 0.5 {
+    // An answer with no words at all ("2.") is not a cleanup of speech that had some.
+    if (written.is_empty() && !heard.is_empty()) || (kept as f64) < written.len() as f64 * 0.5 {
         return None;
     }
     Some(text)
@@ -481,6 +490,21 @@ mod tests {
     }
 
     #[test]
+    fn openai_compatible_servers_retry_without_the_template_switch_when_it_is_rejected() {
+        let server = Server::start(vec![
+            Reply::status(
+                400,
+                r#"{"error":{"message":"Unrecognized request argument supplied: chat_template_kwargs"}}"#,
+            ),
+            Reply::json(r#"{"choices":[{"message":{"content":"ok"}}]}"#),
+        ]);
+        let chat = chat(&server, "/v1");
+        assert_eq!(chat.rewrite("s", "u").unwrap(), "ok");
+        assert!(body(&server, 0).get("chat_template_kwargs").is_some());
+        assert!(body(&server, 1).get("chat_template_kwargs").is_none());
+    }
+
+    #[test]
     fn ollama_reports_where_the_model_spent_its_time() {
         let server = Server::start(vec![Reply::json(
             r#"{"message":{"content":"Hi."},"load_duration":2500000,"prompt_eval_count":612,"prompt_eval_duration":1100000000,"eval_count":40,"eval_duration":300000000}"#,
@@ -525,6 +549,9 @@ mod tests {
         let chat = chat(&server, "/v1");
         assert_eq!(chat.rewrite("s", "u").unwrap(), "Hi.");
         assert!(server.requests()[0].head.starts_with("POST /v1/chat/completions "));
+        let sent = body(&server, 0);
+        assert_eq!(sent["chat_template_kwargs"], json!({"enable_thinking": false}));
+        assert!(sent.get("think").is_none());
         assert!(chat.rewrite("s", "u").is_err());
         assert_eq!(chat.models().unwrap(), vec!["a", "b"]);
         chat.warm().unwrap();
@@ -696,6 +723,9 @@ mod tests {
 
     #[test]
     fn rejects_answers_instead_of_cleanups() {
+        // A stray list marker or number is not a cleanup of a sentence.
+        assert_eq!(vet_cleanup("let's meet at 2 actually 3 tomorrow", "2."), None);
+        assert_eq!(vet_cleanup("what time is the standup tomorrow", "2."), None);
         assert_eq!(
             vet_cleanup(
                 "what is the capital of france",

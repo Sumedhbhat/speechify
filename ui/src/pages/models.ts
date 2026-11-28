@@ -308,7 +308,7 @@ export function createModelsPage(deps: Deps): Page {
   function renderLanguage(settings: Settings, status: Status, current: boolean): void {
     const modelField = text(store, settings, {
       label: "Model",
-      placeholder: "gemma3:4b",
+      placeholder: "qwen3:1.7b",
       list: modelList.id,
       get: (s) => s.rewrite.model,
       set: (s, v) => (s.rewrite.model = v),
