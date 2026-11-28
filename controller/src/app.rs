@@ -136,9 +136,10 @@ pub struct Controller<P: Platform, E: Engines> {
     /// The last cancelled or failed recording, for Undo and retry.
     kept: Option<(Vec<f32>, Target, bool, String)>,
     muted: bool,
-    /// A recording started by a modifier-only shortcut, which may still be
-    /// typing (Shift held a moment before a capital) until this time: its
-    /// chime, mute and Listening bar are held back until then.
+    /// A recording started by a modifier-only shortcut, which may still be a
+    /// quick tap until this time (`SETTLE_MS` after the press): its chime,
+    /// mute and Listening bar are held back until then, and for good if it
+    /// was a tap waiting for a second press.
     unsure: Option<(u64, Option<Bar>)>,
     /// How long the recogniser took over its last piece, which sets how
     /// long the next recording's pieces must be.
@@ -224,7 +225,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
         for effect in self.session.handle(event, at) {
             match effect {
                 Effect::Start => {
-                    if !self.start(&settings, unsure) {
+                    if !self.start(&settings, unsure, at) {
                         // The microphone did not open: skip the "listening" display.
                         break;
                     }
@@ -301,16 +302,17 @@ impl<P: Platform, E: Engines> Controller<P, E> {
                 Effect::Notice(Notice::Cancelled) => self.notice("Dictation cancelled", false, true),
             }
         }
-        if event == Event::Tick && self.session.is_recording() {
-            // A tap waiting for its second press stays quiet.
-            if self
+        // A tap waiting for its second press stays quiet.
+        if self.session.is_recording()
+            && !self.session.awaits_tap()
+            && self
                 .unsure
                 .as_ref()
                 .is_some_and(|(until, _)| self.platform.now_ms() >= *until)
-                && !self.session.awaits_tap()
-            {
-                self.reveal(&settings, None);
-            }
+        {
+            self.reveal(&settings, None);
+        }
+        if event == Event::Tick && self.session.is_recording() {
             self.listen(&settings);
         }
     }
@@ -366,7 +368,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
         }
     }
 
-    fn start(&mut self, settings: &Settings, unsure: bool) -> bool {
+    fn start(&mut self, settings: &Settings, unsure: bool, at: u64) -> bool {
         // Remember where the text is headed before the bar or anything else can take focus.
         self.target = self.platform.target();
         // Another model or device has its own speed, still to be measured.
@@ -381,7 +383,7 @@ impl<P: Platform, E: Engines> Controller<P, E> {
             self.notice(&error, true, false);
             return false;
         }
-        self.unsure = Some((self.platform.now_ms() + crate::hotkey::UNSURE_MS, None));
+        self.unsure = Some((at + crate::hotkey::SETTLE_MS, None));
         if !unsure {
             self.reveal(settings, None);
         }
@@ -1069,54 +1071,36 @@ mod tests {
     }
 
     #[test]
-    fn a_modifier_only_press_stays_quiet_until_it_is_surely_dictation() {
+    fn a_modifier_only_press_chimes_as_soon_as_it_settles() {
         let mut app = app(&[]);
         set(&mut app, |s| s.mute_while_dictating = true);
-        // Right Shift held a moment before a capital: the microphone opened
-        // but nothing was heard or shown, and it closes again.
-        app.handle(Event::Down(Bind::PushToTalk));
-        app.platform.now += 100;
-        app.handle(Event::Tick);
-        app.handle(Event::Abort(Bind::PushToTalk));
-        assert_eq!(app.platform.log, vec!["start:", "stop"]);
-        assert_eq!(app.platform.bars, vec![Bar::Idle]);
-        assert!(app.is_idle());
-        assert!(app.store.attempts(10).unwrap().is_empty());
-
-        // Held on, it chimes and shows the bar once it cannot be typing.
-        app.handle(Event::Down(Bind::PushToTalk));
-        app.platform.now += crate::hotkey::UNSURE_MS - 1;
-        app.handle(Event::Tick);
-        assert_eq!(app.platform.log.len(), 3);
-        app.platform.now += 1;
-        app.handle(Event::Tick);
-        assert_eq!(app.platform.log[3..], ["mute:true", "chime:Start"]);
+        // Right Shift held alone until it settled: it is dictation at once.
+        app.platform.now += 1000;
+        app.handle_ago(Event::Down(Bind::PushToTalk), crate::hotkey::SETTLE_MS);
+        assert_eq!(app.platform.log, vec!["start:", "mute:true", "chime:Start"]);
         assert_eq!(
-            app.platform.bars.last().unwrap(),
-            &Bar::Listening {
+            app.platform.bars,
+            vec![Bar::Listening {
                 command: false,
                 locked: false
-            }
+            }]
         );
         app.handle(Event::Down(Bind::Cancel));
     }
 
     #[test]
-    fn a_modifier_only_hands_free_press_stays_quiet_too() {
+    fn a_modifier_only_hands_free_press_chimes_once_it_settles() {
         let mut app = app(&[]);
         set(&mut app, |s| s.hotkeys.hands_free = "Right Ctrl".into());
-        app.handle(Event::Down(Bind::HandsFree));
-        app.platform.now += 100;
-        app.handle(Event::Tick);
-        app.handle(Event::Abort(Bind::HandsFree));
-        assert_eq!(app.platform.log, vec!["start:", "stop"]);
-        assert_eq!(app.platform.bars, vec![Bar::Idle]);
-
+        // Let go before it settled: still quiet, as it may be a tap.
         app.handle(Event::Down(Bind::HandsFree));
         app.handle(Event::Up(Bind::HandsFree));
-        app.platform.now += crate::hotkey::UNSURE_MS;
+        app.platform.now += crate::hotkey::SETTLE_MS - 1;
         app.handle(Event::Tick);
-        assert_eq!(app.platform.log[2..], ["start:", "chime:Start"]);
+        assert_eq!(app.platform.log, vec!["start:"]);
+        app.platform.now += 1;
+        app.handle(Event::Tick);
+        assert_eq!(app.platform.log, vec!["start:", "chime:Start"]);
         assert_eq!(
             app.platform.bars.last().unwrap(),
             &Bar::Listening {
@@ -1143,7 +1127,7 @@ mod tests {
         let mut app = app(&[]);
         app.handle(Event::Down(Bind::PushToTalk));
         app.handle(Event::Up(Bind::PushToTalk));
-        app.platform.now += crate::hotkey::UNSURE_MS;
+        app.platform.now += crate::hotkey::SETTLE_MS;
         app.handle(Event::Tick);
         assert_eq!(app.platform.log, vec!["start:"]);
         assert!(app.platform.bars.is_empty());

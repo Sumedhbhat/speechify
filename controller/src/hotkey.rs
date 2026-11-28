@@ -250,9 +250,8 @@ impl Bind {
         }
     }
 
-    /// Whether this shortcut is made only of modifiers, so that a press may
-    /// still turn out to be typing for the first `UNSURE_MS` after it goes
-    /// down.
+    /// Whether this shortcut is made only of modifiers, so that a press let
+    /// go before `SETTLE_MS` comes as a tap that should stay quiet.
     pub fn unsure(self, hotkeys: &speechify_core::settings::Hotkeys) -> bool {
         Shortcut::parse(self.shortcut(hotkeys)).is_ok_and(|shortcut| shortcut.chord.modifiers_only())
     }
@@ -262,22 +261,15 @@ impl Bind {
 pub enum Edge {
     Down(Bind),
     Up(Bind),
-    /// Another key joined a modifier-only shortcut just after it went down:
-    /// it was the start of a capital letter or some other shortcut, not a
-    /// dictation.
-    Abort(Bind),
     /// Every key is up again; deferred pastes are safe now.
     Released,
 }
 
-/// A modifier-only shortcut held alone this long goes down. Typing a capital
-/// usually adds the letter sooner, so Shift+A never opens the microphone.
+/// A modifier-only shortcut held alone this long goes down, and from then on
+/// it is dictation: extra keys are ignored, as for any shortcut. Typing a
+/// capital usually adds the letter sooner, so Shift+A never opens the
+/// microphone.
 pub const SETTLE_MS: u64 = 150;
-/// Another key joining a modifier-only shortcut this soon after it was
-/// pressed aborts it. Later, extra keys are ignored, as for any shortcut.
-pub const ABORT_MS: u64 = crate::session::TAP_MS;
-/// How long after going down such a shortcut may still be aborted.
-pub const UNSURE_MS: u64 = ABORT_MS - SETTLE_MS;
 const TAP_MS: u64 = crate::session::TAP_MS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -458,17 +450,9 @@ impl Tracker {
                     Phase::Down { since }
                 }
                 settling @ Phase::Settling { .. } => settling,
-                Phase::Down { since } if !held => {
-                    // Let go as a letter goes down, still in the abort window:
-                    // typing, as when the letter joins first. Space left held
-                    // from Shift+Space hands-free is not a letter.
-                    let typed = quiet && !ours && now.saturating_sub(since) < ABORT_MS;
-                    edges.push((if typed { Edge::Abort(bind) } else { Edge::Up(bind) }, now));
+                Phase::Down { .. } if !held => {
+                    edges.push((Edge::Up(bind), now));
                     Phase::Up
-                }
-                Phase::Down { since } if quiet && foreign && now.saturating_sub(since) < ABORT_MS => {
-                    edges.push((Edge::Abort(bind), now));
-                    Phase::Spent
                 }
                 down @ Phase::Down { .. } => down,
             };
@@ -663,7 +647,10 @@ mod tests {
         // A key pressed once dictation is under way does not interrupt it.
         tracker.edges(&keys(&[Ctrl, Meta]), 2000);
         tracker.edges(&keys(&[Ctrl, Meta]), 2000 + SETTLE_MS);
-        assert_eq!(tracker.edges(&keys(&[Ctrl, Meta, Char('D')]), 2000 + ABORT_MS), vec![]);
+        assert_eq!(
+            tracker.edges(&keys(&[Ctrl, Meta, Char('D')]), 2000 + SETTLE_MS + 1),
+            vec![]
+        );
         assert_eq!(
             tracker.edges(&keys(&[Escape]), 3000),
             vec![Edge::Up(Bind::PushToTalk), Edge::Down(Bind::Cancel)]
@@ -671,20 +658,19 @@ mod tests {
     }
 
     #[test]
-    fn a_key_joining_soon_after_aborts() {
+    fn a_key_joining_once_settled_is_ignored() {
         let mut tracker = fresh(&windows());
         tracker.edges(&keys(&[Ctrl, Meta]), 0);
         assert_eq!(
             tracker.edges(&keys(&[Ctrl, Meta]), SETTLE_MS),
             vec![Edge::Down(Bind::PushToTalk)]
         );
+        assert_eq!(tracker.edges(&keys(&[Ctrl, Meta, Char('D')]), SETTLE_MS + 1), vec![]);
+        assert_eq!(tracker.down(), vec![Bind::PushToTalk]);
         assert_eq!(
-            tracker.edges(&keys(&[Ctrl, Meta, Char('D')]), 300),
-            vec![Edge::Abort(Bind::PushToTalk)]
+            tracker.edges(&keys(&[]), 2100),
+            vec![Edge::Up(Bind::PushToTalk), Edge::Released]
         );
-        assert_eq!(tracker.edges(&keys(&[Ctrl, Meta]), 400), vec![]);
-        assert_eq!(tracker.edges(&keys(&[Ctrl, Meta]), 2000), vec![]);
-        assert_eq!(tracker.edges(&keys(&[]), 2100), vec![Edge::Released]);
     }
 
     #[test]
@@ -732,17 +718,18 @@ mod tests {
         assert_eq!(tracker.edges(&keys(&[RightShift]), 600), vec![]);
         assert_eq!(tracker.edges(&keys(&[RightShift, Char('B')]), 700), vec![]);
         assert_eq!(tracker.edges(&keys(&[]), 800), vec![Edge::Released]);
-        // A slow capital starts and is aborted at once.
+        // Shift held alone past the settling time is dictation, even if a
+        // letter follows.
         tracker.edges(&keys(&[RightShift]), 1000);
         assert_eq!(
-            tracker.edges(&keys(&[RightShift]), 1200),
+            tracker.edges(&keys(&[RightShift]), 1000 + SETTLE_MS),
             vec![Edge::Down(Bind::PushToTalk)]
         );
+        assert_eq!(tracker.edges(&keys(&[RightShift, Char('C')]), 1250), vec![]);
         assert_eq!(
-            tracker.edges(&keys(&[RightShift, Char('C')]), 1250),
-            vec![Edge::Abort(Bind::PushToTalk)]
+            tracker.edges(&keys(&[]), 1300),
+            vec![Edge::Up(Bind::PushToTalk), Edge::Released]
         );
-        assert_eq!(tracker.edges(&keys(&[]), 1300), vec![Edge::Released]);
         // Alt+Shift+Z with the right Shift pastes and does not dictate.
         assert_eq!(
             tracker.edges(&keys(&[LeftAlt, RightShift, Char('Z')]), 2000),
@@ -801,20 +788,12 @@ mod tests {
     }
 
     #[test]
-    fn letting_go_as_a_letter_goes_down_soon_after_is_typing() {
+    fn letting_go_as_a_letter_goes_down_once_settled_ends_the_dictation() {
         let mut tracker = fresh(&right_shift());
         tracker.edges(&keys(&[RightShift]), 0);
         tracker.edges(&keys(&[RightShift]), SETTLE_MS);
         assert_eq!(
-            tracker.edges(&keys(&[Char('A')]), 300),
-            vec![Edge::Abort(Bind::PushToTalk)]
-        );
-        // Later it is just the end of the dictation.
-        tracker.edges(&keys(&[]), 400);
-        tracker.edges(&keys(&[RightShift]), 1000);
-        tracker.edges(&keys(&[RightShift]), 1000 + SETTLE_MS);
-        assert_eq!(
-            tracker.edges(&keys(&[Char('A')]), 1000 + ABORT_MS),
+            tracker.edges(&keys(&[Char('A')]), SETTLE_MS + 1),
             vec![Edge::Up(Bind::PushToTalk)]
         );
     }
