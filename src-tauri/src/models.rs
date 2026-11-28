@@ -116,16 +116,15 @@ impl Models {
         }
     }
 
-    fn open(&self, model_id: &str, device: &str) -> Result<(Diagnosed, String)> {
-        let model = catalog::find(model_id)?;
-        if !catalog::installed(&self.models_dir, &model) {
+    fn open(&self, model: &catalog::Model, device: &str) -> Result<(Diagnosed, String)> {
+        if !catalog::installed(&self.models_dir, model) {
             return Err(format!(
                 "{} is not downloaded yet. Open Speechify and download it under Models.",
                 model.name
             ));
         }
         let mut engine = diagnostics::attempt("model.open", || {
-            Engine::open(&self.runtime_dir, &catalog::path(&self.models_dir, &model), device)
+            Engine::open(&self.runtime_dir, &catalog::path(&self.models_dir, model), device)
         })?;
         // The voice detector ships with the runtime. Without it, speech is
         // found by loudness, which can miss very quiet speech.
@@ -142,12 +141,8 @@ impl Models {
     fn load_everyday(&mut self, settings: &Settings) -> Result<()> {
         let speech = &settings.speech;
         let key = format!(
-            "{}|{}|{}|{}|{}",
-            speech.active_model(),
-            speech.device,
-            speech.remote_url,
-            speech.remote_model,
-            speech.remote_key
+            "{}|{}|{}|{}",
+            speech.device, speech.remote_url, speech.remote_model, speech.remote_key
         );
         if self.everyday.as_ref().is_some_and(|(loaded, _)| *loaded == key) {
             return Ok(());
@@ -155,7 +150,7 @@ impl Models {
         // Free the old model before loading the new one.
         self.everyday = None;
         let loaded = if speech.remote_url.trim().is_empty() {
-            self.open(speech.active_model(), &speech.device)
+            self.open(&catalog::dictation(), &speech.device)
         } else {
             Ok((
                 Diagnosed(Box::new(Remote::new(
@@ -256,7 +251,7 @@ impl Engines for Models {
     fn teacher(&mut self, settings: &Settings) -> Result<(&mut dyn Recognizer, Option<&dyn Rewriter>)> {
         if self.teacher.is_none() {
             // The teacher runs on the same device as live dictation.
-            self.teacher = Some(self.open(&settings.teacher.speech_model, &settings.speech.device)?.0);
+            self.teacher = Some(self.open(&catalog::teacher(), &settings.speech.device)?.0);
         }
         // The larger language model may take a while per dictation; nobody is waiting.
         let teacher_chat = chat(settings, &settings.teacher.rewrite_model, Duration::from_secs(180));

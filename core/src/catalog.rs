@@ -39,34 +39,14 @@ struct Pin {
 
 const PINS: &[Pin] = &[
     Pin {
-        id: "whisper-large-v3-turbo",
-        name: "Whisper large-v3 turbo",
-        revision: "18ada752005f5fddef499256f9a458d0b37a203a",
-        sha256: "257aa7ec9121c22c167d5e2c49e3e76b4ba0e6e27ebc13074eba0a80f8190220",
-        bytes: 886_381_728,
+        id: "parakeet-unified-en-0.6b",
+        name: "Parakeet Unified 0.6B (English)",
+        revision: "843b1b175ace04f5a89d379c79e2518c0d065b25",
+        sha256: "4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795",
+        bytes: 731_357_568,
         wants_gpu: true,
-        streaming: false,
-        notes: "Most accurate on Indian English, names and numbers. Fast on a graphics card.",
-    },
-    Pin {
-        id: "parakeet-tdt-0.6b-v3",
-        name: "Parakeet TDT 0.6B v3",
-        revision: "d8d8c32cb2017c57e5307767343e97870f8a7f53",
-        sha256: "5859f77944efcd8eafa23a6350731960b2b55b2203df51f319665c807d802cc7",
-        bytes: 739_508_576,
-        wants_gpu: false,
-        streaming: false,
-        notes: "Fastest. The best choice without a graphics card; a little weaker on names.",
-    },
-    Pin {
-        id: "parakeet-tdt-0.6b-v2",
-        name: "Parakeet TDT 0.6B v2",
-        revision: "58239cf6d0ecb0af921e7936c1e5e0a8dba91dbb",
-        sha256: "f0d0e99cebb6d3b83f1f7069b82b5d3c2e39a54545b0da039cb4bafd9c4e5caa",
-        bytes: 729_574_912,
-        wants_gpu: false,
-        streaming: false,
-        notes: "English-only Parakeet; slightly better than v3 on plain English.",
+        streaming: true,
+        notes: "Recognises you as you speak, so the text is ready almost as soon as you stop. English only.",
     },
     Pin {
         id: "whisper-large-v3",
@@ -76,27 +56,7 @@ const PINS: &[Pin] = &[
         bytes: 1_668_741_440,
         wants_gpu: true,
         streaming: false,
-        notes: "The full-size model. Used as the nightly teacher; slow for live dictation.",
-    },
-    Pin {
-        id: "whisper-small",
-        name: "Whisper small",
-        revision: "4afdc7942ecf1997f359deae48a63506b062eac4",
-        sha256: "9b9c8811bbcc82a7766f0fb0925614bdacb0923b2cc630daeac17108b655b860",
-        bytes: 269_751_136,
-        wants_gpu: false,
-        streaming: false,
-        notes: "Small download for weak hardware. Noticeably less accurate.",
-    },
-    Pin {
-        id: "parakeet-unified-en-0.6b",
-        name: "Parakeet Unified 0.6B (English)",
-        revision: "843b1b175ace04f5a89d379c79e2518c0d065b25",
-        sha256: "4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795",
-        bytes: 731_357_568,
-        wants_gpu: true,
-        streaming: true,
-        notes: "Recognises you as you speak, so the text is ready almost as soon as you stop. English only.",
+        notes: "The most accurate model. Reviews the day's dictations overnight, when nobody is waiting.",
     },
 ];
 
@@ -128,6 +88,16 @@ pub fn find(id: &str) -> Result<Model> {
         .into_iter()
         .find(|model| model.id == id)
         .ok_or_else(|| format!("Unknown speech model \"{id}\""))
+}
+
+/// The model dictation uses.
+pub fn dictation() -> Model {
+    find(&DEFAULTS.speech_model).expect("core/defaults.json names a catalog model")
+}
+
+/// The model the nightly review uses.
+pub fn teacher() -> Model {
+    find(&DEFAULTS.teacher_speech_model).expect("core/defaults.json names a catalog model")
 }
 
 /// What kind of compute device a model could run on.
@@ -164,25 +134,21 @@ pub struct Device {
     pub class: DeviceClass,
 }
 
-/// The models chosen for this machine.
+/// What first start chose for this machine.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Plan {
-    pub speech_model: &'static str,
-    pub teacher_model: &'static str,
     /// Language-model cleanup: only worth its delay on a graphics card.
     pub rewrite: bool,
     /// One sentence for the user on why these were picked.
     pub reason: String,
 }
 
-/// Enough graphics memory for Whisper turbo plus a 4B language model.
+/// Enough graphics memory for the speech model plus a 4B language model.
 const GPU_MEMORY_MB: u64 = 4000;
 
-/// Picks models so that everyday dictation is always fast. A graphics card
-/// runs Whisper turbo in well under a second; without one, Parakeet is the
-/// only model that keeps up (about 2 s per dictation on a laptop CPU against
-/// 35 s for Whisper turbo; see docs/evaluation.md), and the larger Whisper
-/// does the nightly review where nobody is waiting.
+/// Dictation always uses the one streaming model; what depends on the
+/// machine is whether language-model cleanup can keep up. With a graphics
+/// card it adds well under a second; without one, the rules alone are used.
 pub fn plan(devices: &[Device]) -> Plan {
     let card = devices
         .iter()
@@ -190,42 +156,32 @@ pub fn plan(devices: &[Device]) -> Plan {
         .max_by_key(|device| device.memory_mb);
     match card {
         Some(card) => Plan {
-            speech_model: &DEFAULTS.speech_model,
-            teacher_model: &DEFAULTS.teacher_speech_model,
             rewrite: true,
             reason: format!(
-                "Found {} with {} GB: using {} on it",
+                "Found {} with {} GB: running {} and the cleanup model on it",
                 card.name,
                 card.memory_mb / 1000,
-                label(&DEFAULTS.speech_model)
+                dictation().name
             ),
         },
         None => Plan {
-            speech_model: &DEFAULTS.cpu_speech_model,
-            teacher_model: &DEFAULTS.cpu_teacher_speech_model,
             rewrite: false,
             reason: format!(
-                "No graphics card with enough memory: using {}, the fastest model on a CPU",
-                label(&DEFAULTS.cpu_speech_model)
+                "No graphics card with enough memory: running {} without the cleanup model",
+                dictation().name
             ),
         },
     }
 }
 
-fn label(id: &str) -> String {
-    find(id).map_or_else(|_| id.to_string(), |model| model.name)
-}
-
-/// On the very first start, before any settings exist, chooses the models
-/// for this machine and saves them. Later starts keep the user's choices.
+/// On the very first start, before any settings exist, chooses what this
+/// machine can run and saves it. Later starts keep the user's choices.
 pub fn first_run(store: &crate::store::Store, devices: &[Device]) -> Result<Option<Plan>> {
     if store.get("settings").is_some() {
         return Ok(None);
     }
     let chosen = plan(devices);
     let mut settings = crate::settings::Settings::default();
-    settings.speech.model = chosen.speech_model.into();
-    settings.teacher.speech_model = chosen.teacher_model.into();
     settings.rewrite.enabled = chosen.rewrite;
     store.save_settings(&settings)?;
     Ok(Some(chosen))
@@ -283,7 +239,7 @@ mod tests {
     #[test]
     fn catalog_is_consistent() {
         let all = models();
-        assert_eq!(all.len(), 6);
+        assert_eq!(all.len(), 2);
         for model in &all {
             assert_eq!(model.sha256.len(), 64);
             assert!(
@@ -299,13 +255,11 @@ mod tests {
         assert_eq!(find("whisper-large-v3").unwrap().name, "Whisper large-v3");
         assert_eq!(find("nope").unwrap_err(), "Unknown speech model \"nope\"");
 
-        // The defaults in Settings must exist here.
-        let settings = crate::settings::Settings::default();
-        find(&settings.speech.model).unwrap();
-        find(&settings.teacher.speech_model).unwrap();
-        // The streaming setup has a model of its own, made for it.
-        assert!(find(&settings.speech.streaming_model).unwrap().streaming);
-        assert!(!find(&settings.speech.model).unwrap().streaming);
+        // Dictation streams; the teacher wants the most accurate model.
+        assert!(dictation().streaming);
+        assert_eq!(dictation().id, "parakeet-unified-en-0.6b");
+        assert!(!teacher().streaming);
+        assert_eq!(teacher().id, "whisper-large-v3");
     }
 
     fn device(class: DeviceClass, memory_mb: u64, name: &str) -> Device {
@@ -318,46 +272,27 @@ mod tests {
     }
 
     #[test]
-    fn a_graphics_card_gets_whisper_and_a_cpu_gets_parakeet() {
+    fn only_a_graphics_card_gets_the_cleanup_model() {
         let cpu = device(DeviceClass::Cpu, 16_000, "AMD Ryzen 5 3500U");
         let igpu = device(DeviceClass::IntegratedGpu, 8000, "AMD Radeon Vega 8");
         let small = device(DeviceClass::Gpu, 2048, "GeForce MX150");
         let rtx = device(DeviceClass::Gpu, 8188, "NVIDIA GeForce RTX 4060 Laptop GPU");
         let bigger = device(DeviceClass::Gpu, 12_288, "NVIDIA GeForce RTX 4070");
         let laptop = plan(&[cpu.clone(), rtx.clone()]);
-        assert_eq!(
-            (laptop.speech_model, laptop.teacher_model, laptop.rewrite),
-            (
-                DEFAULTS.speech_model.as_str(),
-                DEFAULTS.teacher_speech_model.as_str(),
-                true
-            )
-        );
+        assert!(laptop.rewrite);
         assert_eq!(
             laptop.reason,
             format!(
-                "Found NVIDIA GeForce RTX 4060 Laptop GPU with 8 GB: using {} on it",
-                find(&DEFAULTS.speech_model).unwrap().name
+                "Found NVIDIA GeForce RTX 4060 Laptop GPU with 8 GB: running {} and the cleanup model on it",
+                dictation().name
             )
         );
-        assert_eq!(label("not-in-the-catalog"), "not-in-the-catalog");
         assert!(plan(&[rtx, bigger]).reason.contains("RTX 4070"));
-        // Integrated graphics, a small card or no card at all: Parakeet, no cleanup model.
+        // Integrated graphics, a small card or no card at all: no cleanup model.
         for machine in [vec![cpu.clone()], vec![cpu.clone(), igpu], vec![cpu, small], vec![]] {
             let chosen = plan(&machine);
-            assert_eq!(
-                (chosen.speech_model, chosen.teacher_model, chosen.rewrite),
-                (
-                    DEFAULTS.cpu_speech_model.as_str(),
-                    DEFAULTS.cpu_teacher_speech_model.as_str(),
-                    false
-                )
-            );
+            assert!(!chosen.rewrite);
             assert!(chosen.reason.starts_with("No graphics card"));
-        }
-        // Every model a plan names is in the catalog.
-        for chosen in [laptop, plan(&[])] {
-            assert!(find(chosen.speech_model).is_ok() && find(chosen.teacher_model).is_ok());
         }
         // Devices travel as JSON from the probe process.
         let json = serde_json::to_string(&[device(DeviceClass::Gpu, 8188, "RTX")]).unwrap();
@@ -379,24 +314,19 @@ mod tests {
     }
 
     #[test]
-    fn the_first_start_chooses_models_and_later_starts_keep_them() {
+    fn the_first_start_chooses_cleanup_and_later_starts_keep_it() {
         let store = crate::store::Store::memory();
         let chosen = first_run(&store, &[]).unwrap().unwrap();
-        let settings = store.settings();
-        assert_eq!(
-            (settings.speech.model.as_str(), settings.rewrite.enabled),
-            (chosen.speech_model, false)
-        );
-        assert_eq!(settings.teacher.speech_model, "whisper-large-v3-turbo");
+        assert!(!chosen.rewrite && !store.settings().rewrite.enabled);
         // The user changes their mind; a later start must not undo that.
-        let mut changed = settings;
-        changed.speech.model = "whisper-small".into();
+        let mut changed = store.settings();
+        changed.rewrite.enabled = true;
         store.save_settings(&changed).unwrap();
         assert_eq!(
             first_run(&store, &[device(DeviceClass::Gpu, 8000, "RTX")]).unwrap(),
             None
         );
-        assert_eq!(store.settings().speech.model, "whisper-small");
+        assert!(store.settings().rewrite.enabled);
     }
 
     fn tiny(server: &Server, sha256: &str) -> Model {

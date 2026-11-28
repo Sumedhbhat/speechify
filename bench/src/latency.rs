@@ -117,7 +117,7 @@ pub fn run(manifest: &Path, output: &Path, model: &str, seconds: f64, limit: usi
     let device = std::env::var("LIVE_DEVICE").unwrap_or_else(|_| "cpu".into());
     let detector = Detector::open(runtime, &runtime.join(DETECTOR_FILE), &device)?;
     let mut engine = Engine::open(runtime, &path, &device)?.with_detector(detector);
-    let mut s = settings(model);
+    let mut s = settings();
     s.speech.device = device.clone();
     let store = Store::memory();
     let gap = env_ms("LIVE_GAP_MS", 350);
@@ -232,7 +232,7 @@ pub fn blocks(manifest: &Path, output: &Path, model: &str, seconds: f64, limit: 
     let llm_model = std::env::var("LIVE_LLM_MODEL").unwrap_or_else(|_| "gemma3:1b".into());
     let chat = Chat::new(&url, "", &llm_model, Duration::from_secs(600));
     let inline = Inline(&chat);
-    let mut s = settings(model);
+    let mut s = settings();
     s.rewrite.enabled = true;
     s.rewrite.model = llm_model.clone();
     let store = Store::memory();

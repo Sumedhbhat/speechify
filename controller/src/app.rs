@@ -108,7 +108,7 @@ fn same_app(now: &Target, then: &Target) -> bool {
 /// server's model) is the one these settings use.
 fn same_recogniser(name: &str, speech: &speechify_core::settings::Speech) -> bool {
     if speech.remote_url.trim().is_empty() {
-        !speech.active_model().is_empty() && name.starts_with(speech.active_model())
+        name.starts_with(&speechify_core::catalog::dictation().id)
     } else {
         name == speech.remote_model
     }
@@ -967,7 +967,7 @@ mod tests {
         let store = Store::memory();
         let mut slow = speechify_core::testing::dictation("an old one", "Slack", 1_800_000_000);
         slow.asr_ms = 30_000;
-        slow.speech_model = "whisper-large-v3-turbo-Q8_0".into();
+        slow.speech_model = "parakeet-unified-en-0.6b-Q8_0".into();
         store.add_dictation(&slow).unwrap();
         let mut app = app(&[]);
         let fresh = Controller::new(
@@ -987,15 +987,9 @@ mod tests {
         assert_eq!(std::mem::take(&mut app.piece_cost_ms), 0);
         // Only a dictation made with the model now in use says anything.
         let mut speech = speechify_core::settings::Settings::default().speech;
-        assert!(same_recogniser("whisper-large-v3-turbo-Q8_0", &speech));
-        speech.model = "parakeet-tdt-0.6b-v3".into();
-        assert!(!same_recogniser("whisper-large-v3-turbo-Q8_0", &speech));
-        // The streaming setup goes by its own model.
-        speech.streaming = true;
         assert!(same_recogniser("parakeet-unified-en-0.6b-Q8_0", &speech));
-        assert!(!same_recogniser("parakeet-tdt-0.6b-v3-Q8_0", &speech));
-        speech.streaming = false;
-        speech.model.clear();
+        // Dictations from models older versions offered say nothing.
+        assert!(!same_recogniser("whisper-large-v3-turbo-Q8_0", &speech));
         assert!(!same_recogniser("anything", &speech));
         speech.remote_url = "http://server".into();
         assert!(same_recogniser("whisper-large-v3-turbo", &speech));
@@ -1021,9 +1015,9 @@ mod tests {
         // The last recognition's time is what the next recording goes by,
         // so a faster recogniser brings it down again.
         assert!(app.piece_cost_ms < 30_000);
-        // A different model starts unmeasured.
+        // A different device starts unmeasured.
         app.piece_cost_ms = 30_000;
-        set(&mut app, |s| s.speech.model = "parakeet-tdt-0.6b-v3".into());
+        set(&mut app, |s| s.speech.device = "cpu".into());
         app.engines.asr.answers = vec![Ok("faster".into())];
         app.handle(Event::Down(Bind::PushToTalk));
         assert_eq!(app.piece_cost_ms, 0);
