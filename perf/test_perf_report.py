@@ -43,7 +43,7 @@ def doc(platforms):
 
 class Render(unittest.TestCase):
     def test_report_reads_the_format_the_benchmark_writes(self):
-        source = (HERE / "src/bin/perf.rs").read_text()
+        source = (HERE / "src/main.rs").read_text()
         self.assertIn(f"const SCHEMA: u32 = {perf_report.SCHEMA};", source)
 
     def test_new_scenarios_are_not_counted_as_improvements(self):

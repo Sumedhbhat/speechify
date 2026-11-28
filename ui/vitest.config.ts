@@ -12,6 +12,7 @@ export default defineConfig({
       // Entry points only wire real dependencies; api.ts is the Tauri contract.
       exclude: ["src/main.ts", "src/bar.ts", "src/api.ts", "src/env.d.ts"],
       reporter: ["text", "html"],
+      reportsDirectory: "../coverage/ui",
       thresholds: { lines: 100, functions: 100, branches: 100, statements: 100 },
     },
   },

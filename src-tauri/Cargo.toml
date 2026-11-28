@@ -10,6 +10,7 @@ tauri-build = { version = "=2.7.4", features = [] }
 
 [dependencies]
 speechify-core = { path = "../core" }
+speechify-controller = { path = "../controller" }
 speechify-os = { path = "../os" }
 tauri = { version = "=2.12.5", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-single-instance = "=2.5.5"

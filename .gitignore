@@ -8,3 +8,4 @@ src-tauri/gen/
 *.profraw
 lcov.info
 __pycache__/
+.moon/cache/

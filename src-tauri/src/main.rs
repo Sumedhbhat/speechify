@@ -9,7 +9,7 @@ mod shell;
 mod updates;
 mod worker;
 
-use speechify_core::session::Event;
+use speechify_controller::session::Event;
 use std::sync::Arc;
 use tauri::{Manager, RunEvent, WindowEvent};
 
@@ -121,7 +121,7 @@ fn main() {
             shell::track_bar(app.handle());
             #[cfg(target_os = "macos")]
             shell::bar_never_activates(app.handle());
-            shell::place_bar(app.handle(), &speechify_core::app::Bar::Idle);
+            shell::place_bar(app.handle(), &speechify_controller::app::Bar::Idle);
             if toggle {
                 shared.send(worker::Msg::StartupToggle);
             }

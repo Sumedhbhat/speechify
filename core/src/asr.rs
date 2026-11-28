@@ -364,8 +364,8 @@ impl Recognizer for Remote {
     }
 }
 
-#[cfg(test)]
-pub(crate) struct Fixed {
+#[cfg(any(test, feature = "fakes"))]
+pub struct Fixed {
     pub answers: Vec<Result<String>>,
     /// Each call: samples, language, vocabulary, previous text.
     pub heard: Vec<(usize, String, Vec<String>, String)>,
@@ -375,7 +375,7 @@ pub(crate) struct Fixed {
     pub gate: Option<Arc<Mutex<()>>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fakes"))]
 impl Fixed {
     pub fn new(answers: &[&str]) -> Fixed {
         Fixed {
@@ -395,7 +395,7 @@ impl Fixed {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fakes"))]
 impl Recognizer for Fixed {
     fn transcribe(&mut self, audio: &[f32], hint: &Hint) -> Result<String> {
         self.heard.push((

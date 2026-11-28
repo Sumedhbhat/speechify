@@ -1,0 +1,38 @@
+language: rust
+layer: application
+tags: ["app"]
+dependsOn: ["core", "controller", "os", "ui"]
+
+tasks:
+  lint:
+    script: "cargo fmt -p speechify --check && cargo clippy -p speechify --all-targets --locked -- -D warnings"
+    deps: ["ui:build"]
+    inputs:
+      - "**/*"
+      - "project://^?filter=**/*&filter=!**/*.md"
+      - "group://rust"
+      - "group://workspace"
+      - "group://native"
+      - "/rustfmt.toml"
+  test:
+    command: "cargo test -p speechify --locked"
+    deps: ["ui:build"]
+    inputs:
+      - "**/*"
+      - "project://^?filter=**/*&filter=!**/*.md"
+      - "group://rust"
+      - "group://workspace"
+      - "group://native"
+      - "$SPEECHIFY_REQUIRE_NATIVE"
+  build:
+    command: "cargo build -p speechify --locked"
+    deps: ["ui:build"]
+    inputs:
+      - "**/*"
+      - "!**/*.md"
+      - "project://^?filter=**/*&filter=!**/*.md"
+      - "group://rust"
+      - "group://workspace"
+      - "group://native"
+    options:
+      cache: false

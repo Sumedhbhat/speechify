@@ -45,49 +45,65 @@ jobs:
     defaults: &bash
       run:
         shell: bash
+    outputs: &test-outputs
+      measure: ${{ steps.plan.outputs.measure }}
+      coverage: ${{ steps.plan.outputs.coverage }}
+      coverage_tasks: ${{ steps.plan.outputs.coverage_tasks }}
     steps: &test-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
           cache: npm
           cache-dependency-path: package-lock.json
+      - name: Install Node packages
+        run: npm ci
+      - name: Plan the tasks this change affects
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GIT_REF: ${{ github.ref }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: node tools/ci/plan.mjs
       - name: Install Linux build prerequisites
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && (steps.plan.outputs.lint == 'true' || steps.plan.outputs.test == 'true' || steps.plan.outputs.measure == 'true')
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libx11-dev libxtst-dev libxi-dev
+      - name: Install the pinned Rust toolchain
+        if: steps.plan.outputs.lint == 'true' || steps.plan.outputs.test == 'true' || steps.plan.outputs.measure == 'true'
+        run: cargo --version
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: steps.plan.outputs.fixtures == 'true'
         with:
           path: .build/models
           key: test-models-${{ env.TEST_MODEL_SHA256 }}-${{ env.TEST_TOKEN_MODEL_SHA256 }}-${{ env.TEST_STREAM_MODEL_SHA256 }}
       - name: Fetch the speech runtime and the test model
+        if: steps.plan.outputs.fixtures == 'true'
         run: bash scripts/fetch-test-fixtures.sh "${{ matrix.python }}"
-      - name: Frontend
-        run: |
-          npm ci
-          npm run build
-          npm test
+      - name: Fetch the speech runtime the app bundles
+        if: steps.plan.outputs.fixtures != 'true' && steps.plan.outputs.native == 'true'
+        run: ${{ matrix.python }} scripts/fetch-native.py
+      - name: Check the project graph matches Cargo
+        if: runner.os == 'Linux' && steps.plan.outputs.lint == 'true'
+        run: node tools/ci/check-graph.mjs
       - name: Formatting and lints
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.plan.outputs.lint == 'true'
+        run: npx moon run ${{ steps.plan.outputs.lint_tasks }}
+      - name: Tests and builds
+        if: steps.plan.outputs.test == 'true'
         run: |
-          npm run format:check
-          cargo fmt --all --check
-          cargo clippy --workspace --all-targets --locked -- -D warnings
-          python3 -m unittest discover -s bench -p 'test_*.py'
-      - name: Rust tests
-        run: |
-          source .build/test-env.sh
-          cargo test --workspace --locked
-      - name: Build the app
-        run: cargo build -p speechify --locked
+          if [ -f .build/test-env.sh ]; then source .build/test-env.sh; fi
+          npx moon run ${{ steps.plan.outputs.test_tasks }}
       - name: Build the performance binary
-        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
-        run: cargo build --release --locked -p speechify-bench --bin perf
+        if: steps.plan.outputs.measure == 'true'
+        run: npx moon run perf:release
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+        if: steps.plan.outputs.measure == 'true'
         with:
           name: perf-bin-${{ matrix.platform }}
           path: target/release/perf${{ matrix.exe }}
@@ -106,6 +122,7 @@ jobs:
             platform: macos
             python: python3
             exe: ''
+    outputs: *test-outputs
     defaults: *bash
     steps: *test-steps
 
@@ -121,13 +138,14 @@ jobs:
             platform: windows
             python: python
             exe: .exe
+    outputs: *test-outputs
     defaults: *bash
     steps: *test-steps
 
   measure-linux:
     name: &measure-name Measure (${{ matrix.platform }})
     needs: test-linux
-    if: &measure-if ${{ !cancelled() && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main') }}
+    if: ${{ !cancelled() && needs.test-linux.outputs.measure == 'true' }}
     continue-on-error: &measure-optional ${{ github.event_name != 'pull_request' }}
     runs-on: *runner
     timeout-minutes: 60
@@ -156,9 +174,9 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .build/llm/llama-*
-          key: llama-server-${{ runner.os }}-${{ hashFiles('scripts/fetch-perf-llm.py') }}
+          key: llama-server-${{ runner.os }}-${{ hashFiles('perf/fetch-llm.py') }}
       - name: Fetch the language model server and model
-        run: '"${{ matrix.python }}" scripts/fetch-perf-llm.py .build/llm'
+        run: '"${{ matrix.python }}" perf/fetch-llm.py .build/llm'
       - name: Measure speed and run the scenarios
         env:
           PERF_PLATFORM: ${{ matrix.platform }}
@@ -167,7 +185,7 @@ jobs:
           chmod +x ".build/perf-bin/perf${{ matrix.exe }}"
           source .build/test-env.sh
           mkdir -p .build/perf
-          bash scripts/perf-run.sh ".build/perf-bin/perf${{ matrix.exe }}" .build/llm ".build/perf/${{ matrix.platform }}.json"
+          bash perf/run.sh ".build/perf-bin/perf${{ matrix.exe }}" .build/llm ".build/perf/${{ matrix.platform }}.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: perf-result-${{ matrix.platform }}
@@ -184,7 +202,7 @@ jobs:
   measure-macos:
     name: *measure-name
     needs: test-macos
-    if: *measure-if
+    if: ${{ !cancelled() && needs.test-macos.outputs.measure == 'true' }}
     continue-on-error: *measure-optional
     runs-on: *runner
     timeout-minutes: 60
@@ -197,7 +215,7 @@ jobs:
   measure-windows:
     name: *measure-name
     needs: test-windows
-    if: *measure-if
+    if: ${{ !cancelled() && needs.test-windows.outputs.measure == 'true' }}
     continue-on-error: *measure-optional
     runs-on: *runner
     timeout-minutes: 60
@@ -219,25 +237,31 @@ jobs:
           RESULTS: ${{ needs.test-linux.result }} ${{ needs.test-macos.result }} ${{ needs.test-windows.result }}
         run: test "$RESULTS" = "success success success"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.test-linux.outputs.coverage == 'true'
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: needs.test-linux.outputs.coverage == 'true'
         with:
           node-version: '24.21.0'
           cache: npm
           cache-dependency-path: package-lock.json
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: needs.test-linux.outputs.coverage == 'true'
         with:
           path: .build/models
           key: test-models-${{ env.TEST_MODEL_SHA256 }}-${{ env.TEST_TOKEN_MODEL_SHA256 }}-${{ env.TEST_STREAM_MODEL_SHA256 }}
       - name: Install coverage tools
+        if: needs.test-linux.outputs.coverage == 'true'
         run: |
           cargo install cargo-llvm-cov --version 0.9.1 --locked
           npm ci
-      - name: Require full coverage of the core and the interface
-        run: bash scripts/coverage.sh
+      - name: Require full coverage of the engine, the controller and the interface
+        if: needs.test-linux.outputs.coverage == 'true'
+        run: npx moon run ${{ needs.test-linux.outputs.coverage_tasks }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+        if: always() && needs.test-linux.outputs.coverage == 'true'
         with:
           name: coverage
           path: coverage/
@@ -245,8 +269,8 @@ jobs:
 
   performance:
     name: Performance report
-    needs: [measure-linux, measure-macos, measure-windows]
-    if: ${{ !cancelled() && (github.event_name == 'pull_request' || (github.ref == 'refs/heads/main' && needs.measure-linux.result == 'success' && needs.measure-macos.result == 'success' && needs.measure-windows.result == 'success')) }}
+    needs: [test-linux, measure-linux, measure-macos, measure-windows]
+    if: ${{ !cancelled() && needs.test-linux.outputs.measure == 'true' && (github.event_name == 'pull_request' || (github.ref == 'refs/heads/main' && needs.measure-linux.result == 'success' && needs.measure-macos.result == 'success' && needs.measure-windows.result == 'success')) }}
     continue-on-error: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10

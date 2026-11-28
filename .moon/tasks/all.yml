@@ -1,0 +1,23 @@
+fileGroups:
+  workspace:
+    - "/.moon/*.yml"
+    - "/.moon/tasks/**/*"
+    - "/tools/ci/**/*"
+    - "/.github/workflows/ci.yml"
+  toolchain:
+    - "/Cargo.toml"
+    - "/rust-toolchain.toml"
+  rust:
+    - "/Cargo.toml"
+    - "/rust-toolchain.toml"
+    - "/Cargo.lock"
+  native:
+    - "/scripts/fetch-native.py"
+    - "/scripts/fetch-test-fixtures.sh"
+  npm:
+    - "/package.json"
+    - "/package-lock.json"
+
+taskOptions:
+  runFromWorkspaceRoot: true
+  outputStyle: stream

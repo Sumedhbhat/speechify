@@ -4,12 +4,12 @@ use crate::desktop::clock;
 use crate::shell;
 use crate::worker::{Msg, Shared};
 use serde::Serialize;
+use speechify_controller::hotkey::Tracker;
+use speechify_controller::insights::{self, Insights};
+use speechify_controller::session::Event;
 use speechify_core::context::{categorize, Rule, Target};
 use speechify_core::format::Replacement;
-use speechify_core::hotkey::Tracker;
-use speechify_core::insights::{self, Insights};
 use speechify_core::llm::{Chat, Rewriter};
-use speechify_core::session::Event;
 use speechify_core::settings::Settings;
 use speechify_core::store::{Dictation, Note, Snippet, Suggestion, Word};
 use speechify_core::teacher::{self, Report};
@@ -42,7 +42,7 @@ pub fn save_settings(app: AppHandle, shared: App, settings: Settings) -> Result<
     launch_result.map_err(|error| format!("Could not update launch at login: {error}"))?;
     shared.db().save_settings(&settings)?;
     shared.rebind()?;
-    shell::place_bar(&app, &speechify_core::app::Bar::Idle);
+    shell::place_bar(&app, &speechify_controller::app::Bar::Idle);
     shared.send(Msg::Reload);
     Ok(())
 }
@@ -510,12 +510,12 @@ pub fn bar_action(app: AppHandle, shared: App, action: String) {
         "click" => shared.send(Msg::Input(Event::BarClick)),
         "cancel" => shared.send(Msg::Input(Event::BarCancel)),
         "undo" => shared.send(Msg::Input(Event::Undo)),
-        _ => shell::show_bar(&app, &speechify_core::app::Bar::Idle),
+        _ => shell::show_bar(&app, &speechify_controller::app::Bar::Idle),
     }
 }
 
 #[tauri::command]
-pub fn bar_hit(app: AppHandle, rects: Vec<speechify_core::pointer::Area>) {
+pub fn bar_hit(app: AppHandle, rects: Vec<speechify_controller::pointer::Area>) {
     if let Some(hit) = app.try_state::<shell::BarHit>() {
         hit.set(rects);
     }

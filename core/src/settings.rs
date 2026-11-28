@@ -297,4 +297,16 @@ mod tests {
         assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), settings);
         assert!(json.contains(r#""spelling":"indian""#));
     }
+
+    #[test]
+    fn dictation_uses_the_streaming_model_only_when_streaming() {
+        let mut speech = Speech {
+            model: "whole".into(),
+            streaming_model: "pieces".into(),
+            ..Speech::default()
+        };
+        assert_eq!(speech.active_model(), "whole");
+        speech.streaming = true;
+        assert_eq!(speech.active_model(), "pieces");
+    }
 }

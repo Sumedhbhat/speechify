@@ -1,0 +1,19 @@
+projects:
+  core: core
+  controller: controller
+  os: os
+  desktop: src-tauri
+  ui: ui
+  perf: perf
+  bench: bench
+
+vcs:
+  client: git
+  defaultBranch: main
+
+pipeline:
+  installDependencies: false
+  syncProjects: false
+  syncWorkspace: false
+
+telemetry: false

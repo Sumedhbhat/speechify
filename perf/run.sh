@@ -33,4 +33,4 @@ if [ "$ready" != true ]; then
 fi
 
 mkdir -p "$(dirname "$output")"
-PERF_LLM_URL="http://127.0.0.1:$port/v1" "$perf" "$(dirname "$0")/../bench/scenarios.json" "$output"
+PERF_LLM_URL="http://127.0.0.1:$port/v1" "$perf" "$(dirname "$0")/scenarios.json" "$output"

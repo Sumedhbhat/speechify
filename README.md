@@ -95,7 +95,7 @@ If no text field has focus, or the paste fails, the bar shows a **copy card** ab
                           nightly teacher ──▶ dictionary, examples, export
 ```
 
-The logic lives in `core/`, which never touches a device. `os/` talks to the microphone, keyboard, clipboard and focused window. `src-tauri/` is the window, tray and thread wiring. See [docs/architecture.md](docs/architecture.md).
+The engine (recognition, cleanup, storage, learning) lives in `core/` and the dictation state machine in `controller/`; neither touches a device. `os/` talks to the microphone, keyboard, clipboard and focused window. `src-tauri/` is the window, tray and thread wiring, and `ui/` is the interface. `perf/` is the performance gate, which CI runs only when the engine changes. See [docs/architecture.md](docs/architecture.md).
 
 ## Privacy
 
@@ -108,6 +108,7 @@ python3 scripts/fetch-native.py      # speech runtime, checksum-pinned
 npm ci
 npm run tauri -- dev
 cargo test --workspace && npm test
+npx moon run :lint :test :build --affected --downstream deep   # only what your uncommitted changes reach
 ```
 
 See [docs/building.md](docs/building.md), [docs/testing.md](docs/testing.md) and [docs/releases.md](docs/releases.md).

@@ -238,16 +238,16 @@ def render(current, baseline_doc, run_url, release, skipped_schema=None, limit=N
     if baseline_doc:
         sha = (baseline_doc.get("head_sha") or "")[:7]
         comparison = (
-            f"Compared with `main` at `{sha}`, measured for the nightly release `{release}`. "
+            f"Compared with `main` at `{sha}`, taken from the nightly release `{release}`. "
             "If this branch is behind `main`, changes merged since then show up here too."
         )
     elif skipped_schema is not None:
         comparison = (
             f"Not compared: the nightly release `{release}` has results in format {skipped_schema}, "
-            f"and this run writes format {SCHEMA}. The next merge to `main` records results in the new format."
+            f"and this run writes format {SCHEMA}. The next merge to `main` that changes the engine records results in the new format."
         )
     else:
-        comparison = "No nightly release has performance results yet. The next merge to `main` records them."
+        comparison = "No nightly release has performance results yet. The next merge to `main` that changes the engine records them."
     missing = [label for key, label in PLATFORMS if key not in current]
     flags = []
     transcription_rows = metric_table(transcription, current, baseline, flags)

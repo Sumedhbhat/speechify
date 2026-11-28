@@ -1,10 +1,10 @@
 //! Windows and tray: where the bar sits and what the tray menu does.
 
 use crate::worker::{Msg, Shared};
-use speechify_core::app::Bar;
-use speechify_core::hotkey::Bind;
-use speechify_core::pointer::{self, Seen};
-use speechify_core::session::Event;
+use speechify_controller::app::Bar;
+use speechify_controller::hotkey::Bind;
+use speechify_controller::pointer::{self, Seen};
+use speechify_controller::session::Event;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};

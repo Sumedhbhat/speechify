@@ -1,7 +1,7 @@
 //! `Engines` for a real desktop: loads and keeps the speech and language models.
 
 use crate::diagnostics;
-use speechify_core::app::Engines;
+use speechify_controller::app::Engines;
 use speechify_core::asr::{Recognizer, Remote, Shared};
 use speechify_core::llm::{Chat, Rewriter};
 use speechify_core::native::{Detector, Engine, DETECTOR_FILE};

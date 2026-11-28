@@ -1,0 +1,19 @@
+language: rust
+layer: library
+tags: ["app"]
+
+tasks:
+  lint:
+    script: "cargo fmt -p speechify-os --check && cargo clippy -p speechify-os --all-targets --locked -- -D warnings"
+    inputs:
+      - "**/*"
+      - "group://rust"
+      - "group://workspace"
+      - "/rustfmt.toml"
+  test:
+    command: "cargo test -p speechify-os --locked"
+    inputs:
+      - "**/*"
+      - "group://rust"
+      - "group://workspace"
+      - "$SPEECHIFY_REQUIRE_NATIVE"

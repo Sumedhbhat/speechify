@@ -1,0 +1,36 @@
+language: typescript
+layer: library
+tags: ["ui"]
+
+tasks:
+  lint:
+    command: "npm run format:check"
+    inputs:
+      - "**/*"
+      - "group://npm"
+      - "group://workspace"
+      - "/.prettierrc.json"
+  test:
+    command: "npm test"
+    inputs:
+      - "**/*"
+      - "group://npm"
+      - "group://workspace"
+  build:
+    command: "npm run build"
+    inputs:
+      - "**/*"
+      - "!**/*.md"
+      - "group://npm"
+      - "group://workspace"
+    outputs:
+      - "dist"
+  coverage:
+    command: "npm run test:coverage"
+    inputs:
+      - "**/*"
+      - "group://npm"
+      - "group://workspace"
+    options:
+      cache: false
+      mutex: "coverage"
